@@ -126,32 +126,41 @@ COMMENT ON FUNCTION public.assert_stock_config_group_eligibility() IS
   'Rejects concentration (20mg/50mg / Box) stock configurations on product groups whose stock_config_profile is not concentration. Centralized Stock Count eligibility backstop.';
 
 -- ----------------------------------------------------------------------------
--- Part C. Reviewed forward-only cleanup — deactivate invalid phantoms only
+-- Part C. Deactivate invalid phantoms — DOCUMENTED ONLY, DO NOT AUTO-RUN
 -- ----------------------------------------------------------------------------
--- Deactivate (status only, NEVER delete) invalid concentration configurations
--- that are provably unused: they belong to a 'standard' group AND have zero
--- balance everywhere AND no stock movement AND no order reference. Anything with
--- a balance, movement, or reference is left untouched for manual handling.
-
-UPDATE public.inventory_stock_configurations c
-SET status = 'inactive',
-    allow_ord = false,
-    allow_so = false,
-    default_for_ord = false,
-    updated_at = now()
-FROM public.product_variants pv
-JOIN public.products p ON p.id = pv.product_id
-LEFT JOIN public.product_groups g ON g.id = p.group_id
-WHERE c.variant_id = pv.id
-  AND (c.volume_ml IS NOT NULL OR c.packaging IS NOT NULL)         -- concentration config
-  AND COALESCE(g.stock_config_profile, 'standard') <> 'concentration'  -- on a non-flavour group
-  AND c.status <> 'inactive'
-  AND NOT EXISTS (SELECT 1 FROM public.product_inventory pi
-                  WHERE pi.stock_config_id = c.id AND pi.quantity_on_hand <> 0)
-  AND NOT EXISTS (SELECT 1 FROM public.stock_movements sm
-                  WHERE sm.stock_config_id = c.id)
-  AND NOT EXISTS (SELECT 1 FROM public.order_items oi
-                  WHERE oi.stock_config_id = c.id);
+-- IMPORTANT (incident 2026-07-27): This step must NEVER run automatically inside
+-- the migration. It depends on stock_config_profile being CORRECT, but the
+-- Part A backfill is a heuristic and is environment-sensitive: on an environment
+-- where a genuine flavour/Cartridge group's concentration configs happened to
+-- have no balance/movement/order at migration time, the group is left 'standard'
+-- and this cleanup then wrongly deactivates every one of that group's valid
+-- 20NB/50NB/50OB configurations (this is exactly what broke production Cartridge
+-- while staging — which had history — was unaffected).
+--
+-- It is NOT needed for correct display: the application already hides zero-
+-- balance ineligible configurations at runtime (isStockCountCatalogRowVisible)
+-- purely from the profile, WITHOUT any destructive status change. Deactivation
+-- is therefore optional hygiene, run manually ONLY AFTER every group's
+-- stock_config_profile has been reviewed and confirmed:
+--
+--   -- 1. Confirm profiles first:
+--   --    SELECT group_code, group_name, stock_config_profile FROM public.product_groups ORDER BY group_name;
+--   -- 2. Only then, per confirmed-standard group, deactivate provably-unused
+--   --    (zero balance, no movement, no order reference) concentration configs:
+--   -- UPDATE public.inventory_stock_configurations c
+--   -- SET status = 'inactive', allow_ord = false, allow_so = false,
+--   --     default_for_ord = false, updated_at = now()
+--   -- FROM public.product_variants pv
+--   -- JOIN public.products p ON p.id = pv.product_id
+--   -- JOIN public.product_groups g ON g.id = p.group_id
+--   -- WHERE c.variant_id = pv.id
+--   --   AND (c.volume_ml IS NOT NULL OR c.packaging IS NOT NULL)
+--   --   AND g.stock_config_profile = 'standard'
+--   --   AND g.group_code = ANY ('{...confirmed standard group codes...}')  -- explicit allowlist
+--   --   AND c.status <> 'inactive'
+--   --   AND NOT EXISTS (SELECT 1 FROM public.product_inventory pi WHERE pi.stock_config_id = c.id AND pi.quantity_on_hand <> 0)
+--   --   AND NOT EXISTS (SELECT 1 FROM public.stock_movements sm WHERE sm.stock_config_id = c.id)
+--   --   AND NOT EXISTS (SELECT 1 FROM public.order_items oi WHERE oi.stock_config_id = c.id);
 
 -- ----------------------------------------------------------------------------
 -- Part D. Device Unclassified -> Standard balance transfer (DOCUMENTED ONLY)

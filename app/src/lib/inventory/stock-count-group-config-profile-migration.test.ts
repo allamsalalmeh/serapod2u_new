@@ -28,12 +28,21 @@ describe('group configuration profile migration', () => {
     expect(migration).toMatch(/is not valid for a non-flavour product group/i)
   })
 
-  it('only deactivates zero-balance, unreferenced invalid configs (never deletes)', () => {
+  it('never deletes configs, and never auto-runs the destructive deactivation', () => {
     expect(migration).not.toMatch(/DELETE\s+FROM\s+public\.inventory_stock_configurations/i)
-    expect(migration).toContain("SET status = 'inactive'")
-    expect(migration).toContain('NOT EXISTS (SELECT 1 FROM public.product_inventory pi')
-    expect(migration).toContain('NOT EXISTS (SELECT 1 FROM public.stock_movements sm')
-    expect(migration).toContain('NOT EXISTS (SELECT 1 FROM public.order_items oi')
+    // Part C is documented-only: the deactivation must not run automatically,
+    // because it depends on a heuristic profile that is environment-sensitive
+    // (the 2026-07-27 production Cartridge incident).
+    expect(migration).toContain('DO NOT AUTO-RUN')
+    // Every deactivation UPDATE must be commented out (each such line starts with --).
+    const activeDeactivation = migration
+      .split('\n')
+      .filter(line => /UPDATE public\.inventory_stock_configurations/.test(line))
+      .filter(line => !line.trimStart().startsWith('--'))
+    expect(activeDeactivation).toEqual([])
+    // The reviewed manual template still documents the safe guards.
+    expect(migration).toContain('explicit allowlist')
+    expect(migration).toContain('quantity_on_hand <> 0')
   })
 
   it('documents the Unclassified -> Standard transfer without executing an inventory move', () => {
