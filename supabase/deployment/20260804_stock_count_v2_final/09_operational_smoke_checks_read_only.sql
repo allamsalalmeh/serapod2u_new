@@ -15,7 +15,6 @@
 -- Runs inside a READ ONLY transaction; the engine rejects accidental writes.
 -- =============================================================================
 
-\pset pager off
 SET default_transaction_read_only = on;
 BEGIN READ ONLY;
 

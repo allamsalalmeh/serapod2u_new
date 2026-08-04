@@ -16,7 +16,6 @@
 -- itself rejects any accidental write.
 -- =============================================================================
 
-\pset pager off
 SET default_transaction_read_only = on;
 BEGIN READ ONLY;
 
@@ -209,7 +208,7 @@ partial AS (
   -- Informational companion to the row above: the actual ids, so the operator can
   -- paste one straight into 00_cleanup_orphan_counting_cutoff.sql PHASE B without
   -- writing an ad-hoc query. INFO never affects FAIL/REVIEW_REQUIRED counts.
-  SELECT 'H. HISTORICAL RESIDUE', 'in-progress cut-off ids (for 00_cleanup PHASE A)',
+  SELECT 'H. HISTORICAL RESIDUE', 'in-progress cut-off ids (for 00_PhaseA)',
          COALESCE(string_agg(
            c.id::text||' [session '||c.stock_count_session_id::text
            ||' '||COALESCE(s.status,'MISSING')||']', ', ' ORDER BY c.started_at), 'none'),

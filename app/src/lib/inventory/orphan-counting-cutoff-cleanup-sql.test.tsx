@@ -6,13 +6,16 @@ const repoFile = (path: string) => fs.readFileSync(
   'utf8',
 )
 
-const cleanup = repoFile('supabase/deployment/20260804_stock_count_v2_final/00_cleanup_orphan_counting_cutoff.sql')
+const phaseA = repoFile('supabase/deployment/20260804_stock_count_v2_final/00_PhaseA_inspect_counting_cutoff.sql')
+const phaseB = repoFile('supabase/deployment/20260804_stock_count_v2_final/00_PhaseB_cancel_counting_cutoff.sql')
+const phaseC = repoFile('supabase/deployment/20260804_stock_count_v2_final/00_PhaseC_verify_counting_cutoff.sql')
+const cleanup = [phaseA, phaseB, phaseC].join('\n')
 const preflight = repoFile('supabase/deployment/20260804_stock_count_v2_final/01_preflight_read_only.sql')
 
 // The cleanup script is a one-off production repair for a stranded Opening
 // Balance cut-off left in status 'counting'. It runs by hand against live data,
 // so its safety contract is asserted here rather than trusted to review.
-describe('00_cleanup_orphan_counting_cutoff.sql safety contract', () => {
+describe('00_PhaseA/B/C counting-cutoff cleanup safety contract', () => {
   it('PHASE A and PHASE C are read-only transactions', () => {
     const readOnlyBegins = cleanup.match(/BEGIN READ ONLY;/g) || []
     expect(readOnlyBegins.length).toBe(2)
@@ -61,11 +64,11 @@ describe('00_cleanup_orphan_counting_cutoff.sql safety contract', () => {
 
   it('blocks on every form of posting evidence', () => {
     expect(cleanup).toContain('carries a posted marker')
-    expect(cleanup).toContain('inventory_cutoff_reports row(s) exist')
+    expect(cleanup).toContain('report row(s) exist for this cut-off')
     expect(cleanup).toContain('posting-context row(s) exist')
     expect(cleanup).toContain('verification request(s) show final posting was started')
     expect(cleanup).toContain('stock_movements reference this session')
-    expect(cleanup).toContain('opening-balance-tagged stock_movements exist')
+    expect(cleanup).toContain('opening-balance-tagged movements exist')
   })
 
   it('prefers the official cancellation RPC over hand-written mutation', () => {
@@ -74,7 +77,7 @@ describe('00_cleanup_orphan_counting_cutoff.sql safety contract', () => {
   })
 
   it('cancels rather than physically deleting the cut-off', () => {
-    expect(cleanup).toContain("SET status       = 'cancelled'")
+    expect(cleanup).toMatch(/SET\s+status\s*=\s*'cancelled'/)
     expect(cleanup).not.toMatch(/delete\s+from\s+public\.inventory_opening_cutoffs/i)
   })
 
@@ -102,7 +105,7 @@ describe('00_cleanup_orphan_counting_cutoff.sql safety contract', () => {
 
   it('does not depend on tables introduced by 02 (probes them instead)', () => {
     expect(cleanup).toContain("to_regclass('public.' || v_tbl)")
-    expect(cleanup).toContain('ABSENT (expected before 02 runs)')
+    expect(cleanup).toContain('table absent on this database')
     // The 02-only tables must never appear as a static reference, or the file
     // would fail to parse on the current production schema.
     for (const table of [
@@ -118,8 +121,8 @@ describe('00_cleanup_orphan_counting_cutoff.sql safety contract', () => {
   it('archives the draft session only after the cut-off is cancelled', () => {
     // Ordering matters: stock_count_discard_posting_started_guard blocks
     // draft -> archived while the cut-off is still 'counting'.
-    const cancelAt = cleanup.indexOf("SET status       = 'cancelled'")
-    const archiveAt = cleanup.indexOf("SET status      = 'archived'")
+    const cancelAt = cleanup.search(/SET\s+status\s*=\s*'cancelled'/)
+    const archiveAt = cleanup.search(/SET\s+status\s*=\s*'archived'/)
     expect(cancelAt).toBeGreaterThan(-1)
     expect(archiveAt).toBeGreaterThan(cancelAt)
   })
@@ -140,7 +143,7 @@ describe('01_preflight_read_only.sql keeps the active cut-off blocker', () => {
   })
 
   it('lists in-progress cut-off ids as INFO so counts are unaffected', () => {
-    expect(preflight).toContain('in-progress cut-off ids (for 00_cleanup PHASE A)')
+    expect(preflight).toContain('in-progress cut-off ids (for 00_PhaseA)')
     // INFO never feeds FAIL_COUNT or REVIEW_REQUIRED_COUNT.
     expect(preflight).toContain("WHERE status='FAIL'")
     expect(preflight).toContain("WHERE status='REVIEW_REQUIRED'")
