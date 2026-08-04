@@ -178,11 +178,45 @@ partial AS (
         WHERE n2.nspname='public' AND p.proname ~ '(inventory_cutoff|opening_cutoff)'
         GROUP BY 1 HAVING count(*) > 1) z
   UNION ALL
-  -- A cut-off mid-flight means someone is using the feature right now.
+  -- A cut-off mid-flight means someone is using the feature right now, and it
+  -- FREEZES that warehouse (inventory_cutoff_product_inventory_guard /
+  -- inventory_cutoff_stock_movement_guard).
+  --
+  -- Blocker strength is deliberately UNCHANGED: any cut-off in 'counting' is
+  -- still REVIEW_REQUIRED. The detail now says *which kind* it is, because the
+  -- remedy differs:
+  --   session draft    -> a real count may be in progress; talk to the counter.
+  --   session archived -> stranded. The draft was discarded but the pre-04
+  --                       archive_stock_count_draft() never released the cut-off.
+  --   session missing  -> impossible via supported paths (NOT NULL + NO ACTION
+  --                       FK); indicates manual surgery. Investigate.
+  --   OTP requested    -> final posting was started. Never clean this up.
   SELECT 'H. HISTORICAL RESIDUE', 'Opening Balance cut-offs currently in progress',
-         'counting: '||count(*) FILTER (WHERE status='counting')::text,
-         CASE WHEN count(*) FILTER (WHERE status='counting') = 0 THEN 'PASS' ELSE 'REVIEW_REQUIRED' END
-  FROM public.inventory_opening_cutoffs
+         'counting: '||count(*) FILTER (WHERE c.status='counting')::text
+         ||' [session draft: '||count(*) FILTER (WHERE c.status='counting' AND s.status='draft')::text
+         ||', session archived (stranded): '||count(*) FILTER (WHERE c.status='counting' AND s.status='archived')::text
+         ||', session missing: '||count(*) FILTER (WHERE c.status='counting' AND s.id IS NULL)::text
+         ||', OTP requested: '||count(*) FILTER (
+              WHERE c.status='counting' AND EXISTS (
+                SELECT 1 FROM public.stock_count_verification_requests v
+                WHERE v.session_id = c.stock_count_session_id
+                  AND v.status IN ('pending_delivery','active','verified','posted')))::text
+         ||']',
+         CASE WHEN count(*) FILTER (WHERE c.status='counting') = 0 THEN 'PASS' ELSE 'REVIEW_REQUIRED' END
+  FROM public.inventory_opening_cutoffs c
+  LEFT JOIN public.stock_count_sessions s ON s.id = c.stock_count_session_id
+  UNION ALL
+  -- Informational companion to the row above: the actual ids, so the operator can
+  -- paste one straight into 00_cleanup_orphan_counting_cutoff.sql PHASE B without
+  -- writing an ad-hoc query. INFO never affects FAIL/REVIEW_REQUIRED counts.
+  SELECT 'H. HISTORICAL RESIDUE', 'in-progress cut-off ids (for 00_cleanup PHASE A)',
+         COALESCE(string_agg(
+           c.id::text||' [session '||c.stock_count_session_id::text
+           ||' '||COALESCE(s.status,'MISSING')||']', ', ' ORDER BY c.started_at), 'none'),
+         'INFO'
+  FROM public.inventory_opening_cutoffs c
+  LEFT JOIN public.stock_count_sessions s ON s.id = c.stock_count_session_id
+  WHERE c.status = 'counting'
 ),
 -- ----------------------------------------------------------------- grants
 grants AS (
