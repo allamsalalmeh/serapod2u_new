@@ -44,15 +44,27 @@ Run **in this exact order**. Do not skip. Do not reorder.
 
 | # | File | Type | Transactional |
 |---|---|---|---|
+| 00a | `00_PhaseA_inspect_counting_cutoff.sql` | 🔍 READ-ONLY | read-only txn |
+| 00b | `00_PhaseB_cancel_counting_cutoff.sql` | ✏️ **DATA CHANGE** | txn, ROLLBACK by default |
+| 00c | `00_PhaseC_verify_counting_cutoff.sql` | 🔍 READ-ONLY | read-only txn |
 | 01 | `01_preflight_read_only.sql` | 🔍 READ-ONLY | read-only txn |
 | 02 | `02_schema_foundation.sql` | 🏗 SCHEMA CHANGE | single txn |
 | 03 | `03_constraints_and_indexes.sql` | 🏗 SCHEMA CHANGE | single txn ⚠ locks |
 | 04 | `04_functions_and_triggers.sql` | 🏗 SCHEMA CHANGE | single txn |
 | 05 | `05_rls_policies_and_grants.sql` | 🏗 SCHEMA CHANGE | single txn |
-| 06 | `06_data_reconciliation.sql` | ✏️ **DATA CHANGE** | preview + single txn |
+| 06a | `06_PhaseA_reconciliation_preview.sql` | 🔍 READ-ONLY | read-only txn |
+| 06b | `06_PhaseB_reconciliation_apply.sql` | ✏️ **DATA CHANGE** | txn, ROLLBACK by default |
 | 07 | `07_final_contract_fixes.sql` | 🏗 SCHEMA CHANGE | single txn |
 | 08 | `08_post_deployment_verification.sql` | ✅ VERIFICATION ONLY | read-only txn |
 | 09 | `09_operational_smoke_checks_read_only.sql` | ✅ VERIFICATION ONLY | read-only txn |
+
+The `00_*` files are only needed when `01` reports an Opening Balance cut-off
+still in status `counting`. Run them **before** `02`.
+
+**No file in this pack uses psql backslash meta-commands**, so every one of them
+runs unchanged in psql, Supabase Studio, DBeaver or pgAdmin. The two files that
+change data (`00_PhaseB`, `06_PhaseB`) end in `ROLLBACK`: run once, read the
+output, then swap `ROLLBACK` for the commented `COMMIT` and run again.
 
 ### 5. Read-only files (safe to run any time, including on production)
 
@@ -65,7 +77,7 @@ triggers, policies and grants. **None of them read or write business rows.**
 
 ### 7. Files that may update existing data
 
-**`06_data_reconciliation.sql` only.** It performs exactly two `UPDATE`s:
+**`06_PhaseB_reconciliation_apply.sql` only.** It performs exactly two `UPDATE`s:
 
 1. `inventory_stock_configurations.status` → `'inactive'` where the owning
    `product_variants` row is already archived (`is_active = false`).
@@ -76,8 +88,10 @@ It does **not** touch inventory quantities, stock movements, orders, QR records 
 posted Opening Balances. It never replays a movement or backfills a business
 transaction twice. Both statements are naturally idempotent.
 
-The file begins with a **read-only preview** of exactly how many rows each change
-would affect. Run that first and review the counts.
+`06_PhaseA_reconciliation_preview.sql` is the **read-only preview**: it shows the
+exact rows each change would touch and emits `SAFE_TO_APPLY` / `NOT_SAFE` /
+`NOTHING_TO_DO`. Run it first. `06_PhaseB` refuses to run while any ambiguity
+count is non-zero unless you deliberately set `ambiguity_override`.
 
 ## 8. Backup requirement — mandatory
 
@@ -96,7 +110,8 @@ Do not rely on a backup you have not verified.
 | 03 | `ALTER TABLE`, `CREATE INDEX`. Aborts loudly if duplicate rows would break the index. |
 | 04 | a long run of `CREATE FUNCTION` / `CREATE TRIGGER` |
 | 05 | `ALTER TABLE`, `CREATE POLICY`, `GRANT`, `REVOKE` |
-| 06 | preview + ambiguity counts. **Applies nothing** unless `-v reconcile_approved=yes`. Both staging and production currently report **0 qualifying rows**, so it is expected to be a no-op. |
+| 06a | preview + ambiguity counts + a `decision` column. Read-only. |
+| 06b | applies the two `UPDATE`s, then **ROLLBACK**. Swap for the commented `COMMIT` to persist. Both staging and production currently report **0 qualifying rows**, so it is expected to be a no-op. |
 | 07 | 6 × `CREATE FUNCTION`, then one `DO` (the grant hardening). **Run as `supabase_admin`.** |
 | 08 | `OVERALL_STATUS` = **`PASS`**, `FAIL_COUNT` = 0, `REVIEW_REQUIRED_COUNT` = 0 |
 | 09 | `READY_FOR_UI_TESTING` = `YES`, `BLOCKER_COUNT` = 0 |
@@ -116,9 +131,9 @@ Stop immediately and do not continue if:
 
 ## 11. Recovery
 
-See `ROLLBACK_AND_RECOVERY.md`. Short version: every file except `06` is a single
-transaction, so a mid-file failure rolls itself back. `06` is also transactional but
-changes data, which is why the backup is mandatory.
+See `ROLLBACK_AND_RECOVERY.md`. Short version: every file is a single transaction,
+so a mid-file failure rolls itself back. `06_PhaseB` and `00_PhaseB` change data —
+which is why the backup is mandatory and why both default to `ROLLBACK`.
 
 ## 12. Staging execution procedure
 
@@ -161,10 +176,11 @@ psql "$STAGING_URL" -v ON_ERROR_STOP=1 -f 03_constraints_and_indexes.sql
 psql "$STAGING_URL" -v ON_ERROR_STOP=1 -f 04_functions_and_triggers.sql
 psql "$STAGING_URL" -v ON_ERROR_STOP=1 -f 05_rls_policies_and_grants.sql
 
-# 3. data reconciliation -- read the preview block at the top of the file first
-psql "$STAGING_URL" -v ON_ERROR_STOP=1 -f 06_data_reconciliation.sql
-# 06 is OPT-IN. It reports and does nothing unless you add:
-#     -v reconcile_approved=yes
+# 3. data reconciliation -- preview first, then apply
+psql "$STAGING_URL" -v ON_ERROR_STOP=1 -f 06_PhaseA_reconciliation_preview.sql
+# Only if PhaseA reports SAFE_TO_APPLY:
+psql "$STAGING_URL" -v ON_ERROR_STOP=1 -f 06_PhaseB_reconciliation_apply.sql
+# PhaseB ends in ROLLBACK. Swap it for the commented COMMIT to persist.
 
 # 4. terminal contract
 psql "$STAGING_URL" -v ON_ERROR_STOP=1 -f 07_final_contract_fixes.sql
@@ -222,7 +238,7 @@ When approved, the sequence is identical to §12 against the production URL, plu
 [ ] 05 RLS, policies, grants  -- completed / errors: ______________
 [ ] 06 PREVIEW counts reviewed -- configs: ______  sessions: ______
 [ ] 06 ambiguity counts all zero?                    ______________
-[ ] 06 applied with -v reconcile_approved=yes (only if needed)
+[ ] 06_PhaseA reviewed; 06_PhaseB committed (only if needed)
 [ ] 07 final contract fixes   -- completed / errors: ______________
 [ ] 08 verification -- FAIL_COUNT = 0 ?               ______________
 [ ] 09 smoke checks -- READY_FOR_UI_TESTING = YES ?   ______________

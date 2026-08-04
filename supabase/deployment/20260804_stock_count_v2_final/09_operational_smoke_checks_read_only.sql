@@ -65,7 +65,7 @@ consistency AS (
          'draft sessions stuck behind a CANCELLED cut-off' AS check_name,
          count(*)::text,
          CASE WHEN count(*) = 0 THEN 'OK' ELSE 'ATTENTION' END,
-         'Should be 0 after 06_data_reconciliation.sql. Non-zero means 06 was skipped.'
+         'Should be 0 after 06_PhaseB_reconciliation_apply.sql. Non-zero means 06 was skipped.'
   FROM public.stock_count_sessions s
   WHERE s.status = 'draft' AND s.count_type = 'opening_balance_cutoff'
     AND EXISTS (SELECT 1 FROM public.inventory_opening_cutoffs c

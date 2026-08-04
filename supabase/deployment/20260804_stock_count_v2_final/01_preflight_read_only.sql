@@ -206,7 +206,7 @@ partial AS (
   LEFT JOIN public.stock_count_sessions s ON s.id = c.stock_count_session_id
   UNION ALL
   -- Informational companion to the row above: the actual ids, so the operator can
-  -- paste one straight into 00_cleanup_orphan_counting_cutoff.sql PHASE B without
+  -- paste one straight into 00_PhaseB_cancel_counting_cutoff.sql without
   -- writing an ad-hoc query. INFO never affects FAIL/REVIEW_REQUIRED counts.
   SELECT 'H. HISTORICAL RESIDUE', 'in-progress cut-off ids (for 00_PhaseA)',
          COALESCE(string_agg(

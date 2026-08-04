@@ -11,6 +11,19 @@ const phaseB = repoFile('supabase/deployment/20260804_stock_count_v2_final/00_Ph
 const phaseC = repoFile('supabase/deployment/20260804_stock_count_v2_final/00_PhaseC_verify_counting_cutoff.sql')
 const cleanup = [phaseA, phaseB, phaseC].join('\n')
 const preflight = repoFile('supabase/deployment/20260804_stock_count_v2_final/01_preflight_read_only.sql')
+const recon = [
+  repoFile('supabase/deployment/20260804_stock_count_v2_final/06_PhaseA_reconciliation_preview.sql'),
+  repoFile('supabase/deployment/20260804_stock_count_v2_final/06_PhaseB_reconciliation_apply.sql'),
+].join('\n')
+const packFiles = [
+  '00_PhaseA_inspect_counting_cutoff.sql', '00_PhaseB_cancel_counting_cutoff.sql',
+  '00_PhaseC_verify_counting_cutoff.sql', '01_preflight_read_only.sql',
+  '02_schema_foundation.sql', '03_constraints_and_indexes.sql',
+  '04_functions_and_triggers.sql', '05_rls_policies_and_grants.sql',
+  '06_PhaseA_reconciliation_preview.sql', '06_PhaseB_reconciliation_apply.sql',
+  '07_final_contract_fixes.sql', '08_post_deployment_verification.sql',
+  '09_operational_smoke_checks_read_only.sql',
+].map(f => [f, repoFile(`supabase/deployment/20260804_stock_count_v2_final/${f}`)] as const)
 
 // The cleanup script is a one-off production repair for a stranded Opening
 // Balance cut-off left in status 'counting'. It runs by hand against live data,
@@ -147,5 +160,52 @@ describe('01_preflight_read_only.sql keeps the active cut-off blocker', () => {
     // INFO never feeds FAIL_COUNT or REVIEW_REQUIRED_COUNT.
     expect(preflight).toContain("WHERE status='FAIL'")
     expect(preflight).toContain("WHERE status='REVIEW_REQUIRED'")
+  })
+})
+
+// 06 is the only pack file that changes business data. Its opt-in used to be a
+// psql `\if` block, which silently stopped protecting the UPDATEs in any client
+// that does not parse backslash meta-commands.
+describe('06_PhaseA/B reconciliation safety contract', () => {
+  it('no pack file uses psql backslash meta-commands', () => {
+    for (const [name, body] of packFiles) {
+      const meta = body.split('\n').filter(l => /^\s*\\[a-z]/i.test(l))
+      expect(meta, `${name} contains psql meta-commands: ${meta.join(' | ')}`).toEqual([])
+    }
+  })
+
+  it('the preview is read-only and emits a decision', () => {
+    expect(recon).toContain('BEGIN READ ONLY;')
+    expect(recon).toContain('SAFE_TO_APPLY')
+    expect(recon).toContain('NOT_SAFE')
+    expect(recon).toContain('NOTHING_TO_DO')
+  })
+
+  it('apply refuses while ambiguities are non-zero unless overridden', () => {
+    expect(recon).toContain('Refusing to apply')
+    expect(recon).toContain('ambiguity_override')
+    expect(recon).toContain('SELECT false AS ambiguity_override;')
+  })
+
+  it('apply asserts the affected row count matches the preview predicate', () => {
+    expect(recon).toContain('ABORT: CHANGE 1 updated % row(s) but % were expected')
+    expect(recon).toContain('ABORT: CHANGE 2 updated % row(s) but % were expected')
+  })
+
+  it('apply proves inventory and movements were untouched', () => {
+    expect(recon).toContain('ABORT: product_inventory changed')
+    expect(recon).toContain('ABORT: stock_movements changed')
+  })
+
+  it('apply defaults to ROLLBACK', () => {
+    const applyFile = repoFile('supabase/deployment/20260804_stock_count_v2_final/06_PhaseB_reconciliation_apply.sql')
+    expect(applyFile).toMatch(/^ROLLBACK;$/m)
+    expect(applyFile).toMatch(/^-- COMMIT;$/m)
+  })
+
+  it('CHANGE 2 preview predicate matches its UPDATE predicate', () => {
+    // The old file's preview omitted the NOT EXISTS guard and could overcount.
+    const notExists = recon.match(/NOT EXISTS \(SELECT 1 FROM public\.inventory_opening_cutoffs/gi) || []
+    expect(notExists.length).toBeGreaterThanOrEqual(3)
   })
 })

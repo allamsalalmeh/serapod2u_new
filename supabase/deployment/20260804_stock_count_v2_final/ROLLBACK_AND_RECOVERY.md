@@ -149,7 +149,7 @@ delegation chain will desynchronise it from the layers above.
 
 ## 4. Data recovery
 
-Only `06_data_reconciliation.sql` changes data.
+Only `06_PhaseB_reconciliation_apply.sql` and `00_PhaseB_cancel_counting_cutoff.sql` change data.
 
 Both changes are **status flips on existing rows**. No row is deleted, no quantity
 altered, no movement created.
