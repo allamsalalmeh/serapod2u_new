@@ -404,7 +404,19 @@ export async function sendOtpViaEmail(
     code: string,
     orgId: string,
     fullName?: string | null,
+    logOrgId?: string | null,
 ): Promise<{ success: boolean; providerName?: string; error?: string; notConfigured?: boolean }> {
+    const { recordEmailDelivery } = await import('@/lib/notifications/emailDeliveryLog')
+    // orgId owns the provider; the log carries the account's org so the monitor
+    // can say whose reset this was, matching how the SMS path records it.
+    const record = (result: { success: boolean; providerName?: string; error?: string }) =>
+        recordEmailDelivery(admin, {
+            orgId: logOrgId || orgId,
+            to: email,
+            eventCode: 'password_reset_otp',
+            result,
+        })
+
     try {
         const built = buildPasswordResetOtpEmail({ code, fullName })
         const result = await sendTransactionalHtmlEmail(admin, orgId, {
@@ -415,16 +427,22 @@ export async function sendOtpViaEmail(
             fromName: 'Serapod2U',
         })
         if (!result.success) {
-            return {
+            const failure = {
                 success: false,
                 notConfigured: result.notConfigured,
                 error: result.error || 'Email send failed',
                 providerName: result.providerName,
             }
+            await record(failure)
+            return failure
         }
-        return { success: true, providerName: result.providerName || EMAIL_PROVIDER_FALLBACK }
+        const success = { success: true, providerName: result.providerName || EMAIL_PROVIDER_FALLBACK }
+        await record(success)
+        return success
     } catch (err: any) {
-        return { success: false, error: err.message || 'Email send failed' }
+        const failure = { success: false, error: err.message || 'Email send failed' }
+        await record(failure)
+        return failure
     }
 }
 
@@ -765,7 +783,7 @@ export async function issuePasswordResetOtp(
     } else {
         const orgId = await resolveOrgForEmail(admin)
         if (orgId && account.email) {
-            sendResult = await sendOtpViaEmail(admin, account.email, code, orgId, account.fullName)
+            sendResult = await sendOtpViaEmail(admin, account.email, code, orgId, account.fullName, account.organizationId)
         } else {
             sendResult = { success: false, error: 'No email provider configured' }
         }
