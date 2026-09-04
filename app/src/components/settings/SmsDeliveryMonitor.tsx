@@ -18,6 +18,8 @@ interface SmsMessage {
   id: string
   source: 'log' | 'outbox'
   outboxId: string | null
+  orgId: string | null
+  orgName: string | null
   createdAt: string | null
   queuedAt: string | null
   sentAt: string | null
@@ -298,6 +300,7 @@ export default function SmsDeliveryMonitor() {
       return [
         row.phone,
         formatSmsPhone(row.phone),
+        row.orgName,
         row.orderNo,
         row.orderId,
         row.eventCode,
@@ -311,10 +314,11 @@ export default function SmsDeliveryMonitor() {
   }, [messages, search, statusTab, eventFilter])
 
   const exportCsv = () => {
-    const header = ['Time', 'Phone', 'Order', 'Event', 'Status', 'Provider', 'Message ID', 'Error', 'Retries']
+    const header = ['Time', 'Phone', 'Organization', 'Order', 'Event', 'Status', 'Provider', 'Message ID', 'Error', 'Retries']
     const rows = filtered.map((row) => [
       formatTime(row.createdAt),
       formatSmsPhone(row.phone) || row.phone || '',
+      row.orgName || '',
       formatOrder(row),
       row.eventCode || '',
       row.status,
@@ -483,6 +487,7 @@ export default function SmsDeliveryMonitor() {
                 <tr className="border-b border-slate-100 text-left">
                   <th className="px-2 py-2 text-xs font-medium text-slate-500">Time</th>
                   <th className="px-2 py-2 text-xs font-medium text-slate-500">Phone</th>
+                  <th className="px-2 py-2 text-xs font-medium text-slate-500">Organization</th>
                   <th className="px-2 py-2 text-xs font-medium text-slate-500">Order</th>
                   <th className="px-2 py-2 text-xs font-medium text-slate-500">Event</th>
                   <th className="px-2 py-2 text-xs font-medium text-slate-500">Status</th>
@@ -497,6 +502,7 @@ export default function SmsDeliveryMonitor() {
                   <tr key={`${row.source}-${row.id}`} className="hover:bg-slate-50/60">
                     <td className="px-2 py-2.5 align-top text-xs text-slate-600">{formatTime(row.createdAt)}</td>
                     <td className="px-2 py-2.5 align-top font-mono text-xs text-slate-800">{formatSmsPhone(row.phone) || row.phone || '-'}</td>
+                    <td className="px-2 py-2.5 align-top text-xs text-slate-600">{row.orgName || '-'}</td>
                     <td className="px-2 py-2.5 align-top">
                       {formatOrder(row) ? (
                         <div className="font-mono text-xs text-slate-800" title={row.orderId || undefined}>{formatOrder(row)}</div>
@@ -552,6 +558,7 @@ export default function SmsDeliveryMonitor() {
               </div>
               <div className="divide-y divide-slate-100 rounded-lg border border-slate-200 px-3">
                 <DetailRow label="Phone" value={formatSmsPhone(selected.phone) || selected.phone} />
+                <DetailRow label="Organization" value={selected.orgName} />
                 <DetailRow label="Order" value={formatOrder(selected) || '-'} />
                 {selected.orderId && selected.orderNo ? <DetailRow label="Order ID" value={selected.orderId} /> : null}
                 <DetailRow label="Message" value={selected.messageBody} />

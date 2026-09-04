@@ -10,6 +10,12 @@ import {
   overlayEmailStatusForFailedProvider,
   toEmailMonitorStatus,
 } from '@/lib/notifications/emailActivity'
+import {
+  canViewMonitor,
+  loadMonitorViewer,
+  resolveMonitorScope,
+  type MonitorScope,
+} from '@/lib/notifications/monitorScope'
 
 export const dynamic = 'force-dynamic'
 
@@ -52,33 +58,15 @@ function applyProviderTestFailure(
   }
 }
 
-async function canViewEmailMonitor(supabase: any, userId: string) {
-  const { data } = await supabase
-    .from('users')
-    .select('organization_id, roles:role_code(role_level, role_code), organizations:organization_id(org_type_code)')
-    .eq('id', userId)
-    .single()
-
-  const role = Array.isArray(data?.roles) ? data.roles[0] : data?.roles
-  const org = Array.isArray(data?.organizations) ? data.organizations[0] : data?.organizations
-  const roleLevel = Number(role?.role_level)
-  const roleCode = String(role?.role_code || '')
-  if (roleLevel <= 20 || ['super_admin', 'admin', 'org_admin'].includes(roleCode)) return true
-  return org?.org_type_code === 'HQ' && roleLevel > 0 && roleLevel <= 40
-}
-
-async function resolveEmailOrgIds(admin: any, userOrgId: string | null) {
-  const ids = new Set<string>()
-  if (userOrgId) ids.add(userOrgId)
-
-  const [{ data: hq }, { data: providers }] = await Promise.all([
-    admin.from('organizations').select('id').eq('org_type_code', 'HQ').eq('is_active', true).limit(5),
-    admin.from('notification_provider_configs').select('org_id').eq('channel', 'email'),
-  ])
-
-  for (const row of hq || []) if (row?.id) ids.add(row.id)
-  for (const row of providers || []) if (row?.org_id) ids.add(row.org_id)
-  return Array.from(ids)
+async function orgNamesById(admin: any, orgIds: string[]): Promise<Map<string, string>> {
+  const names = new Map<string, string>()
+  if (!orgIds.length) return names
+  const { data } = await admin
+    .from('organizations')
+    .select('id, org_name')
+    .in('id', orgIds)
+  for (const row of data || []) if (row?.id) names.set(row.id, asString(row.org_name))
+  return names
 }
 
 export async function GET(_request: NextRequest) {
@@ -86,18 +74,21 @@ export async function GET(_request: NextRequest) {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    if (!await canViewEmailMonitor(supabase, user.id)) {
+    const admin = createAdminClient()
+    const viewer = await loadMonitorViewer(admin, user.id)
+    if (!viewer || !canViewMonitor(viewer)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    const admin = createAdminClient()
-    const { data: profile } = await admin
-      .from('users')
-      .select('organization_id')
-      .eq('id', user.id)
-      .single()
-
-    const orgIds = await resolveEmailOrgIds(admin, profile?.organization_id || null)
+    // HQ staff oversee every organization; everyone else sees only their own.
+    const scope: MonitorScope = resolveMonitorScope(viewer)
+    if (scope.kind === 'orgs' && scope.orgIds.length === 0) {
+      return NextResponse.json({
+        success: true,
+        kpis: { pending: 0, sent: 0, delivered: 0, failed: 0, total: 0 },
+        messages: [],
+      })
+    }
 
     let logsQuery = admin
       .from('notification_logs')
@@ -113,9 +104,9 @@ export async function GET(_request: NextRequest) {
       .order('created_at', { ascending: false })
       .limit(500)
 
-    if (orgIds.length > 0) {
-      logsQuery = logsQuery.in('org_id', orgIds)
-      outboxQuery = outboxQuery.in('org_id', orgIds)
+    if (scope.kind === 'orgs') {
+      logsQuery = logsQuery.in('org_id', scope.orgIds)
+      outboxQuery = outboxQuery.in('org_id', scope.orgIds)
     }
 
     const [logsRes, outboxRes, providersRes] = await Promise.all([
@@ -176,6 +167,7 @@ export async function GET(_request: NextRequest) {
         id: log.id,
         source: 'log',
         outboxId: log.outbox_id || null,
+        orgId: asString(log.org_id) || asString(outbox?.org_id) || null,
         createdAt,
         queuedAt: log.queued_at || outbox?.created_at || null,
         sentAt,
@@ -220,6 +212,7 @@ export async function GET(_request: NextRequest) {
         id: outbox.id,
         source: 'outbox',
         outboxId: outbox.id,
+        orgId: asString(outbox.org_id) || null,
         createdAt,
         queuedAt: outbox.created_at || outbox.scheduled_for || null,
         sentAt,
@@ -246,6 +239,14 @@ export async function GET(_request: NextRequest) {
     }
 
     messages.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+
+    // HQ sees several organizations at once, so each row has to say whose it is.
+    const names = await orgNamesById(admin, Array.from(new Set(
+      messages.map((row) => row.orgId).filter((id): id is string => Boolean(id)),
+    )))
+    for (const row of messages) {
+      (row as Record<string, unknown>).orgName = row.orgId ? names.get(row.orgId) || null : null
+    }
 
     const kpis = {
       pending: messages.filter((row) => row.status === 'pending').length,

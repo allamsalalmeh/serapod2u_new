@@ -3,6 +3,12 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { extractOrderRef } from '@/lib/notifications/orderRef'
 import { canViewSmsMonitor } from '@/lib/notifications/smsMonitorAccess'
+import {
+  canViewMonitor,
+  loadMonitorViewer,
+  resolveMonitorScope,
+  type MonitorScope,
+} from '@/lib/notifications/monitorScope'
 
 export const dynamic = 'force-dynamic'
 
@@ -50,18 +56,15 @@ function payloadMessage(payload: unknown, eventCode?: string): string {
   return ''
 }
 
-async function resolveSmsOrgIds(admin: any, userOrgId: string | null) {
-  const ids = new Set<string>()
-  if (userOrgId) ids.add(userOrgId)
-
-  const [{ data: hq }, { data: providers }] = await Promise.all([
-    admin.from('organizations').select('id').eq('org_type_code', 'HQ').eq('is_active', true).limit(5),
-    admin.from('notification_provider_configs').select('org_id').eq('channel', 'sms'),
-  ])
-
-  for (const row of hq || []) if (row?.id) ids.add(row.id)
-  for (const row of providers || []) if (row?.org_id) ids.add(row.org_id)
-  return Array.from(ids)
+async function orgNamesById(admin: any, orgIds: string[]): Promise<Map<string, string>> {
+  const names = new Map<string, string>()
+  if (!orgIds.length) return names
+  const { data } = await admin
+    .from('organizations')
+    .select('id, org_name')
+    .in('id', orgIds)
+  for (const row of data || []) if (row?.id) names.set(row.id, asString(row.org_name))
+  return names
 }
 
 export async function GET(_request: NextRequest) {
@@ -69,18 +72,21 @@ export async function GET(_request: NextRequest) {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    if (!await canViewSmsMonitor(supabase, user.id)) {
+    const admin = createAdminClient()
+    const viewer = await loadMonitorViewer(admin, user.id)
+    if (!viewer || !canViewMonitor(viewer)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    const admin = createAdminClient()
-    const { data: profile } = await admin
-      .from('users')
-      .select('organization_id')
-      .eq('id', user.id)
-      .single()
-
-    const orgIds = await resolveSmsOrgIds(admin, profile?.organization_id || null)
+    // HQ staff oversee every organization; everyone else sees only their own.
+    const scope: MonitorScope = resolveMonitorScope(viewer)
+    if (scope.kind === 'orgs' && scope.orgIds.length === 0) {
+      return NextResponse.json({
+        success: true,
+        kpis: { pending: 0, sent: 0, delivered: 0, failed: 0, total: 0 },
+        messages: [],
+      })
+    }
 
     // NOTE: Do NOT call refreshOpenSmsStatuses() here. This route must always return the
     // page's data straight from the database, independent of the local SMS gateway's
@@ -96,21 +102,21 @@ export async function GET(_request: NextRequest) {
 
     let logsQuery = admin
       .from('notification_logs')
-      .select('id, created_at, queued_at, sent_at, delivered_at, failed_at, status, recipient_value, recipient_type, event_code, provider_name, provider_message_id, error_message, retry_count, provider_response, outbox_id')
+      .select('id, org_id, created_at, queued_at, sent_at, delivered_at, failed_at, status, recipient_value, recipient_type, event_code, provider_name, provider_message_id, error_message, retry_count, provider_response, outbox_id')
       .eq('channel', 'sms')
       .order('created_at', { ascending: false })
       .limit(500)
 
     let outboxQuery = admin
       .from('notifications_outbox')
-      .select('id, created_at, scheduled_for, sent_at, status, to_phone, event_code, provider_name, provider_message_id, error, retry_count, max_retries, payload_json, template_code, priority')
+      .select('id, org_id, created_at, scheduled_for, sent_at, status, to_phone, event_code, provider_name, provider_message_id, error, retry_count, max_retries, payload_json, template_code, priority')
       .eq('channel', 'sms')
       .order('created_at', { ascending: false })
       .limit(500)
 
-    if (orgIds.length > 0) {
-      logsQuery = logsQuery.in('org_id', orgIds)
-      outboxQuery = outboxQuery.in('org_id', orgIds)
+    if (scope.kind === 'orgs') {
+      logsQuery = logsQuery.in('org_id', scope.orgIds)
+      outboxQuery = outboxQuery.in('org_id', scope.orgIds)
     }
 
     const [logsRes, outboxRes] = await Promise.all([logsQuery, outboxQuery])
@@ -127,7 +133,7 @@ export async function GET(_request: NextRequest) {
     if (missingOutboxIds.length > 0) {
       const { data: extraOutbox } = await admin
         .from('notifications_outbox')
-        .select('id, created_at, scheduled_for, sent_at, status, to_phone, event_code, provider_name, provider_message_id, error, retry_count, max_retries, payload_json, template_code, priority')
+        .select('id, org_id, created_at, scheduled_for, sent_at, status, to_phone, event_code, provider_name, provider_message_id, error, retry_count, max_retries, payload_json, template_code, priority')
         .in('id', missingOutboxIds)
       for (const row of extraOutbox || []) outboxById.set(row.id, row)
     }
@@ -143,6 +149,7 @@ export async function GET(_request: NextRequest) {
         id: log.id,
         source: 'log',
         outboxId: log.outbox_id || null,
+        orgId: asString(log.org_id) || asString(outbox?.org_id) || null,
         createdAt: log.created_at || log.queued_at || outbox?.created_at || null,
         queuedAt: log.queued_at || outbox?.created_at || null,
         sentAt: log.sent_at || outbox?.sent_at || null,
@@ -175,6 +182,7 @@ export async function GET(_request: NextRequest) {
         id: outbox.id,
         source: 'outbox',
         outboxId: outbox.id,
+        orgId: asString(outbox.org_id) || null,
         createdAt: outbox.created_at || null,
         queuedAt: outbox.created_at || outbox.scheduled_for || null,
         sentAt: outbox.sent_at || null,
@@ -201,6 +209,14 @@ export async function GET(_request: NextRequest) {
     }
 
     messages.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+
+    // HQ sees several organizations at once, so each row has to say whose it is.
+    const names = await orgNamesById(admin, Array.from(new Set(
+      messages.map((row) => row.orgId).filter((id): id is string => Boolean(id)),
+    )))
+    for (const row of messages) {
+      (row as Record<string, unknown>).orgName = row.orgId ? names.get(row.orgId) || null : null
+    }
 
     const kpis = {
       pending: messages.filter((row) => row.status === 'pending').length,

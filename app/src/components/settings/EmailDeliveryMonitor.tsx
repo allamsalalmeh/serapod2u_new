@@ -14,6 +14,8 @@ interface EmailMessage {
   id: string
   source: 'log' | 'outbox'
   outboxId: string | null
+  orgId: string | null
+  orgName: string | null
   createdAt: string | null
   queuedAt: string | null
   sentAt: string | null
@@ -157,6 +159,7 @@ export default function EmailDeliveryMonitor() {
       if (!query) return true
       return [
         row.receiver,
+        row.orgName,
         row.orderNo,
         row.orderId,
         row.eventCode,
@@ -172,10 +175,11 @@ export default function EmailDeliveryMonitor() {
   }, [messages, search, statusTab, eventFilter])
 
   const exportCsv = () => {
-    const header = ['Date', 'Receiver', 'Action', 'Order', 'Status', 'Subject', 'Provider', 'Error']
+    const header = ['Date', 'Receiver', 'Organization', 'Action', 'Order', 'Status', 'Subject', 'Provider', 'Error']
     const rows = filtered.map((row) => [
       formatTime(row.createdAt),
       row.receiver || '',
+      row.orgName || '',
       formatNotificationAction(row.eventCode),
       formatOrder(row),
       row.status,
@@ -310,6 +314,7 @@ export default function EmailDeliveryMonitor() {
                 <tr className="border-b border-slate-100 text-left">
                   <th className="px-2 py-2 text-xs font-medium text-slate-500">Date</th>
                   <th className="px-2 py-2 text-xs font-medium text-slate-500">Receiver</th>
+                  <th className="px-2 py-2 text-xs font-medium text-slate-500">Organization</th>
                   <th className="px-2 py-2 text-xs font-medium text-slate-500">Action</th>
                   <th className="px-2 py-2 text-xs font-medium text-slate-500">Order</th>
                   <th className="px-2 py-2 text-xs font-medium text-slate-500">Status</th>
@@ -322,6 +327,7 @@ export default function EmailDeliveryMonitor() {
                   <tr key={`${row.source}-${row.id}`} className="hover:bg-slate-50/60">
                     <td className="px-2 py-2.5 align-top text-xs text-slate-600">{formatTime(row.createdAt)}</td>
                     <td className="px-2 py-2.5 align-top font-mono text-xs text-slate-800">{row.receiver || '-'}</td>
+                    <td className="px-2 py-2.5 align-top text-xs text-slate-600">{row.orgName || '-'}</td>
                     <td className="px-2 py-2.5 align-top">
                       <div className="text-xs capitalize text-slate-700">{formatNotificationAction(row.eventCode)}</div>
                       {row.subject ? <div className="mt-0.5 max-w-[280px] truncate text-[11px] text-slate-400" title={row.subject}>{row.subject}</div> : null}
@@ -373,6 +379,7 @@ export default function EmailDeliveryMonitor() {
               </div>
               <div className="divide-y divide-slate-100 rounded-lg border border-slate-200 px-3">
                 <DetailRow label="Receiver" value={selected.receiver} />
+                <DetailRow label="Organization" value={selected.orgName} />
                 <DetailRow label="Action" value={formatNotificationAction(selected.eventCode)} />
                 <DetailRow label="Event code" value={selected.eventCode} />
                 <DetailRow label="Subject" value={selected.subject} />
