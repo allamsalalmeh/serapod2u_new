@@ -6,23 +6,22 @@ import {
     SIGNUP_PASSWORDS_DO_NOT_MATCH_MESSAGE,
 } from '@/lib/engagement/registration-link-selection'
 import { sanitizeRoadtourRegistrationContext } from '@/lib/roadtour/registration-context'
-import { maskEmail } from '@/lib/auth/registration-otp-email'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { normalizePhoneE164 } from '@/utils/phone'
 import {
-    REGISTRATION_OTP_CHANNEL,
     RESEND_COOLDOWN_SECONDS,
     checkRegistrationAvailability,
     checkSendRateLimit,
     createVerificationCode,
+    deliverRegistrationOtp,
     generateOtp,
     hashOtp,
     invalidateExistingCodes,
     logNotificationEvent,
-    sendOtpViaEmail,
+    registrationOtpFailedMessage,
+    registrationOtpSentMessage,
+    resolveRegistrationOtpDelivery,
 } from '@/server/auth/registrationVerificationService'
-
-const emailChannel = { channel: REGISTRATION_OTP_CHANNEL as const }
 
 export async function POST(req: NextRequest) {
     try {
@@ -81,13 +80,15 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ field: 'phone', error: 'This mobile number is already linked to an existing account. Please sign in or use a different number.' }, { status: 409 })
         }
 
+        const { channel } = await resolveRegistrationOtpDelivery(admin, orgId)
+
         const rateCheck = await checkSendRateLimit(admin, phone)
         if (!rateCheck.allowed) {
             await logNotificationEvent(admin, {
                 eventType: 'registration_rate_limited',
                 phone,
                 email,
-                channel: REGISTRATION_OTP_CHANNEL,
+                channel,
                 status: 'rate_limited',
                 meta: { reason: 'send_limit_exceeded', email },
                 ip,
@@ -99,7 +100,7 @@ export async function POST(req: NextRequest) {
             }, { status: 429 })
         }
 
-        await invalidateExistingCodes(admin, phone, emailChannel)
+        await invalidateExistingCodes(admin, phone, { ignoreChannel: true })
 
         const code = generateOtp()
         const codeId = await createVerificationCode(
@@ -120,17 +121,23 @@ export async function POST(req: NextRequest) {
             },
             ip,
             ua,
-            emailChannel,
+            { channel },
         )
 
-        const sendResult = await sendOtpViaEmail(admin, email, code, orgId, fullName)
+        const sendResult = await deliverRegistrationOtp(admin, {
+            email,
+            phone,
+            code,
+            orgId,
+            fullName,
+        })
 
         if (sendResult.success) {
             await logNotificationEvent(admin, {
                 eventType: 'registration_otp_sent',
                 phone,
                 email,
-                channel: REGISTRATION_OTP_CHANNEL,
+                channel: sendResult.channel,
                 status: 'sent',
                 providerMessageId: sendResult.providerName || null,
                 meta: {
@@ -151,7 +158,7 @@ export async function POST(req: NextRequest) {
                 eventType: 'registration_otp_send_failed',
                 phone,
                 email,
-                channel: REGISTRATION_OTP_CHANNEL,
+                channel: sendResult.channel,
                 status: 'failed',
                 errorMessage: sendResult.error,
                 meta: {
@@ -169,9 +176,7 @@ export async function POST(req: NextRequest) {
             })
             return NextResponse.json({
                 success: false,
-                error: sendResult.notConfigured
-                    ? 'Email verification is not configured yet. Please contact support.'
-                    : 'We could not send the email verification code right now. Please try again shortly.',
+                error: registrationOtpFailedMessage(sendResult.channel, sendResult.notConfigured),
             }, { status: 500 })
         }
 
@@ -179,7 +184,7 @@ export async function POST(req: NextRequest) {
             eventType: 'registration_otp_requested',
             phone,
             email,
-            channel: REGISTRATION_OTP_CHANNEL,
+            channel: sendResult.channel,
             status: 'sent',
             meta: {
                 codeId,
@@ -196,9 +201,9 @@ export async function POST(req: NextRequest) {
 
         return NextResponse.json({
             success: true,
-            message: `A 4-digit verification code has been sent to ${maskEmail(email)}.`,
+            message: registrationOtpSentMessage(sendResult.channel, email),
             resendCooldown: RESEND_COOLDOWN_SECONDS,
-            channel: 'email',
+            channel: sendResult.channel,
         })
     } catch (error: any) {
         console.error('Registration OTP request error:', error)

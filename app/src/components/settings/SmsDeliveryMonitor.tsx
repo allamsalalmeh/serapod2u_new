@@ -139,6 +139,7 @@ export default function SmsDeliveryMonitor() {
   const [savingEdit, setSavingEdit] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
   const [checkPhone, setCheckPhone] = useState('')
+  const [checkMessage, setCheckMessage] = useState('')
   const [sendingCheck, setSendingCheck] = useState(false)
   const [checkResult, setCheckResult] = useState<string | null>(null)
   const sendingCheckRef = useRef(false)
@@ -200,8 +201,13 @@ export default function SmsDeliveryMonitor() {
 
   const sendCheckSms = async () => {
     const to = checkPhone.trim()
+    const message = checkMessage.trim()
     if (!to) {
       setCheckResult('Enter a phone number first')
+      return
+    }
+    if (!message) {
+      setCheckResult('Enter the SMS message first')
       return
     }
     if (sendingCheckRef.current) return
@@ -212,7 +218,7 @@ export default function SmsDeliveryMonitor() {
       const response = await fetch('/api/notifications/sms-check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to }),
+        body: JSON.stringify({ to, message }),
       })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'SMS check failed')
@@ -276,6 +282,22 @@ export default function SmsDeliveryMonitor() {
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const response = await fetch('/api/notifications/sms-check')
+        const result = await response.json().catch(() => ({}))
+        if (!response.ok || cancelled) return
+        const message = String(result.message || '').trim()
+        if (message) setCheckMessage(message)
+      } catch {
+        /* Server still resolves the saved Notification Types template on send. */
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     const hasOpen = messages.some((row) => row.status === 'sent' || row.status === 'pending')
@@ -362,27 +384,35 @@ export default function SmsDeliveryMonitor() {
             </div>
           </div>
         </div>
-        <div className="flex flex-col items-stretch gap-2 sm:items-end">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col items-stretch gap-2 sm:items-end">
             <form
-              className="flex items-center gap-2"
+              className="flex flex-col items-stretch gap-2 sm:items-end"
               onSubmit={(event) => {
                 event.preventDefault()
                 void sendCheckSms()
               }}
             >
-              <Input
-                placeholder="Phone e.g. 0123456789"
-                value={checkPhone}
-                onChange={(event) => setCheckPhone(event.target.value)}
-                className="h-9 w-[190px]"
+              <div className="flex items-center gap-2">
+                <Input
+                  placeholder="Phone e.g. 0123456789"
+                  value={checkPhone}
+                  onChange={(event) => setCheckPhone(event.target.value)}
+                  className="h-9 w-[190px]"
+                />
+                <Button type="submit" size="sm" disabled={sendingCheck}>
+                  {sendingCheck ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
+                  Send check SMS
+                </Button>
+              </div>
+              <Textarea
+                placeholder="SMS check message"
+                value={checkMessage}
+                onChange={(event) => setCheckMessage(event.target.value)}
+                className="min-h-[72px] w-full sm:w-[420px] text-sm"
               />
-              <Button type="submit" size="sm" disabled={sendingCheck}>
-                {sendingCheck ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
-                Send check SMS
-              </Button>
             </form>
-            <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
               <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
               Refresh
             </Button>

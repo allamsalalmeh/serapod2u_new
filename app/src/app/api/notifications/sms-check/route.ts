@@ -4,30 +4,61 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { isAdminUser } from '@/app/api/settings/whatsapp/_utils'
 import { sendSmsWithActiveProvider, recordSmsDelivery } from '@/lib/notifications/sms-send'
 import { normalizeManualPhone } from '@/lib/notifications/manualPhoneNumbers'
+import { loadOrgSmsTemplateBody } from '@/lib/notifications/resolveSmsTemplate'
 import {
   REQUIRED_NOTIFICATION_TYPES,
   SYSTEM_SMS_CHECK_EVENT,
   SYSTEM_SMS_CHECK_MESSAGE,
 } from '@/lib/notifications/notificationEventCatalog'
 
+async function requireAdmin() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) }
+  if (!await isAdminUser(supabase, user.id)) {
+    return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) }
+  }
+
+  const { data: profile } = await supabase
+    .from('users')
+    .select('organization_id, phone')
+    .eq('id', user.id)
+    .single()
+  if (!profile?.organization_id) {
+    return { error: NextResponse.json({ error: 'Organization not found' }, { status: 404 }) }
+  }
+
+  return { supabase, user, profile }
+}
+
+export async function GET() {
+  try {
+    const auth = await requireAdmin()
+    if ('error' in auth) return auth.error
+
+    const admin = createAdminClient()
+    const message = await loadOrgSmsTemplateBody(admin, auth.profile.organization_id, SYSTEM_SMS_CHECK_EVENT)
+      || SYSTEM_SMS_CHECK_MESSAGE
+
+    return NextResponse.json({
+      event_code: SYSTEM_SMS_CHECK_EVENT,
+      message,
+    })
+  } catch (error: any) {
+    console.error('SMS check template error:', error)
+    return NextResponse.json({ error: error.message || 'Failed to load SMS check message' }, { status: 500 })
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    if (!await isAdminUser(supabase, user.id)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-
-    const { data: profile } = await supabase
-      .from('users')
-      .select('organization_id, phone')
-      .eq('id', user.id)
-      .single()
-    if (!profile?.organization_id) {
-      return NextResponse.json({ error: 'Organization not found' }, { status: 404 })
-    }
+    const auth = await requireAdmin()
+    if ('error' in auth) return auth.error
+    const { user, profile } = auth
 
     const body = await request.json().catch(() => ({}))
     const requestedTo = typeof body?.to === 'string' ? body.to.trim() : ''
+    const requestedMessage = typeof body?.message === 'string' ? body.message.trim() : ''
     const phone = normalizeManualPhone(requestedTo || profile.phone || '')
     if (!('normalized' in phone)) {
       return NextResponse.json({
@@ -38,6 +69,13 @@ export async function POST(request: NextRequest) {
     }
 
     const admin = createAdminClient()
+    const message = requestedMessage
+      || await loadOrgSmsTemplateBody(admin, profile.organization_id, SYSTEM_SMS_CHECK_EVENT)
+      || SYSTEM_SMS_CHECK_MESSAGE
+    if (!message) {
+      return NextResponse.json({ error: 'SMS check message is empty' }, { status: 400 })
+    }
+
     await (admin as any)
       .from('notification_types')
       .upsert(REQUIRED_NOTIFICATION_TYPES.filter((type) => type.event_code === SYSTEM_SMS_CHECK_EVENT), {
@@ -82,7 +120,7 @@ export async function POST(request: NextRequest) {
         payload_json: {
           checked_by: user.id,
           checked_at: now,
-          _sms_body: SYSTEM_SMS_CHECK_MESSAGE,
+          _sms_body: message,
         },
         priority: 'high',
         provider_name: 'local_my',
@@ -104,7 +142,7 @@ export async function POST(request: NextRequest) {
       admin,
       profile.organization_id,
       phone.normalized,
-      SYSTEM_SMS_CHECK_MESSAGE,
+      message,
     )
 
     await recordSmsDelivery(admin, {

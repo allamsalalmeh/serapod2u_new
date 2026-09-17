@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
         const phone = normalizePhoneE164(phoneRaw)
         const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || null
 
-        const activeCode = await findActiveCode(admin, phone, { channel: REGISTRATION_OTP_CHANNEL })
+        const activeCode = await findActiveCode(admin, phone, { ignoreChannel: true })
         if (!activeCode) {
             await logNotificationEvent(admin, {
                 eventType: 'registration_otp_verify_failed',
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
                 eventType: 'registration_otp_verify_failed',
                 phone,
                 email: activeCode.email_normalized || activeCode.meta?.email || null,
-                channel: REGISTRATION_OTP_CHANNEL,
+                channel: activeCode.channel || REGISTRATION_OTP_CHANNEL,
                 status: 'failed',
                 errorMessage: 'Maximum verification attempts exceeded',
                 meta: { codeId: activeCode.id, attempts: activeCode.attempt_count },
@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
                 eventType: 'registration_otp_verify_failed',
                 phone,
                 email: activeCode.email_normalized || activeCode.meta?.email || null,
-                channel: REGISTRATION_OTP_CHANNEL,
+                channel: activeCode.channel || REGISTRATION_OTP_CHANNEL,
                 status: 'failed',
                 errorMessage: 'Invalid verification code',
                 meta: { codeId: activeCode.id, remaining },
@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
             eventType: 'registration_otp_verified',
             phone,
             email: activeCode.email_normalized || activeCode.meta?.email || null,
-            channel: REGISTRATION_OTP_CHANNEL,
+            channel: activeCode.channel || REGISTRATION_OTP_CHANNEL,
             status: 'verified',
             meta: { codeId: activeCode.id, email: activeCode.meta?.email || null },
             ip,
@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
 
         return NextResponse.json({
             success: true,
-            message: 'Email verified successfully.',
+            message: activeCode.channel === 'sms' ? 'Phone verified successfully.' : 'Email verified successfully.',
             verificationToken,
         })
     } catch (error: any) {

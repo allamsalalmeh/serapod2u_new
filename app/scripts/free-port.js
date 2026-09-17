@@ -125,7 +125,13 @@ function createGuard(overrides = {}) {
   }
 
   return function guard() {
-    if (deps.platform !== 'darwin' || deps.uid() === 0 || deps.cwd() !== deps.appDir) {
+    // lsof/ps identity checks are macOS-only. On Windows/Linux just continue;
+    // Next.js will report if port 3000 is already in use.
+    if (deps.platform !== 'darwin') {
+      deps.log(`[dev] Skipping macOS port guard on ${deps.platform}.`);
+      return;
+    }
+    if (deps.uid() === 0 || deps.cwd() !== deps.appDir) {
       throw new Error('Run as a non-root macOS user from this development app directory.');
     }
     const pids = listeners();

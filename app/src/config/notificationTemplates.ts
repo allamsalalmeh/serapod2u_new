@@ -3,7 +3,8 @@ import { REQUIRED_NOTIFICATION_TYPES } from '@/lib/notifications/notificationEve
 
 /**
  * WhatsApp and email templates for system events.
- * SMS bodies live in smsTemplates.ts — that file is what the SMS send path uses.
+ * SMS bodies live in smsTemplates.ts (catalog default). Saved Notification Types
+ * templates override that catalog when present.
  */
 export type Channel = 'whatsapp' | 'sms' | 'email';
 export type NotificationKey =
@@ -31,6 +32,7 @@ export type NotificationKey =
     | 'password_changed'
     | 'password_reset_request'
     | 'password_reset_otp'
+    | 'registration_otp'
     | 'delete_user_otp'
     | 'login_suspicious'
     | 'po_created'
@@ -698,10 +700,21 @@ export const notificationTemplates: Record<string, Template[]> = {
         {
             id: 'password_reset_otp_email_1',
             name: 'Consumer Password Reset OTP',
-            description: 'One-time email code for Collect Points / loyalty forgot-password',
+            description: 'One-time email code for Collect Points / loyalty or portal forgot-password',
             channel: 'email',
             subject: 'Your Serapod2U password reset code',
             body: `PASSWORD RESET\n\nYour verification code: {{verification_code}}\nValid for {{otp_expiry_minutes}} minutes. Single use only.\n\nIf you did not request this, ignore this email.\n\nSerapod2U`
+        }
+    ],
+
+    'registration_otp': [
+        {
+            id: 'registration_otp_email_1',
+            name: 'Consumer Registration OTP',
+            description: 'One-time email code for Collect Points / loyalty signup',
+            channel: 'email',
+            subject: 'Your Serapod2U registration code',
+            body: `CREATE ACCOUNT\n\nYour verification code: {{verification_code}}\nValid for {{otp_expiry_minutes}} minutes. Single use only.\n\nIf you did not start registration, ignore this email.\n\nSerapod2U`
         }
     ],
 

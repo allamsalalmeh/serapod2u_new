@@ -1299,6 +1299,8 @@ export default function NotificationFlowDrawer({
                                                                 return '{{order_no}}, {{status}}, {{customer_name}}, {{deleted_by}}, {{deleted_at}}, {{order_url}}';
                                                             if (code === 'manufacturer_scan_complete')
                                                                 return '{{order_no}}, {{batch_id}}, {{total_master_codes}}, {{total_unique_codes}}, {{production_completed_at}}, {{completed_by}}, {{customer_name}}, {{balance_document_no}}, {{order_url}}';
+                                                            if (code === 'password_reset_otp' || code === 'registration_otp')
+                                                                return '{{verification_code}}, {{otp_expiry_minutes}}';
                                                             if (code === 'stock_count_posting_verification')
                                                                 return '{{verification_code}}, {{warehouse_name}}, {{organization_name}}, {{count_date}}, {{count_type}}, {{reference_name}}, {{requested_by}}, {{stock_count_requested_at}}, {{total_variants_counted}}, {{variance_items}}, {{net_quantity_adjustment}}, {{estimated_adjustment_value}}, {{posting_note}}';
                                                             if (cat === 'document')

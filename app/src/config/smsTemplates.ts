@@ -148,6 +148,13 @@ export const smsTemplates: Record<string, SmsTemplate[]> = {
         channel: 'sms',
         body: `[Serapod2U] Password reset code: {{verification_code}}. Expires in {{otp_expiry_minutes}} minutes.`,
     }],
+    registration_otp: [{
+        id: 'reg_otp_sms_1',
+        name: 'SMS Registration OTP',
+        description: 'One-time SMS code when a consumer creates an account',
+        channel: 'sms',
+        body: `[Serapod2U] Registration code: {{verification_code}}. Expires in {{otp_expiry_minutes}} minutes.`,
+    }],
     delete_user_otp: [{
         id: 'delete_user_otp_sms_1',
         name: 'User Deletion OTP — SMS',

@@ -26,7 +26,6 @@ import {
   type LoyaltyProgramCode,
 } from '@/lib/server/loyalty-memberships'
 import {
-  REGISTRATION_OTP_CHANNEL,
   findCodeByVerificationToken,
   logNotificationEvent as logRegistrationNotificationEvent,
   markCodeUsed as markRegistrationCodeUsed,
@@ -807,9 +806,7 @@ export async function registerConsumer(userData: {
       }
     }
 
-    const verificationCode = await findCodeByVerificationToken(adminClient, userData.verification_token, {
-      channel: REGISTRATION_OTP_CHANNEL,
-    })
+    const verificationCode = await findCodeByVerificationToken(adminClient, userData.verification_token)
     if (!verificationCode) {
       return {
         success: false,

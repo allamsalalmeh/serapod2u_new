@@ -2,8 +2,14 @@ import crypto from 'crypto'
 import { SupabaseClient } from '@supabase/supabase-js'
 import { normalizePhoneE164, toProviderPhone } from '@/utils/phone'
 import { sendTransactionalHtmlEmail } from '@/lib/email/transactional-html-email'
-import { buildRegistrationOtpEmail, buildShopContactOtpEmail } from '@/lib/auth/registration-otp-email'
-import { resolveOrgForEmail } from '@/server/auth/passwordResetService'
+import { buildRegistrationOtpEmail, buildShopContactOtpEmail, maskEmail } from '@/lib/auth/registration-otp-email'
+import { resolveOrgForEmail, resolveOrgForSms } from '@/server/auth/passwordResetService'
+import { REGISTRATION_OTP_EVENT } from '@/lib/notifications/notificationEventCatalog'
+import { deliveryChainForPreset, resolveNotificationRoutingPreset } from '@/lib/notifications/routing'
+import { loadOrgEventSetting, loadOrgSmsTemplateBody } from '@/lib/notifications/resolveSmsTemplate'
+import { getSmsTemplateBody } from '@/config/smsTemplates'
+import { getTemplatesForEvent } from '@/config/notificationTemplates'
+import { textToSimpleHtml } from '@/lib/notifications/transactional-otp-router'
 
 export const OTP_LENGTH = 4
 export const OTP_EXPIRY_MINUTES = 5
@@ -16,16 +22,21 @@ export const VERIFICATION_TOKEN_EXPIRY_MINUTES = 15
 const PURPOSE = 'registration_verification'
 export const CHANNEL_WHATSAPP = 'whatsapp'
 export const CHANNEL_EMAIL = 'email'
-/** Consumer Create Account OTP uses email. */
+export const CHANNEL_SMS = 'sms'
+/** Default when Notification Types has no SMS/email routing yet. */
 export const REGISTRATION_OTP_CHANNEL = CHANNEL_EMAIL
 /** Shop contact verification (Create New Shop from QR/registration) uses email. */
 export const SHOP_CONTACT_OTP_CHANNEL = CHANNEL_EMAIL
 const PROVIDER_WHATSAPP = 'baileys'
 const PROVIDER_EMAIL = 'email'
+const PROVIDER_SMS = 'local_my'
+
+export type RegistrationOtpChannel = typeof CHANNEL_EMAIL | typeof CHANNEL_SMS
 
 type VerificationPurposeOptions = {
     purpose?: string
-    channel?: 'whatsapp' | 'email'
+    channel?: 'whatsapp' | 'email' | 'sms'
+    ignoreChannel?: boolean
 }
 
 type VerificationRateLimitOptions = VerificationPurposeOptions & {
@@ -149,14 +160,19 @@ export async function invalidateExistingCodes(
     const purpose = resolvePurpose(options)
     const channel = resolveChannel(options)
 
-    await admin
+    let query = admin
         .from('auth_verification_codes')
         .update({ invalidated_at: new Date().toISOString() })
         .eq('phone_normalized', phone)
         .eq('purpose', purpose)
-        .eq('channel', channel)
         .is('invalidated_at', null)
         .is('used_at', null)
+
+    if (!options?.ignoreChannel) {
+        query = query.eq('channel', channel)
+    }
+
+    await query
 }
 
 export async function createVerificationCode(
@@ -207,18 +223,22 @@ export async function findActiveCode(
     const purpose = resolvePurpose(options)
     const channel = resolveChannel(options)
 
-    const { data, error } = await admin
+    let query = admin
         .from('auth_verification_codes')
         .select('*')
         .eq('phone_normalized', phone)
         .eq('purpose', purpose)
-        .eq('channel', channel)
         .is('invalidated_at', null)
         .is('used_at', null)
         .gt('expires_at', new Date().toISOString())
         .order('created_at', { ascending: false })
         .limit(1)
-        .maybeSingle()
+
+    if (!options?.ignoreChannel) {
+        query = query.eq('channel', channel)
+    }
+
+    const { data, error } = await query.maybeSingle()
 
     if (error) return null
     return data
@@ -297,7 +317,7 @@ export async function logNotificationEvent(
         phone: string
         status: string
         email?: string | null
-        channel?: 'whatsapp' | 'email'
+        channel?: 'whatsapp' | 'email' | 'sms'
         userId?: string | null
         providerMessageId?: string | null
         errorCode?: string | null
@@ -311,7 +331,7 @@ export async function logNotificationEvent(
     const verifiedTypes = ['registration_otp_verified', 'shop_contact_otp_verified']
     const completedTypes = ['registration_completed']
     const channel = params.channel || CHANNEL_WHATSAPP
-    const provider = channel === 'email' ? PROVIDER_EMAIL : PROVIDER_WHATSAPP
+    const provider = channel === 'email' ? PROVIDER_EMAIL : channel === 'sms' ? PROVIDER_SMS : PROVIDER_WHATSAPP
 
     // Audit must never break OTP send/verify — password-reset path already succeeds without hard-failing on logs.
     try {
@@ -430,4 +450,152 @@ export async function sendOtpViaEmail(
     } catch (error: any) {
         return { success: false, error: error?.message || 'Email send failed' }
     }
+}
+
+export function resolveRegistrationOtpChannel(setting: unknown): RegistrationOtpChannel {
+    const preset = resolveNotificationRoutingPreset(setting)
+    const channel = deliveryChainForPreset(preset).find((item) => item === 'sms' || item === 'email')
+    return channel === 'sms' ? CHANNEL_SMS : CHANNEL_EMAIL
+}
+
+export function buildRegistrationOtpSms(code: string, templateBody?: string): string {
+    if (!/^\d{4}$/.test(code)) {
+        throw new Error('Registration OTP must be exactly 4 digits.')
+    }
+    const template = String(templateBody || getSmsTemplateBody(REGISTRATION_OTP_EVENT) || '').trim()
+    const fallback = `[Serapod2U] Registration code: ${code}. Expires in ${OTP_EXPIRY_MINUTES} minutes.`
+    if (!template || !template.includes('{{verification_code}}')) return fallback
+    return template
+        .replace(/\{\{verification_code\}\}/g, code)
+        .replace(/\{\{otp_expiry_minutes\}\}/g, String(OTP_EXPIRY_MINUTES))
+}
+
+function renderRegistrationEmailFromUi(code: string, setting: unknown): { subject: string; text: string; html: string } | null {
+    const saved = String((setting as { templates?: Record<string, string> } | null)?.templates?.email || '').trim()
+    const catalog = getTemplatesForEvent(REGISTRATION_OTP_EVENT, 'email')
+    const byId = saved ? catalog.find((template) => template.id === saved) : undefined
+    const rawBody = String(byId?.body || saved || catalog[0]?.body || '').trim()
+    if (!rawBody || !rawBody.includes('{{verification_code}}')) return null
+    const text = rawBody
+        .replace(/\{\{verification_code\}\}/g, code)
+        .replace(/\{\{otp_expiry_minutes\}\}/g, String(OTP_EXPIRY_MINUTES))
+    const subject = String(byId?.subject || catalog[0]?.subject || 'Your Serapod2U registration code')
+        .replace(/\{\{verification_code\}\}/g, code)
+        .replace(/\{\{otp_expiry_minutes\}\}/g, String(OTP_EXPIRY_MINUTES))
+    return { subject, text, html: textToSimpleHtml(text) }
+}
+
+export async function sendOtpViaSms(
+    admin: SupabaseClient,
+    phone: string,
+    code: string,
+    orgId: string,
+    templateOrgId?: string | null,
+): Promise<{ success: boolean; providerName?: string; error?: string }> {
+    const { toSmsE164 } = await import('@/lib/notifications/manualPhoneNumbers')
+    const parsed = toSmsE164(phone)
+    if (!('e164' in parsed)) {
+        return { success: false, error: parsed.reason || 'Invalid phone number' }
+    }
+
+    const template = await loadOrgSmsTemplateBody(admin, templateOrgId || orgId, REGISTRATION_OTP_EVENT)
+    const { sendSmsWithActiveProvider, recordSmsDelivery } = await import('@/lib/notifications/sms-send')
+    const result = await sendSmsWithActiveProvider(admin, orgId, parsed.e164, buildRegistrationOtpSms(code, template))
+    await recordSmsDelivery(admin, {
+        orgId,
+        to: parsed.e164,
+        eventCode: REGISTRATION_OTP_EVENT,
+        result,
+    })
+    return {
+        success: Boolean(result.success),
+        providerName: result.providerName || PROVIDER_SMS,
+        error: result.error,
+    }
+}
+
+export async function deliverRegistrationOtp(
+    admin: SupabaseClient,
+    input: {
+        email: string
+        phone: string
+        code: string
+        orgId: string
+        fullName?: string | null
+    },
+): Promise<{
+    success: boolean
+    channel: RegistrationOtpChannel
+    providerName?: string
+    error?: string
+    notConfigured?: boolean
+    usedOrgId?: string
+}> {
+    const setting = await loadOrgEventSetting(admin, input.orgId, REGISTRATION_OTP_EVENT)
+    const channel = resolveRegistrationOtpChannel(setting)
+
+    if (channel === CHANNEL_SMS) {
+        const smsOrgId = await resolveOrgForSms(admin, input.orgId)
+        if (!smsOrgId) {
+            return { success: false, channel, notConfigured: true, error: 'No SMS provider configured' }
+        }
+        const sent = await sendOtpViaSms(admin, input.phone, input.code, smsOrgId, input.orgId)
+        return { ...sent, channel, usedOrgId: smsOrgId }
+    }
+
+    const uiEmail = renderRegistrationEmailFromUi(input.code, setting)
+    const built = uiEmail || buildRegistrationOtpEmail({ code: input.code, fullName: input.fullName })
+    const preferredOrgId = await resolveOrgForEmail(admin)
+    const tryOrgs = [preferredOrgId, input.orgId].filter(
+        (id, index, arr): id is string => Boolean(id) && arr.indexOf(id) === index,
+    )
+    if (tryOrgs.length === 0) {
+        return { success: false, channel, notConfigured: true, error: 'No email provider configured' }
+    }
+
+    let lastError = 'Email send failed'
+    let notConfigured = false
+    for (const candidateOrgId of tryOrgs) {
+        const result = await sendTransactionalHtmlEmail(admin, candidateOrgId, {
+            to: input.email,
+            subject: built.subject,
+            text: built.text,
+            html: built.html,
+            fromName: 'Serapod2U',
+        })
+        if (result.success) {
+            return {
+                success: true,
+                channel,
+                providerName: result.providerName || PROVIDER_EMAIL,
+                usedOrgId: candidateOrgId,
+            }
+        }
+        notConfigured = Boolean(result.notConfigured) || notConfigured
+        lastError = result.error || lastError
+    }
+    return { success: false, channel, notConfigured, error: lastError }
+}
+
+export async function resolveRegistrationOtpDelivery(admin: SupabaseClient, orgId: string) {
+    const setting = await loadOrgEventSetting(admin, orgId, REGISTRATION_OTP_EVENT)
+    return { setting, channel: resolveRegistrationOtpChannel(setting) }
+}
+
+export function registrationOtpSentMessage(channel: RegistrationOtpChannel, email: string, isResend = false) {
+    if (channel === CHANNEL_SMS) {
+        return isResend
+            ? 'A fresh verification code has been sent by SMS.'
+            : 'A 4-digit verification code has been sent by SMS.'
+    }
+    return isResend
+        ? `A fresh verification code has been sent to ${maskEmail(email)}.`
+        : `A 4-digit verification code has been sent to ${maskEmail(email)}.`
+}
+
+export function registrationOtpFailedMessage(channel: RegistrationOtpChannel, notConfigured?: boolean) {
+    const label = channel === CHANNEL_SMS ? 'SMS' : 'email'
+    return notConfigured
+        ? `${label} verification is not configured yet. Please contact support.`
+        : `We could not send the ${label} verification code right now. Please try again shortly.`
 }

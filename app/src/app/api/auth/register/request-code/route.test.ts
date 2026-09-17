@@ -25,6 +25,10 @@ vi.mock('@/server/auth/registrationVerificationService', () => ({
   invalidateExistingCodes: invalidateExistingCodesMock,
   logNotificationEvent: logNotificationEventMock,
   sendOtpViaEmail: sendOtpViaEmailMock,
+  deliverRegistrationOtp: sendOtpViaEmailMock,
+  resolveRegistrationOtpDelivery: async () => ({ setting: null, channel: 'email' }),
+  registrationOtpSentMessage: () => 'sent',
+  registrationOtpFailedMessage: () => 'failed',
 }))
 
 describe('POST /api/auth/register/request-code', () => {

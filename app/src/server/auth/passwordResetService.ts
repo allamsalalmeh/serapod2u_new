@@ -3,6 +3,7 @@
  *
  * Collect Points / loyalty: email OTP (generic, non-enumerating).
  * Portal /login forgot-password: email → email OTP, phone → SMS OTP.
+ * SMS body comes from Notification Types (password_reset_otp) then the SMS catalog.
  * Unregistered or missing contacts are disclosed so the user can ask an admin.
  *
  * Tables:
@@ -22,6 +23,7 @@ import {
     normalizeEmail,
 } from '@/lib/auth/password-reset-otp-email'
 import { getSmsTemplateBody } from '@/config/smsTemplates'
+import { PASSWORD_RESET_OTP_EVENT } from '@/lib/notifications/notificationEventCatalog'
 
 export const OTP_LENGTH = 4
 export const OTP_EXPIRY_MINUTES = 5
@@ -413,7 +415,7 @@ export async function sendOtpViaEmail(
         recordEmailDelivery(admin, {
             orgId: logOrgId || orgId,
             to: email,
-            eventCode: 'password_reset_otp',
+            eventCode: PASSWORD_RESET_OTP_EVENT,
             result,
         })
 
@@ -487,11 +489,11 @@ export async function lookupPasswordResetAccount(
     return lookupConsumerByPhone(admin, identifier.value)
 }
 
-export function buildPasswordResetOtpSms(code: string): string {
+export function buildPasswordResetOtpSms(code: string, templateBody?: string): string {
     if (!/^\d{4}$/.test(code)) {
         throw new Error('Password reset OTP must be exactly 4 digits.')
     }
-    const template = String(getSmsTemplateBody('password_reset_otp') || '').trim()
+    const template = String(templateBody || getSmsTemplateBody(PASSWORD_RESET_OTP_EVENT) || '').trim()
     const fallback = `[Serapod2U] Password reset code: ${code}. Expires in ${OTP_EXPIRY_MINUTES} minutes.`
     if (!template || !template.includes('{{verification_code}}')) return fallback
     return template
@@ -504,6 +506,7 @@ export async function sendOtpViaSms(
     phone: string,
     code: string,
     orgId: string,
+    templateOrgId?: string | null,
 ): Promise<{ success: boolean; providerName?: string; error?: string }> {
     const { toSmsE164 } = await import('@/lib/notifications/manualPhoneNumbers')
     const parsed = toSmsE164(phone)
@@ -511,13 +514,20 @@ export async function sendOtpViaSms(
         return { success: false, error: parsed.reason || 'Invalid phone number' }
     }
 
+    const { loadOrgSmsTemplateBody } = await import('@/lib/notifications/resolveSmsTemplate')
+    const template = await loadOrgSmsTemplateBody(
+        admin,
+        templateOrgId || orgId,
+        PASSWORD_RESET_OTP_EVENT,
+    )
+
     const { sendSmsWithActiveProvider, recordSmsDelivery } = await import('@/lib/notifications/sms-send')
-    const text = buildPasswordResetOtpSms(code)
+    const text = buildPasswordResetOtpSms(code, template)
     const result = await sendSmsWithActiveProvider(admin, orgId, parsed.e164, text)
     await recordSmsDelivery(admin, {
         orgId,
         to: parsed.e164,
-        eventCode: 'password_reset_otp',
+        eventCode: PASSWORD_RESET_OTP_EVENT,
         result,
     })
     return {
@@ -776,7 +786,7 @@ export async function issuePasswordResetOtp(
     if (channel === SMS_CHANNEL) {
         const orgId = await resolveOrgForSms(admin, account.organizationId)
         if (orgId && account.phone) {
-            sendResult = await sendOtpViaSms(admin, account.phone, code, orgId)
+            sendResult = await sendOtpViaSms(admin, account.phone, code, orgId, account.organizationId)
         } else {
             sendResult = { success: false, error: 'No SMS provider configured' }
         }

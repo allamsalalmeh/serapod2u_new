@@ -48,6 +48,13 @@ describe('portal password reset SMS helpers', () => {
         expect(getSmsTemplateBody('password_reset_otp')).toContain('{{verification_code}}')
     })
 
+    it('uses the Notification Types SMS template when provided', () => {
+        expect(buildPasswordResetOtpSms(
+            '4832',
+            'UI reset code {{verification_code}}. {{otp_expiry_minutes}} min.',
+        )).toBe('UI reset code 4832. 5 min.')
+    })
+
     it('matches reset tokens to email or phone identifiers', () => {
         expect(identifierMatchesCodeRow(
             { kind: 'email', value: 'ada@serapod.com' },
