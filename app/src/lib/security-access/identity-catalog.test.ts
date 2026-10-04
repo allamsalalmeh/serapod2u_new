@@ -1,4 +1,5 @@
 import { STAGE2D_PERMISSION_KEYS } from './stage2d-catalog'
+import { HR_DATA_PERMISSION_KEYS } from './hr-data-catalog'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -37,7 +38,7 @@ describe('Identity catalog ↔ migration lock-step', () => {
     const seg = foundation.slice(foundation.indexOf('insert into public.sa_enforcement_readiness'), foundation.indexOf('insert into public.sa_business_roles'))
     const keys = [...seg.matchAll(/^ \('([a-z_.]+)'/gm)].map(m => m[1]).sort()
     expect(keys).toEqual([...IDENTITY_ENFORCEMENT_READY].sort())
-    expect(ALL_ENFORCEMENT_READY_PERMISSIONS).toEqual([...ENFORCEMENT_READY_PERMISSIONS, ...IDENTITY_ENFORCEMENT_READY, ...STAGE2D_PERMISSION_KEYS])
+    expect(ALL_ENFORCEMENT_READY_PERMISSIONS).toEqual([...ENFORCEMENT_READY_PERMISSIONS, ...IDENTITY_ENFORCEMENT_READY, ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS])
   })
 
   it('does not duplicate an existing Final Wave key (platform.user.manage stays identity-manage)', () => {

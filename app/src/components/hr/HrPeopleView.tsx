@@ -21,7 +21,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import {
     Search, Users, UserCheck, Building2, Briefcase, Pencil, Check, X,
-    Plus, Copy, Loader2, Eye, Save, ChevronRight, Camera
+    Plus, Copy, Loader2, Eye, Save, ChevronRight, Camera, UserPlus, AlertTriangle, ArrowLeft
 } from 'lucide-react'
 import { listDepartments } from '@/lib/actions/departments'
 import { fetchHrPositions, updateUserHr } from '@/lib/api/hr'
@@ -49,6 +49,43 @@ interface HrUserRow {
     position_name: string | null
     employee_no: number | null
     employment_type: string | null
+    /** HR registration state of the employment record in this organization. */
+    onboarding_status: 'pending' | 'completed' | 'reset' | null
+    hire_date: string | null
+}
+
+interface OnboardingCandidate {
+    found: boolean
+    user_id?: string
+    full_name?: string | null
+    email_masked?: string | null
+    phone_masked?: string | null
+    principal_type?: string
+    account_status?: string
+    same_organization?: boolean
+    organization_name?: string | null
+    has_login?: boolean
+    employment?: {
+        employee_no: number | null
+        onboarding_status: 'pending' | 'completed' | 'reset'
+        employment_status: string
+        hire_date: string | null
+        hire_date_confirmed: boolean
+        department_id: string | null
+        position_id: string | null
+        manager_user_id: string | null
+        employment_type: string | null
+    } | null
+    block_code?: string | null
+    eligible?: boolean
+}
+
+interface NameSearchResult {
+    user_id: string
+    full_name: string | null
+    email_masked: string | null
+    employee_no: number | null
+    onboarding_status: 'pending' | 'completed' | 'reset'
 }
 
 interface HrProfileData {
@@ -109,13 +146,24 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     const [editManager, setEditManager] = useState('')
     const [savingInline, setSavingInline] = useState(false)
 
-    // Add Employee dialog state
+    // Add Employee (HR onboarding) dialog state. One central identity per
+    // person: HR finds the person (name search is a selection aid only;
+    // email/phone go through the canonical resolver), reviews a minimal
+    // preview, then records employment facts. Access is administered in
+    // Security & Access, never here.
     const [addDialogOpen, setAddDialogOpen] = useState(false)
     const [addLoading, setAddLoading] = useState(false)
     const [statusFilter, setStatusFilter] = useState('active')
-    // One form: the central identity is resolved from email/phone on the
-    // server (existing person → reused, new person → created). HR records
-    // employment facts only; access is administered in Security & Access.
+    const [onboardingView, setOnboardingView] = useState<'completed' | 'awaiting'>('completed')
+    const [onboardingSupported, setOnboardingSupported] = useState(true)
+    const [addStep, setAddStep] = useState<'find' | 'details' | 'done'>('find')
+    const [nameQuery, setNameQuery] = useState('')
+    const [nameResults, setNameResults] = useState<NameSearchResult[]>([])
+    const [lookup, setLookup] = useState({ email: '', phone: '' })
+    const [lookupLoading, setLookupLoading] = useState(false)
+    const [lookupError, setLookupError] = useState<string | null>(null)
+    const [candidate, setCandidate] = useState<OnboardingCandidate | null>(null)
+    const [candidateBlock, setCandidateBlock] = useState<string | null>(null)
     const [addForm, setAddForm] = useState({
         full_name: '',
         email: '',
@@ -124,9 +172,9 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         position_id: '',
         manager_user_id: '',
         employment_type: 'Full-time',
-        join_date: new Date().toISOString().split('T')[0],
+        hire_date: '',
     })
-    const [addResult, setAddResult] = useState<{ employee_no?: number; temp_password?: string | null; outcome?: 'CREATED' | 'REUSED' } | null>(null)
+    const [addResult, setAddResult] = useState<{ employee_no?: number; temp_password?: string | null; outcome?: 'CREATED' | 'REUSED'; onboarding?: string } | null>(null)
 
     // HR Profile sheet state
     const [profileOpen, setProfileOpen] = useState(false)
@@ -142,9 +190,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         if (!isReady) return
         setLoading(true)
 
-        const { data, error } = await (supabase as any)
-            .from('users')
-            .select(`
+        const baseColumns = `
                 id,
                 full_name,
                 email,
@@ -158,10 +204,26 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 employee_no,
                 employment_type,
                 roles:role_code (role_name, role_level),
-                positions:position_id (name)
-            `)
+                positions:position_id (name)`
+        // HR lists people by their employment record's onboarding state in
+        // this organization (the record exists for every internal identity).
+        let { data, error } = await (supabase as any)
+            .from('users')
+            .select(`${baseColumns},
+                hr_employees!hr_employees_user_id_fkey!inner (organization_id, onboarding_status, hire_date, hire_date_confirmed)`)
             .eq('organization_id', organizationId)
+            .eq('hr_employees.organization_id', organizationId)
             .order('full_name', { ascending: true })
+        const onboardingAvailable = !(error && /onboarding_status|hire_date_confirmed/.test(error.message || ''))
+        if (!onboardingAvailable) {
+            // Database not yet migrated: previous behaviour (everyone listed).
+            ({ data, error } = await (supabase as any)
+                .from('users')
+                .select(baseColumns)
+                .eq('organization_id', organizationId)
+                .order('full_name', { ascending: true }))
+        }
+        setOnboardingSupported(onboardingAvailable)
 
         if (error) {
             toast({ title: 'Error', description: error.message, variant: 'destructive' })
@@ -188,6 +250,8 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         }
 
         const mapped = (data || []).map((u: any) => {
+            const employment = (Array.isArray(u.hr_employees) ? u.hr_employees : [u.hr_employees])
+                .find((e: any) => e?.organization_id === organizationId) || null
             return {
                 id: u.id,
                 full_name: u.full_name,
@@ -204,7 +268,10 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 position_id: u.position_id,
                 position_name: u.positions?.name || null,
                 employee_no: u.employee_no ?? null,
-                employment_type: u.employment_type || null
+                employment_type: u.employment_type || null,
+                onboarding_status: onboardingAvailable ? (employment?.onboarding_status ?? null) : 'completed',
+                // A login creation date is never shown as a confirmed hire date.
+                hire_date: employment?.hire_date_confirmed ? employment.hire_date : null,
             } as HrUserRow
         })
 
@@ -233,6 +300,8 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     const filteredUsers = useMemo(() => {
         const query = searchQuery.trim().toLowerCase()
         return users.filter(u => {
+            const onboarded = u.onboarding_status === 'completed'
+            if (onboardingView === 'completed' ? !onboarded : onboarded) return false
             if (departmentFilter !== 'all' && u.department_id !== departmentFilter) return false
             // Status filter
             if (statusFilter === 'active' && !u.is_active) return false
@@ -244,7 +313,10 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 (u.position_name || '').toLowerCase().includes(query)
             )
         })
-    }, [users, searchQuery, departmentFilter, statusFilter])
+    }, [users, searchQuery, departmentFilter, statusFilter, onboardingView])
+
+    const awaitingCount = useMemo(() => users.filter(u => u.onboarding_status !== 'completed').length, [users])
+    const onboardedUsers = useMemo(() => users.filter(u => u.onboarding_status === 'completed'), [users])
 
     const departmentById = useMemo(() => {
         const map = new Map<string, { id: string; dept_name: string; dept_code: string | null }>()
@@ -337,9 +409,93 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         setSavingInline(false)
     }
 
+    const emptyAddForm = () => ({
+        full_name: '', email: '', phone: '',
+        department_id: '', position_id: '', manager_user_id: '',
+        employment_type: 'Full-time', hire_date: '',
+    })
+
+    const resetAddForm = () => {
+        setAddForm(emptyAddForm())
+        setAddResult(null)
+        setAddStep('find')
+        setNameQuery('')
+        setNameResults([])
+        setLookup({ email: '', phone: '' })
+        setLookupError(null)
+        setCandidate(null)
+        setCandidateBlock(null)
+    }
+
+    // Name search helps HR pick a person of this organization; it never
+    // decides identity on its own.
+    const searchByName = async (q: string) => {
+        setNameQuery(q)
+        if (q.trim().length < 2) { setNameResults([]); return }
+        try {
+            const res = await fetch(`/api/hr/employees/candidates?q=${encodeURIComponent(q.trim())}`)
+            const json = await res.json()
+            setNameResults(json.success ? json.data : [])
+        } catch {
+            setNameResults([])
+        }
+    }
+
+    const applyCandidate = (data: { outcome: string; candidate?: OnboardingCandidate; block_message?: string | null }) => {
+        if (data.outcome === 'NEW_PERSON') {
+            setCandidate(null)
+            setCandidateBlock(null)
+            setAddForm(p => ({ ...emptyAddForm(), email: lookup.email.trim().toLowerCase(), phone: lookup.phone.trim(), full_name: p.full_name }))
+        } else if (data.candidate) {
+            const employment = data.candidate.employment
+            setCandidate(data.candidate)
+            setCandidateBlock(data.block_message ?? null)
+            // HR facts already on the employment record are the starting point.
+            setAddForm({
+                ...emptyAddForm(),
+                department_id: employment?.department_id || '',
+                position_id: employment?.position_id || '',
+                manager_user_id: employment?.manager_user_id || '',
+                employment_type: employment?.employment_type || 'Full-time',
+                hire_date: employment?.hire_date_confirmed ? (employment.hire_date || '') : '',
+            })
+        }
+        setAddStep('details')
+    }
+
+    const lookupCandidate = async (body: { user_id?: string; email?: string; phone?: string }) => {
+        setLookupLoading(true)
+        setLookupError(null)
+        try {
+            const res = await fetch('/api/hr/employees/candidates', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            })
+            const json = await res.json()
+            if (json.success) applyCandidate(json.data)
+            else setLookupError(json.error || 'Lookup failed.')
+        } catch (err: any) {
+            setLookupError(err.message)
+        }
+        setLookupLoading(false)
+    }
+
+    const startOnboardingFor = (user: HrUserRow) => {
+        resetAddForm()
+        setAddDialogOpen(true)
+        lookupCandidate({ user_id: user.id })
+    }
+
     const handleAddEmployee = async () => {
-        if (!addForm.full_name.trim() || !addForm.email.trim()) {
+        if (addLoading) return
+        const isNew = !candidate
+        if (isNew && (!addForm.full_name.trim() || !addForm.email.trim())) {
             toast({ title: 'Validation', description: 'Full name and email are required.', variant: 'destructive' })
+            return
+        }
+        if (!addForm.hire_date) {
+            toast({ title: 'Validation', description: 'Enter the actual hire date.', variant: 'destructive' })
             return
         }
         setAddLoading(true)
@@ -348,42 +504,44 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    full_name: addForm.full_name.trim(),
-                    email: addForm.email.trim().toLowerCase(),
-                    phone: addForm.phone.trim() || null,
+                    ...(isNew
+                        ? { full_name: addForm.full_name.trim(), email: addForm.email.trim().toLowerCase(), phone: addForm.phone.trim() || null }
+                        : { user_id: candidate!.user_id }),
                     department_id: addForm.department_id || null,
                     position_id: addForm.position_id || null,
                     manager_user_id: addForm.manager_user_id || null,
                     employment_type: addForm.employment_type,
-                    join_date: addForm.join_date || null,
+                    hire_date: addForm.hire_date,
                 }),
             })
             const json = await res.json()
             if (json.success) {
                 const reused = json.data?.outcome === 'REUSED'
-                toast({ title: reused ? 'Existing person added to HR' : 'Employee added', description: `${addForm.full_name} ${reused ? 'already had an account; it was used.' : 'has been added.'}` })
+                const name = candidate?.full_name || addForm.full_name
+                toast({
+                    title: json.data?.onboarding === 'ALREADY_ONBOARDED' ? 'Already onboarded' : 'Employee onboarded',
+                    description: `${name} ${reused ? 'keeps their existing account.' : 'has a new account.'}`,
+                })
                 setAddResult({
                     employee_no: json.data?.employee_no,
                     temp_password: json.data?.temp_password,
                     outcome: json.data?.outcome,
+                    onboarding: json.data?.onboarding,
                 })
+                setAddStep('done')
                 loadUsers()
             } else {
-                toast({ title: 'Error', description: json.error || 'Failed to add employee.', variant: 'destructive' })
+                toast({ title: 'Not onboarded', description: json.error || 'Failed to onboard employee.', variant: 'destructive' })
+                if (json.data?.temp_password) {
+                    setAddResult({ temp_password: json.data.temp_password, outcome: 'CREATED' })
+                    setAddStep('done')
+                    loadUsers()
+                }
             }
         } catch (err: any) {
             toast({ title: 'Error', description: err.message, variant: 'destructive' })
         }
         setAddLoading(false)
-    }
-
-    const resetAddForm = () => {
-        setAddForm({
-            full_name: '', email: '', phone: '',
-            department_id: '', position_id: '', manager_user_id: '',
-            employment_type: 'Full-time', join_date: new Date().toISOString().split('T')[0],
-        })
-        setAddResult(null)
     }
 
     // Open HR profile sheet
@@ -488,6 +646,32 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 </div>
             </CardHeader>
             <CardContent className="space-y-4">
+                {onboardingSupported && (
+                    <div className="flex flex-wrap items-center gap-1">
+                        {([
+                            { id: 'completed', label: 'Onboarded', count: onboardedUsers.length },
+                            { id: 'awaiting', label: 'Awaiting onboarding', count: awaitingCount },
+                        ] as const).map(tab => (
+                            <button
+                                key={tab.id}
+                                type="button"
+                                onClick={() => { setOnboardingView(tab.id); setSelectedUsers(new Set()) }}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${onboardingView === tab.id
+                                    ? 'bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800'
+                                    : 'text-muted-foreground hover:bg-accent hover:text-foreground'}`}
+                            >
+                                {tab.label}
+                                <Badge variant="outline" className="text-[10px] px-1.5 py-0">{tab.count}</Badge>
+                            </button>
+                        ))}
+                    </div>
+                )}
+                {onboardingSupported && onboardingView === 'awaiting' && (
+                    <p className="text-xs text-muted-foreground">
+                        These people have a login and an employment record but HR has not registered them yet (or their registration was reset).
+                        Their existing HR history is kept. Employee self-service shows a pending-setup screen until onboarding is completed.
+                    </p>
+                )}
                 <div className="flex flex-col sm:flex-row gap-3">
                     <div className="relative flex-1 min-w-0">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -613,7 +797,9 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                         </div>
                         {filteredUsers.length === 0 ? (
                             <div className="px-4 py-8 text-center text-sm text-gray-500">
-                                {users.length === 0 ? 'No employees found. Click "+ Add Employee" to get started.' : 'No employees match your filters.'}
+                                {onboardingView === 'awaiting'
+                                    ? 'Nobody is awaiting onboarding.'
+                                    : users.length === 0 || onboardedUsers.length === 0 ? 'No onboarded employees yet. Click "+ Add Employee" to register someone.' : 'No employees match your filters.'}
                             </div>
                         ) : filteredUsers.map(user => {
                             const isEditing = editingUserId === user.id
@@ -706,12 +892,22 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                 </div>
                                 <div className="text-xs text-gray-500">{user.role_name || user.role_code}</div>
                                 <div>
-                                    <Badge variant={user.is_active ? 'default' : 'secondary'} className="text-[10px]">
-                                        {user.is_active ? 'Active' : 'Disabled'}
-                                    </Badge>
+                                    {user.onboarding_status && user.onboarding_status !== 'completed' ? (
+                                        <Badge variant="outline" className="text-[10px] border-amber-200 text-amber-700">
+                                            {user.onboarding_status === 'reset' ? 'Reset' : 'Pending'}
+                                        </Badge>
+                                    ) : (
+                                        <Badge variant={user.is_active ? 'default' : 'secondary'} className="text-[10px]">
+                                            {user.is_active ? 'Active' : 'Disabled'}
+                                        </Badge>
+                                    )}
                                 </div>
                                 <div>
-                                    {canEdit && (
+                                    {canEdit && user.onboarding_status && user.onboarding_status !== 'completed' && !isEditing ? (
+                                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Complete HR onboarding" onClick={() => startOnboardingFor(user)}>
+                                            <UserPlus className="h-3.5 w-3.5 text-blue-600" />
+                                        </Button>
+                                    ) : canEdit && (
                                         isEditing ? (
                                             <div className="flex gap-0.5">
                                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => saveInlineEdit(user.id)} disabled={savingInline}>
@@ -735,23 +931,184 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 )}
             </CardContent>
 
-            {/* ─── Add Employee Dialog (identity resolved on the server) ──── */}
+            {/* ─── Add Employee Dialog (HR onboarding over one central identity) ──── */}
             <Dialog open={addDialogOpen} onOpenChange={(open) => { setAddDialogOpen(open); if (!open) resetAddForm() }}>
                 <DialogContent className="sm:max-w-[640px] max-h-[90vh] overflow-y-auto">
                     <DialogHeader>
-                        <DialogTitle>{addResult ? 'Done' : 'Add Employee'}</DialogTitle>
+                        <DialogTitle>{addStep === 'done' ? 'Done' : 'Add Employee'}</DialogTitle>
                         <DialogDescription>
-                            {addResult
-                                ? (addResult.outcome === 'REUSED' ? 'This person already had an account; it is now linked to their employment record.' : 'New employee created.')
-                                : 'Enter the person\'s details. If they already have an account (same email), it is used automatically — no duplicate is created.'}
+                            {addStep === 'find' && 'Find the person first. Existing accounts are reused (same login, user ID and employee number); no duplicate is created.'}
+                            {addStep === 'details' && (candidate ? 'Confirm the person and record their employment details.' : 'No account exists for these details. A new account with employee self-service access will be created.')}
+                            {addStep === 'done' && (addResult?.outcome === 'REUSED' ? 'The existing account was kept and HR onboarding is complete.' : 'The employee was created and onboarded.')}
                         </DialogDescription>
                     </DialogHeader>
 
-                    {addResult ? (
+                    {addStep === 'find' && (
+                        <div className="space-y-5">
+                            <div className="space-y-2">
+                                <Label>Search this organization by name</Label>
+                                <div className="relative">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                                    <Input className="pl-10" value={nameQuery} onChange={e => searchByName(e.target.value)} placeholder="Type at least 2 letters" />
+                                </div>
+                                {nameResults.length > 0 && (
+                                    <div className="rounded-md border divide-y max-h-56 overflow-y-auto">
+                                        {nameResults.map(r => (
+                                            <button key={r.user_id} type="button" disabled={lookupLoading}
+                                                className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left hover:bg-muted/50"
+                                                onClick={() => lookupCandidate({ user_id: r.user_id })}>
+                                                <div className="min-w-0">
+                                                    <div className="text-sm font-medium truncate">{r.full_name || 'Unnamed'}</div>
+                                                    <div className="text-xs text-muted-foreground truncate">{r.email_masked}{r.employee_no ? ` · EMP-${String(r.employee_no).padStart(4, '0')}` : ''}</div>
+                                                </div>
+                                                <Badge variant="outline" className="text-[10px] shrink-0">
+                                                    {r.onboarding_status === 'completed' ? 'Onboarded' : r.onboarding_status === 'reset' ? 'Reset' : 'Pending'}
+                                                </Badge>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                                <p className="text-xs text-muted-foreground">Names only help you pick someone; they are never used to match an account.</p>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Or look up by work email or phone</Label>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <Input type="email" value={lookup.email} onChange={e => setLookup(p => ({ ...p, email: e.target.value }))} placeholder="ahmad@company.com" />
+                                    <Input value={lookup.phone} onChange={e => setLookup(p => ({ ...p, phone: e.target.value }))} placeholder="+60123456789" />
+                                </div>
+                                <Button variant="outline" size="sm" disabled={lookupLoading || (!lookup.email.trim() && !lookup.phone.trim())}
+                                    onClick={() => lookupCandidate({ email: lookup.email.trim() || undefined, phone: lookup.phone.trim() || undefined })}>
+                                    {lookupLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Search className="h-4 w-4 mr-1" />}
+                                    Look up
+                                </Button>
+                            </div>
+                            {lookupError && (
+                                <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                                    <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />{lookupError}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {addStep === 'details' && (
+                        <div className="space-y-4">
+                            {candidate ? (
+                                <div className="rounded-lg border p-3 space-y-1">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="text-sm font-medium">{candidate.full_name || 'Unnamed'}</div>
+                                        {candidate.employment?.employee_no && (
+                                            <span className="text-xs font-mono text-muted-foreground">EMP-{String(candidate.employment.employee_no).padStart(4, '0')}</span>
+                                        )}
+                                    </div>
+                                    <div className="text-xs text-muted-foreground">{[candidate.email_masked, candidate.phone_masked].filter(Boolean).join(' · ')}</div>
+                                    <div className="flex flex-wrap gap-1 pt-1">
+                                        <Badge variant="outline" className="text-[10px]">{candidate.has_login ? 'Has login' : 'No login'}</Badge>
+                                        {candidate.employment && (
+                                            <Badge variant="outline" className="text-[10px]">
+                                                HR: {candidate.employment.onboarding_status === 'completed' ? 'onboarded' : candidate.employment.onboarding_status === 'reset' ? 'reset' : 'awaiting onboarding'}
+                                            </Badge>
+                                        )}
+                                    </div>
+                                    {candidateBlock && (
+                                        <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                                            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />{candidateBlock}
+                                        </div>
+                                    )}
+                                    {!candidateBlock && candidate.employment?.onboarding_status === 'completed' && (
+                                        <div className="mt-2 text-xs text-green-700">Already onboarded. Submitting again changes nothing.</div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div className="space-y-2 sm:col-span-2">
+                                        <Label>Full Name *</Label>
+                                        <Input value={addForm.full_name} onChange={e => setAddForm(p => ({ ...p, full_name: e.target.value }))} placeholder="e.g. Ahmad bin Ismail" />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>Work Email *</Label>
+                                        <Input type="email" value={addForm.email} onChange={e => setAddForm(p => ({ ...p, email: e.target.value }))} />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>Phone</Label>
+                                        <Input value={addForm.phone} onChange={e => setAddForm(p => ({ ...p, phone: e.target.value }))} placeholder="+60123456789" />
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label>Department</Label>
+                                    <Select value={addForm.department_id || 'none'} onValueChange={v => setAddForm(p => ({ ...p, department_id: v === 'none' ? '' : v }))}>
+                                        <SelectTrigger><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="none">No department</SelectItem>
+                                            {departments.map(d => (
+                                                <SelectItem key={d.id} value={d.id}>{d.dept_code ? `${d.dept_code} - ` : ''}{d.dept_name}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>Position</Label>
+                                    <Select value={addForm.position_id || 'none'} onValueChange={v => setAddForm(p => ({ ...p, position_id: v === 'none' ? '' : v }))}>
+                                        <SelectTrigger><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="none">No position</SelectItem>
+                                            {positions.map(p => (
+                                                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>Reports To</Label>
+                                    <Select value={addForm.manager_user_id || 'none'} onValueChange={v => setAddForm(p => ({ ...p, manager_user_id: v === 'none' ? '' : v }))}>
+                                        <SelectTrigger><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="none">Top leader</SelectItem>
+                                            {users.filter(u => u.id !== candidate?.user_id).map(u => (
+                                                <SelectItem key={u.id} value={u.id}>{u.full_name || u.email}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>Employment Type</Label>
+                                    <Select value={addForm.employment_type} onValueChange={v => setAddForm(p => ({ ...p, employment_type: v }))}>
+                                        <SelectTrigger><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="Full-time">Full-time</SelectItem>
+                                            <SelectItem value="Part-time">Part-time</SelectItem>
+                                            <SelectItem value="Contract">Contract</SelectItem>
+                                            <SelectItem value="Intern">Intern</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>Actual Hire Date *</Label>
+                                    <Input type="date" value={addForm.hire_date} onChange={e => setAddForm(p => ({ ...p, hire_date: e.target.value }))} />
+                                    <p className="text-[11px] text-muted-foreground">The date employment started — not the date the login was created.</p>
+                                </div>
+                            </div>
+                            <p className="text-xs text-muted-foreground">HR onboarding records employment facts only. It does not change the person&apos;s login, credentials or access; access is managed in Security &amp; Access.</p>
+                            <DialogFooter className="gap-2 sm:gap-0">
+                                <Button variant="outline" onClick={() => { setAddStep('find'); setCandidate(null); setCandidateBlock(null) }}>
+                                    <ArrowLeft className="h-4 w-4 mr-1" />Back
+                                </Button>
+                                <Button onClick={handleAddEmployee}
+                                    disabled={addLoading || !!candidateBlock || !addForm.hire_date || (!candidate && (!addForm.full_name.trim() || !addForm.email.trim()))}>
+                                    {addLoading ? <><Loader2 className="h-4 w-4 animate-spin mr-1" />Saving...</> : <><UserPlus className="h-4 w-4 mr-1" />{candidate ? 'Complete Onboarding' : 'Create & Onboard'}</>}
+                                </Button>
+                            </DialogFooter>
+                        </div>
+                    )}
+
+                    {addStep === 'done' && addResult && (
                         <div className="space-y-4">
                             <div className="rounded-lg border p-4 bg-green-50 space-y-2">
                                 <div className="text-sm font-medium text-green-800">
-                                    {addResult.outcome === 'REUSED' ? 'Existing account used — no duplicate created.' : 'Employee added successfully!'}
+                                    {addResult.onboarding === 'ALREADY_ONBOARDED' ? 'This person was already onboarded — nothing changed.'
+                                        : addResult.outcome === 'REUSED' ? 'Existing account kept — no duplicate created.' : 'Employee created and onboarded.'}
                                 </div>
                                 {addResult.employee_no && (
                                     <div className="text-sm text-green-700">Employee No: <span className="font-mono font-medium">EMP-{String(addResult.employee_no).padStart(4, '0')}</span></div>
@@ -777,87 +1134,6 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                             <DialogFooter>
                                 <Button onClick={() => { setAddDialogOpen(false); resetAddForm() }}>Done</Button>
                                 <Button variant="outline" onClick={resetAddForm}>Add Another</Button>
-                            </DialogFooter>
-                        </div>
-                    ) : (
-                        <div className="space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <Label>Full Name *</Label>
-                                <Input value={addForm.full_name} onChange={e => setAddForm(p => ({ ...p, full_name: e.target.value }))} placeholder="e.g. Ahmad bin Ismail" />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Work Email *</Label>
-                                <Input type="email" value={addForm.email} onChange={e => setAddForm(p => ({ ...p, email: e.target.value }))} placeholder="e.g. ahmad@company.com" />
-                            </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <Label>Phone</Label>
-                                <Input value={addForm.phone} onChange={e => setAddForm(p => ({ ...p, phone: e.target.value }))} placeholder="+60123456789" />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Employment Type</Label>
-                                <Select value={addForm.employment_type} onValueChange={v => setAddForm(p => ({ ...p, employment_type: v }))}>
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="Full-time">Full-time</SelectItem>
-                                        <SelectItem value="Part-time">Part-time</SelectItem>
-                                        <SelectItem value="Contract">Contract</SelectItem>
-                                        <SelectItem value="Intern">Intern</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <Label>Department</Label>
-                                <Select value={addForm.department_id || 'none'} onValueChange={v => setAddForm(p => ({ ...p, department_id: v === 'none' ? '' : v }))}>
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="none">No department</SelectItem>
-                                        {departments.map(d => (
-                                            <SelectItem key={d.id} value={d.id}>{d.dept_code ? `${d.dept_code} - ` : ''}{d.dept_name}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Position</Label>
-                                <Select value={addForm.position_id || 'none'} onValueChange={v => setAddForm(p => ({ ...p, position_id: v === 'none' ? '' : v }))}>
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="none">No position</SelectItem>
-                                        {positions.map(p => (
-                                            <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <Label>Reports To</Label>
-                                <Select value={addForm.manager_user_id || 'none'} onValueChange={v => setAddForm(p => ({ ...p, manager_user_id: v === 'none' ? '' : v }))}>
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="none">Top leader</SelectItem>
-                                        {users.map(u => (
-                                            <SelectItem key={u.id} value={u.id}>{u.full_name || u.email}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Join Date</Label>
-                                <Input type="date" value={addForm.join_date} onChange={e => setAddForm(p => ({ ...p, join_date: e.target.value }))} />
-                            </div>
-                        </div>
-                            <DialogFooter>
-                                <Button variant="outline" onClick={() => { setAddDialogOpen(false); resetAddForm() }}>Cancel</Button>
-                                <Button onClick={handleAddEmployee} disabled={addLoading || !addForm.full_name.trim() || !addForm.email.trim()}>
-                                    {addLoading ? <><Loader2 className="h-4 w-4 animate-spin mr-1" />Adding...</> : <><Plus className="h-4 w-4 mr-1" />Add Employee</>}
-                                </Button>
                             </DialogFooter>
                         </div>
                     )}

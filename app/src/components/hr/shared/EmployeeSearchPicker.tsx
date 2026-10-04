@@ -56,39 +56,27 @@ export default function EmployeeSearchPicker({
         setLoading(true)
         try {
             const supabase = createClient()
-            // Get org employees with names/avatars
-            const { data } = await supabase
+            // Operational pickers list employees HR has onboarded (employment
+            // anchors awaiting onboarding or reset are not selectable).
+            const { data } = await (supabase as any)
                 .from('users')
-                .select('id, full_name, email, avatar_url')
+                .select('id, full_name, email, avatar_url, hr_employees!hr_employees_user_id_fkey!inner(employee_no, onboarding_status)')
+                .eq('hr_employees.onboarding_status', 'completed')
                 .or(`full_name.ilike.%${q}%,email.ilike.%${q}%`)
                 .limit(15)
 
             if (data) {
-                // Also fetch hr_employees to get employee_no
-                const userIds = data.map(u => u.id)
-                const hrMap = new Map<string, { employee_no: string | null; department_name: string | null }>()
-                if (userIds.length > 0) {
-                    const { data: hrData } = await (supabase as any)
-                        .from('hr_employees')
-                        .select('user_id, employee_no')
-                        .in('user_id', userIds)
-
-                    hrData?.forEach((hr: any) => {
-                        hrMap.set(hr.user_id, {
-                            employee_no: hr.employee_no,
-                            department_name: null,
-                        })
-                    })
-                }
-
-                setEmployees(data.map(u => ({
-                    id: u.id,
-                    full_name: u.full_name,
-                    email: u.email,
-                    avatar_url: u.avatar_url,
-                    employee_no: hrMap.get(u.id)?.employee_no || null,
-                    department_name: hrMap.get(u.id)?.department_name || null,
-                })))
+                setEmployees(data.map((u: any) => {
+                    const employment = Array.isArray(u.hr_employees) ? u.hr_employees[0] : u.hr_employees
+                    return {
+                        id: u.id,
+                        full_name: u.full_name,
+                        email: u.email,
+                        avatar_url: u.avatar_url,
+                        employee_no: employment?.employee_no ?? null,
+                        department_name: null,
+                    }
+                }))
             }
         } catch (e) {
             console.error('Employee search failed:', e)

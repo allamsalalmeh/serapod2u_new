@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { getHrPageContext } from '@/app/hr/_lib'
 import HrMobileShell from '@/components/hr/mobile/HrMobileShell'
+import { getOwnOnboardingState } from '@/lib/hr/onboarding'
 import type { Metadata, Viewport } from 'next'
 
 /* ─── PWA metadata for the HR mobile scope ────────────────────────── */
@@ -47,5 +48,11 @@ export default async function HrMobileLayout({
     redirect('/login')
   }
 
-  return <HrMobileShell userProfile={userProfile}>{children}</HrMobileShell>
+  // Employee self-service follows HR onboarding: until HR completes it (or
+  // after a reset) the employee sees a pending-setup screen. Login and every
+  // other module stay available; history is kept.
+  const onboarding = await getOwnOnboardingState(userProfile.id, userProfile.organization_id)
+  const pendingSetup = onboarding === 'pending' || onboarding === 'reset'
+
+  return <HrMobileShell userProfile={userProfile} pendingSetup={pendingSetup}>{children}</HrMobileShell>
 }
