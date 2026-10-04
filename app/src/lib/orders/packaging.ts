@@ -204,3 +204,25 @@ export function resolveOrderCasesPerBox(
   if (sizes.size === 1) return sizes.values().next().value as number
   return positiveInt(orderCasesPerBox) ?? DEFAULT_CASES_PER_BOX
 }
+
+/**
+ * "Expected Boxes" for an H2M / D2H order: the SAME Standard/Small Box rule as
+ * the Sales Order's Expected Delivery (`formatExpectedDelivery`), applied to the
+ * order's total ordered cases at the box size `resolveOrderCasesPerBox` picks
+ * from the lines and the order setting. Shared by the order detail page, the
+ * order PDF and the Create Order summary so the three cannot disagree.
+ *
+ * Only ordered cases are boxed. The manufacturer buffer is stated separately
+ * (see `lib/orders/qr-buffer`): its case QR codes are spares that QR generation
+ * never assigns to a Master (box) code.
+ */
+export function formatOrderExpectedBoxes(
+  lines: Array<{ qty?: number | null; units_per_case?: number | null }>,
+  orderCasesPerBox?: number | null,
+): string {
+  const totalCases = lines.reduce((sum, line) => sum + Math.max(0, Math.floor(Number(line.qty) || 0)), 0)
+  return formatExpectedDelivery(
+    totalCases,
+    resolveOrderCasesPerBox(lines.map((line) => line.units_per_case), orderCasesPerBox),
+  )
+}

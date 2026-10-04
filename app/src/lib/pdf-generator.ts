@@ -1,6 +1,8 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { wrapTermsLines } from '@/lib/organizations/terms'
+import { formatOrderExpectedBoxes } from '@/lib/orders/packaging'
+import { qrCaseTotals } from '@/lib/orders/qr-buffer'
 import { resolvePartyColumnHeading } from '@/lib/documents/counterparty'
 import { formatDateKeyLong, isDateKey } from '@/lib/orders/order-date'
 import {
@@ -99,6 +101,10 @@ interface OrderData {
     unit_price: number
     line_total: number
   }>
+  /** `orders.units_per_case` — the order-level cases-per-box setting. */
+  units_per_case?: number | null
+  /** `orders.qr_buffer_percent` — the H2M manufacturer buffer percent. */
+  qr_buffer_percent?: number | null
 }
 
 interface DocumentData {
@@ -1149,6 +1155,50 @@ export class PDFGenerator {
   }
 
   /**
+   * "Expected Boxes: 55 Standard Boxes + 1 Small Box" below the summary of an
+   * H2M / D2H order document — the same shared figure the order detail page
+   * prints (`formatOrderExpectedBoxes`). An H2M order also states its
+   * manufacturer buffer, which is not boxed. Other order types draw nothing.
+   */
+  private addExpectedBoxesSection(orderData: OrderData, yPosition: number): number {
+    if (!['H2M', 'D2H', 'DH'].includes(orderData.order_type)) return yPosition
+
+    const label = formatOrderExpectedBoxes(orderData.order_items, orderData.units_per_case)
+    const totalCases = orderData.order_items.reduce((sum, item) => sum + (Number(item.qty) || 0), 0)
+    const buffer = orderData.order_type === 'H2M' ? qrCaseTotals(totalCases, orderData.qr_buffer_percent) : null
+    const showBuffer = !!buffer && buffer.bufferCases > 0
+
+    let y = yPosition
+    const needed = showBuffer ? 12 : 7
+    if (y + needed > this.doc.internal.pageSize.getHeight() - this.margin) {
+      this.doc.addPage()
+      y = 20
+    }
+
+    const heading = 'Expected Boxes:'
+    this.doc.setFontSize(9)
+    this.doc.setTextColor(0, 0, 0)
+    this.doc.setFont('helvetica', 'bold')
+    this.doc.text(heading, this.margin, y)
+    this.doc.setFont('helvetica', 'normal')
+    this.doc.text(label, this.margin + this.doc.getTextWidth(heading) + 1.5, y)
+
+    if (showBuffer && buffer) {
+      y += 5
+      this.doc.setFontSize(8)
+      this.doc.setTextColor(90, 90, 90)
+      this.doc.text(
+        `Manufacturer buffer: ${buffer.bufferCases.toLocaleString('en-MY')} ${buffer.bufferCases === 1 ? 'case' : 'cases'} (${buffer.bufferPercent}%), not included in Expected Boxes`,
+        this.margin,
+        y,
+      )
+      this.doc.setTextColor(0, 0, 0)
+    }
+
+    return y + 8
+  }
+
+  /**
    * The issuing organization's Terms & Conditions, rendered verbatim.
    *
    * Mirrors the browser order report: its own heading, sitting after the
@@ -1576,6 +1626,9 @@ export class PDFGenerator {
     // Summary Section
     y = this.addSummarySection(orderData, y)
 
+    // Expected Boxes (H2M / D2H)
+    y = this.addExpectedBoxesSection(orderData, y)
+
     // Organization Terms & Conditions (verbatim, omitted when unset)
     y = this.addTermsSection(orderData.organization_terms, y)
 
@@ -1615,6 +1668,9 @@ export class PDFGenerator {
 
     // Summary Section
     y = this.addSummarySection(orderData, y)
+
+    // Expected Boxes (H2M / D2H)
+    y = this.addExpectedBoxesSection(orderData, y)
 
     // Organization Terms & Conditions (verbatim, omitted when unset)
     y = this.addTermsSection(orderData.organization_terms, y)

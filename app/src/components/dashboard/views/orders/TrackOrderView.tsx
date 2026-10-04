@@ -20,6 +20,7 @@ import { Badge } from '@/components/ui/badge'
 import { toast } from '@/components/ui/use-toast'
 import AvailableActionsCard from './AvailableActionsCard'
 import OrderDocumentsDialogEnhanced from './OrderDocumentsDialogEnhanced'
+import { resolveQrBufferPercent } from '@/lib/orders/qr-buffer'
 
 interface OrderDetails {
   id: string
@@ -369,7 +370,7 @@ export default function TrackOrderView({ userProfile, onViewChange }: TrackOrder
         has_points: order.has_points || false,
         has_rfid: order.has_rfid || false,
         units_per_case: order.units_per_case || 100,
-        qr_buffer_percent: order.qr_buffer_percent || 10,
+        qr_buffer_percent: resolveQrBufferPercent(order.qr_buffer_percent),
         notes: order.notes || null,
         documents: docDatesWithWarehouse
       })
@@ -783,7 +784,7 @@ export default function TrackOrderView({ userProfile, onViewChange }: TrackOrder
                 </div>
               )}
               <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-                <p className="text-xs text-gray-600 font-medium">📦 Units/Case</p>
+                <p className="text-xs text-gray-600 font-medium">📦 Cases/Box</p>
                 <p className="text-xs text-gray-500 mt-0.5">{orderDetails.units_per_case}</p>
               </div>
               <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">

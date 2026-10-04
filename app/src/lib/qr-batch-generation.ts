@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import type { createAdminClient } from '@/lib/supabase/admin'
 import { queueNotificationEvent } from '@/lib/notifications/supplyChainEventQueue'
 import { generateQRBatch } from '@/lib/qr-generator'
+import { resolveQrBufferPercent } from '@/lib/orders/qr-buffer'
 import { generateQRExcel, generateQRExcelFilename } from '@/lib/excel-generator'
 
 export interface QRBatchGenerationOptions {
@@ -25,6 +26,8 @@ export async function runQRBatchGeneration(
   { notificationBaseUrl, batchId }: QRBatchGenerationOptions
 ): Promise<NextResponse> {
   const startTime = Date.now()
+  // The batch being worked, so a failure can be recorded on it.
+  let activeBatchId: string | null = null
 
   try {
     // 1. Find a batch to process (queued or processing), oldest first,
@@ -81,6 +84,7 @@ export async function runQRBatchGeneration(
       return NextResponse.json({ message: 'No batches to process' })
     }
 
+    activeBatchId = batch.id
     console.log(`⚙️ Processing batch ${batch.id} (Status: ${batch.status})`)
 
     // 2. Update status to processing if needed
@@ -128,7 +132,10 @@ export async function runQRBatchGeneration(
       orderNo: order.order_no,
       manufacturerCode: order.seller_org.org_code,
       orderItems,
-      bufferPercent: order.qr_buffer_percent || 10,
+      // The percent the batch was created with, so a resumed run regenerates
+      // exactly the codes its stored totals (and any Excel already issued)
+      // were counted from, even if the order's setting changes later.
+      bufferPercent: resolveQrBufferPercent(batch.buffer_percent ?? order.qr_buffer_percent),
       unitsPerCase: order.units_per_case || 100,
       useIndividualCaseSizes: orderItems.some(item => item.units_per_case != null)
     })
@@ -305,7 +312,8 @@ export async function runQRBatchGeneration(
           .from('qr_batches')
           .update({
             status: 'generated',
-            processing_finished_at: new Date().toISOString()
+            processing_finished_at: new Date().toISOString(),
+            last_error: null
           })
           .eq('id', batch.id)
 
@@ -353,12 +361,19 @@ export async function runQRBatchGeneration(
   } catch (error: any) {
     console.error('❌ Worker Error:', error)
 
-    // Try to log error to batch
-    // We need batch ID, but it might be undefined if error happened before fetching
-    // But we have 'batch' variable in scope if fetch succeeded
-    // Actually 'batch' is const inside try block, so not available in catch if defined there.
-    // But I defined it inside try.
-    // I'll just log to console for now, as I can't easily access batch.id here without moving declaration up.
+    // Record the failure on the batch. Its status stays as it is: every phase is
+    // resumable, so the next run (cron, Run Worker or a retried Generate)
+    // continues from the last completed phase.
+    if (activeBatchId) {
+      try {
+        await supabase
+          .from('qr_batches')
+          .update({ last_error: String(error?.message || error).slice(0, 1000) })
+          .eq('id', activeBatchId)
+      } catch (logError) {
+        console.warn('⚠️ Failed to record batch error:', logError)
+      }
+    }
 
     return NextResponse.json(
       { error: 'Worker failed', details: error.message },

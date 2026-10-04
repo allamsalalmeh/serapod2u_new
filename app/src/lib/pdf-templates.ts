@@ -11,6 +11,8 @@ import autoTable from 'jspdf-autotable'
 import { wrapTermsLines } from '@/lib/organizations/terms'
 import { isBuyerIssuedDocument, resolveCounterparty } from '@/lib/documents/counterparty'
 import { formatExpectedDelivery, resolveOrderCasesPerBox } from '@/lib/orders/packaging'
+import { formatOrderExpectedBoxes } from '@/lib/orders/packaging'
+import { qrCaseTotals } from '@/lib/orders/qr-buffer'
 import { formatDateKey, isDateKey } from '@/lib/orders/order-date'
 import {
   salesOrderLineDescription,
@@ -87,6 +89,8 @@ export interface TemplateOrderData {
    * the lines do not all agree on one. Legacy internal name; see packaging.ts.
    */
   units_per_case?: number | null
+  /** `orders.qr_buffer_percent` — the H2M manufacturer buffer percent. */
+  qr_buffer_percent?: number | null
   /**
    * The issuing organization's Terms & Conditions
    * (organizations.settings.terms_conditions), resolved upstream. Separate
@@ -269,6 +273,48 @@ export class ClassicTemplate {
     this.doc.text(label, valueX, y)
 
     // A little air before the Terms heading, which follows at y + 6.
+    return y + 2
+  }
+
+  /**
+   * "Expected Boxes: 10 Standard Boxes" for an H2M / D2H purchase order, from
+   * the shared `formatOrderExpectedBoxes` the order detail page also uses. An
+   * H2M order adds its manufacturer buffer on the next line: buffer cases are
+   * not packed into the boxes.
+   */
+  private addExpectedBoxesSection(orderData: TemplateOrderData, yPosition: number): number {
+    const label = formatOrderExpectedBoxes(orderData.order_items, orderData.units_per_case)
+    const totalCases = orderData.order_items.reduce((sum, item) => sum + (item.qty || 0), 0)
+    const buffer = orderData.order_type === 'H2M' ? qrCaseTotals(totalCases, orderData.qr_buffer_percent) : null
+    const showBuffer = !!buffer && buffer.bufferCases > 0
+
+    const pageHeight = this.doc.internal.pageSize.getHeight()
+    let y = yPosition
+    if (y + (showBuffer ? 12 : 7) > pageHeight - this.margin) {
+      this.doc.addPage()
+      y = 20
+    }
+
+    const heading = 'Expected Boxes:'
+    this.doc.setFontSize(9)
+    this.doc.setTextColor(0, 0, 0)
+    this.doc.setFont('helvetica', 'bold')
+    this.doc.text(heading, this.margin, y)
+    this.doc.setFont('helvetica', 'normal')
+    this.doc.text(label, this.margin + this.doc.getTextWidth(heading) + 1.5, y)
+
+    if (showBuffer && buffer) {
+      y += 5
+      this.doc.setFontSize(8)
+      this.doc.setTextColor(90, 90, 90)
+      this.doc.text(
+        `Manufacturer buffer: ${buffer.bufferCases.toLocaleString('en-MY')} ${buffer.bufferCases === 1 ? 'case' : 'cases'} (${buffer.bufferPercent}%), not included in Expected Boxes`,
+        this.margin,
+        y,
+      )
+      this.doc.setTextColor(0, 0, 0)
+    }
+
     return y + 2
   }
 
@@ -554,14 +600,29 @@ export class ClassicTemplate {
     this.doc.setFont('helvetica', 'bold')
     this.doc.setTextColor(0, 0, 0)
 
-    const totalX = this.pageWidth - this.margin - 30
-    this.doc.text('Total', totalX - 20, y, { align: 'right' })
+    const isBoxedOrder = ['H2M', 'D2H', 'DH'].includes(orderData.order_type)
+    if (isSalesOrderDoc || !isBoxedOrder) {
+      const totalX = this.pageWidth - this.margin - 30
+      this.doc.text('Total', totalX - 20, y, { align: 'right' })
+    } else {
+      // H2M / D2H: "Grand Total | total cases | amount", the case total centred
+      // under the Unit column and the amount under Amount (column widths from
+      // the table above: Unit 18, Price 22, Amount 28).
+      const unitColumnRight = this.pageWidth - this.margin - 28 - 22
+      const unitColumnCenter = unitColumnRight - 18 / 2
+      const totalCases = orderData.order_items.reduce((sum, item) => sum + (item.qty || 0), 0)
+      this.doc.text('Grand Total', unitColumnRight - 18 - 2, y, { align: 'right' })
+      this.doc.text(totalCases.toLocaleString('en-MY'), unitColumnCenter, y, { align: 'center' })
+    }
     this.doc.text(this.formatCurrency(totalAmount), this.pageWidth - this.margin, y, { align: 'right' })
 
     // 4b. Expected Delivery - the ordered cases in boxes, between the total and
     // the Terms. Sales Orders only; a PO or an invoice states no delivery figure.
     if (isSalesOrderDoc) {
       y = this.addExpectedDeliverySection(orderData, y + 8)
+    } else if (isBoxedOrder && (documentData.doc_type || '').toUpperCase() === 'PO') {
+      // 4c. Expected Boxes - the H2M / D2H purchase order's counterpart.
+      y = this.addExpectedBoxesSection(orderData, y + 8)
     }
 
     // 5. Organization Terms & Conditions - verbatim, omitted when unset

@@ -22,6 +22,8 @@ import {
   sortSalesOrderLinesForDisplay,
 } from '@/lib/orders/sales-order-line-presentation'
 import { formatExpectedDelivery, resolveOrderCasesPerBox } from '@/lib/orders/packaging'
+import { formatOrderExpectedBoxes } from '@/lib/orders/packaging'
+import { qrCaseTotals } from '@/lib/orders/qr-buffer'
 import OrderDocumentsDialogEnhanced from '@/components/dashboard/views/orders/OrderDocumentsDialogEnhanced'
 import DHReceiptDialog from '@/components/orders/DHReceiptDialog'
 import { MessagingOrderTimelinePanel } from '@/components/orders/MessagingOrderTimelinePanel'
@@ -554,6 +556,13 @@ export default function ViewOrderDetailsView({ userProfile, onViewChange, orderI
     ),
   )
 
+  // Expected Boxes for H2M / D2H orders: the same Standard/Small Box rule as the
+  // SO's Expected Delivery, over the ordered cases only. The H2M manufacturer
+  // buffer is stated on its own line: its cases are not boxed.
+  const showExpectedBoxes = !isSalesOrder && ['H2M', 'D2H', 'DH'].includes(orderData.order_type)
+  const expectedBoxesLabel = formatOrderExpectedBoxes(orderData.order_items ?? [], orderData.units_per_case)
+  const manufacturerBuffer = orderData.order_type === 'H2M' ? qrCaseTotals(totalQuantity, orderData.qr_buffer_percent) : null
+
   // Persisted org media may be a relative storage path or a legacy-host URL;
   // the canonical resolver rebuilds it against the configured storage host.
   const headerOrgLogoUrl = resolveOrganizationLogoUrl(headerOrg?.logo_url)
@@ -852,12 +861,23 @@ export default function ViewOrderDetailsView({ userProfile, onViewChange, orderI
               ))}
             </tbody>
             <tfoot>
-              <tr className="border-t border-gray-200">
-                <td colSpan={3} className="py-4"></td>
-                <td className="py-4 text-right text-xs font-bold text-gray-900">{formatNumber(totalQuantity)}</td>
-                <td className="py-4 text-right text-xs font-bold text-gray-900">Total</td>
-                <td className="py-4 text-right text-sm font-bold text-gray-900">{formatCurrency(subtotal)}</td>
-              </tr>
+              {isSalesOrder ? (
+                <tr className="border-t border-gray-200">
+                  <td colSpan={3} className="py-4"></td>
+                  <td className="py-4 text-right text-xs font-bold text-gray-900">{formatNumber(totalQuantity)}</td>
+                  <td className="py-4 text-right text-xs font-bold text-gray-900">Total</td>
+                  <td className="py-4 text-right text-sm font-bold text-gray-900">{formatCurrency(subtotal)}</td>
+                </tr>
+              ) : (
+                // H2M / D2H: Grand Total | total cases (under Cases) | amount
+                // (under Amount). Same sums; only the label moved ahead of the quantity.
+                <tr className="border-t border-gray-200">
+                  <td colSpan={3} className="py-4 pr-3 text-right text-xs font-bold text-gray-900">Grand Total</td>
+                  <td className="py-4 text-right text-xs font-bold text-gray-900">{formatNumber(totalQuantity)}</td>
+                  <td className="py-4"></td>
+                  <td className="py-4 text-right text-sm font-bold text-gray-900">{formatCurrency(subtotal)}</td>
+                </tr>
+              )}
             </tfoot>
           </table>
         </div>
@@ -872,6 +892,23 @@ export default function ViewOrderDetailsView({ userProfile, onViewChange, orderI
             <span className="font-semibold">Expected Delivery:</span>{' '}
             <span>{expectedDeliveryLabel}</span>
           </p>
+        )}
+
+        {/* Expected Boxes - H2M / D2H counterpart of the SO's Expected Delivery,
+            one plain line below the Grand Total, the same in print. */}
+        {showExpectedBoxes && (
+          <div className="mt-2 text-sm text-gray-900 break-inside-avoid page-break-inside-avoid print:mt-1">
+            <p>
+              <span className="font-semibold">Expected Boxes:</span>{' '}
+              <span>{expectedBoxesLabel}</span>
+            </p>
+            {manufacturerBuffer && manufacturerBuffer.bufferCases > 0 && (
+              <p className="mt-0.5 text-xs text-[var(--sera-muted)]">
+                Manufacturer buffer: {formatNumber(manufacturerBuffer.bufferCases)}{' '}
+                {manufacturerBuffer.bufferCases === 1 ? 'case' : 'cases'} ({manufacturerBuffer.bufferPercent}%), not included in Expected Boxes
+              </p>
+            )}
+          </div>
         )}
 
         {/* Terms & Conditions - the organization's own value, rendered verbatim */}
