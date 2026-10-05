@@ -4,38 +4,25 @@
  * (labels.ts) and summarises recorded access differences. Nothing here
  * participates in an authorization decision.
  */
-import { permissionLabel } from './labels'
+import { modeLabel, permissionLabel } from './labels'
 import { MODULE_TAXONOMY, OTHER_MODULE, classifyPermission as classifyModule, type ModuleGroup } from './modules'
 
-/** Overview wording for each migration mode (enum values unchanged). */
-export const ROLLOUT_MODES: Record<string, { label: string; shortLabel: string; help: string; dot: string; text: string }> = {
-  NEW_ENFORCED: {
-    label: 'New Access Active', shortLabel: 'Active',
-    help: 'The new authorization model determines decisions.',
-    dot: 'bg-emerald-500', text: 'text-emerald-700',
-  },
-  SHADOW: {
-    label: 'Monitoring', shortLabel: 'Monitoring',
-    help: 'Legacy access still determines decisions; the new model is evaluated for comparison.',
-    dot: 'bg-blue-500', text: 'text-blue-700',
-  },
-  LEGACY_RETIRED: {
-    label: 'Legacy Retired', shortLabel: 'Retired',
-    help: 'The corresponding legacy authorization checks have been retired.',
-    dot: 'bg-purple-500', text: 'text-purple-700',
-  },
-  LEGACY_ENFORCED: {
-    label: 'Legacy Active', shortLabel: 'Legacy',
-    help: 'Legacy access determines decisions; the new model is not used for the outcome.',
-    dot: 'bg-gray-400', text: 'text-gray-700',
-  },
+/** Overview presentation per mode; wording comes from the shared vocabulary (labels.ts). */
+const ROLLOUT_STYLE: Record<string, { shortLabel: string; dot: string; text: string }> = {
+  NEW_ENFORCED: { shortLabel: 'Active', dot: 'bg-emerald-500', text: 'text-emerald-700' },
+  SHADOW: { shortLabel: 'Monitoring', dot: 'bg-blue-500', text: 'text-blue-700' },
+  LEGACY_RETIRED: { shortLabel: 'Retired', dot: 'bg-purple-500', text: 'text-purple-700' },
+  LEGACY_ENFORCED: { shortLabel: 'Legacy', dot: 'bg-gray-400', text: 'text-gray-700' },
 }
 
 /** Column order: the three rollout columns first, then any other mode present. */
 export const PRIMARY_ROLLOUT_MODES = ['NEW_ENFORCED', 'SHADOW', 'LEGACY_RETIRED'] as const
 
 export function rolloutMode(mode: string) {
-  return ROLLOUT_MODES[mode] ?? { label: mode, shortLabel: mode, help: 'Unrecognised mode.', dot: 'bg-gray-400', text: 'text-gray-700' }
+  const style = ROLLOUT_STYLE[mode]
+  const shared = modeLabel(mode)
+  if (!style) return { label: mode, shortLabel: mode, help: 'Unrecognised mode.', dot: 'bg-gray-400', text: 'text-gray-700' }
+  return { label: shared.label, shortLabel: style.shortLabel, help: shared.help, dot: style.dot, text: style.text }
 }
 
 export interface ModeRow {
@@ -188,7 +175,7 @@ export interface DifferenceSummary {
   /** The sample is the latest `sampleLimit` non-matching decisions (not a time window). */
   sampleSize: number
   capped: boolean
-  /** Differences on permissions still in Monitoring / Legacy Active: review before enabling. */
+  /** Differences on permissions still in Monitoring / Legacy enforced: review before enabling. */
   pending: number
   pendingPermissions: string[]
   /** Differences on permissions the new model already decides: historical. */

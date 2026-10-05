@@ -1,6 +1,6 @@
 'use client'
 
-export interface ApiResult<T = any> { ok: boolean; data?: T; error?: string }
+export interface ApiResult<T = any> { ok: boolean; data?: T; error?: string; code?: string }
 
 /** JSON helper for the Security & Access admin API; errors are human-readable. */
 export async function callApi<T = any>(url: string, init?: { method?: string; body?: unknown }): Promise<ApiResult<T>> {
@@ -12,7 +12,7 @@ export async function callApi<T = any>(url: string, init?: { method?: string; bo
       cache: 'no-store',
     })
     const data = await response.json().catch(() => ({}))
-    if (!response.ok) return { ok: false, error: data?.error || `Request failed (${response.status})` }
+    if (!response.ok) return { ok: false, error: data?.error || `Request failed (${response.status})`, code: data?.code }
     return { ok: true, data }
   } catch {
     return { ok: false, error: 'Network error' }

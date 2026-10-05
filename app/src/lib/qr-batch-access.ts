@@ -16,3 +16,21 @@ export function canProcessBatchForOrder(orgType: string, orgId: string, order: O
   if (orgType === 'HQ') return order.company_id === orgId || order.buyer_org_id === orgId
   return false
 }
+
+/** Partner organization types: they act only on orders they are the seller (manufacturer) of. */
+export const PARTNER_ORG_TYPES: readonly string[] = ['MFG', 'DIST', 'SHOP']
+
+export const isPartnerOrgType = (orgType: string) => PARTNER_ORG_TYPES.includes(String(orgType || '').toUpperCase())
+
+/**
+ * Whether a caller may READ or DOWNLOAD a batch of this order. A partner
+ * (manufacturer / distributor / shop) only sees batches of orders placed with
+ * it: orders.seller_org_id is the manufacturer party. (qr_batches.company_id is
+ * the owning HQ, so it never identifies the manufacturer.) Internal
+ * organizations keep their existing behaviour.
+ */
+export function canAccessBatchForOrder(orgType: string, orgId: string, order: OrderOwnership | null): boolean {
+  if (!order || !orgId) return false
+  if (isPartnerOrgType(orgType)) return order.seller_org_id === orgId
+  return true
+}

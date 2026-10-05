@@ -143,7 +143,7 @@ describe('summarizeDifferences', () => {
   })
 
   it('keeps the Overview wording without changing mode values', () => {
-    expect(rolloutMode('SHADOW').label).toBe('Monitoring')
+    expect(rolloutMode('SHADOW').label).toBe('Monitoring / Shadow')
     expect(rolloutMode('NEW_ENFORCED').label).toBe('New Access Active')
     expect(rolloutMode('LEGACY_RETIRED').label).toBe('Legacy Retired')
   })

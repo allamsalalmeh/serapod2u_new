@@ -1,5 +1,6 @@
 'use client'
 
+import AccessProfileSelector, { type AccessMode, type ProfileChoice, type SelectableProfile, type SelectableScope } from './AccessProfileSelector'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getOrgTypeName } from '@/lib/utils/orgHierarchy'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -320,13 +321,23 @@ export default function UserDialogNew({
   // legacyReadOnly: legacy role codes no longer grant access here, so a new
   // user without a business role can use only employee self-service.
   const [accessInfo, setAccessInfo] = useState<{ canAssign: boolean; legacyReadOnly: boolean } | null>(null)
+  // Access Profiles offered for the chosen organization (applicable, non-administrative) and the scopes
+  // that may be chosen for each. Falls back to the plain role list before the profile migration.
+  const [initialProfiles, setInitialProfiles] = useState<SelectableProfile[]>([])
+  const [initialScopes, setInitialScopes] = useState<SelectableScope[]>([])
+  const [accessOrg, setAccessOrg] = useState<{ name: string | null; typeCode: string | null } | null>(null)
   useEffect(() => {
-    if (user || !open || isGuest || !formData.organization_id) { setInitialRoles([]); setAccessInfo(null); return }
+    if (user || !open || isGuest || !formData.organization_id) { setInitialRoles([]); setInitialProfiles([]); setInitialScopes([]); setAccessOrg(null); setAccessInfo(null); return }
     let cancelled = false
     listInitialAccessRoles(formData.organization_id).then(r => {
       if (cancelled) return
       setInitialRoles(r.roles || [])
+      setInitialProfiles(((r as any).profiles as SelectableProfile[] | undefined) ?? (r.roles || []))
+      setInitialScopes(((r as any).scopes as SelectableScope[] | undefined) ?? [])
+      setAccessOrg((r as any).organization ?? null)
       setAccessInfo({ canAssign: Boolean((r as any).canAssign), legacyReadOnly: Boolean((r as any).legacyReadOnly) })
+      // A change of organization invalidates profile/scope choices made for another one.
+      setFormData(prev => ((prev as any).initial_profiles?.length ? ({ ...prev, initial_profiles: [] } as any) : prev))
     }).catch(() => undefined)
     return () => { cancelled = true }
   }, [user, open, isGuest, formData.organization_id])
@@ -709,7 +720,13 @@ export default function UserDialogNew({
     if (accessChoiceRequired) {
       const choice = (formData as any).initial_role_id
       if (!choice) next.initial_role_id = 'Choose the business access for this person (or employee self-service only)'
-      else if (choice !== 'self' && ((formData as any).initial_access_reason || '').trim().length < 5) next.initial_access_reason = 'A reason is required (at least 5 characters)'
+      else if (choice === 'profiles') {
+        const picked: ProfileChoice[] = (formData as any).initial_profiles || []
+        if (picked.length === 0 || picked.some(p => !p.roleId)) next.initial_profiles = 'Choose an Access Profile in every row (or remove the empty row).'
+        else if (picked.some(p => !p.scopeId)) next.initial_profiles = 'Each Access Profile needs its own scope.'
+        else if (new Set(picked.map(p => p.roleId)).size !== picked.length) next.initial_profiles = 'Each Access Profile can be assigned once.'
+        if (((formData as any).initial_access_reason || '').trim().length < 5) next.initial_access_reason = 'A reason is required (at least 5 characters)'
+      } else if (choice !== 'self' && ((formData as any).initial_access_reason || '').trim().length < 5) next.initial_access_reason = 'A reason is required (at least 5 characters)'
     }
     if (!isGuest && !formData.organization_id) {
       next.organization_id = `${organizationType === 'HQ' ? 'HQ' : getOrgTypeName(organizationType)} organization is required`
@@ -762,7 +779,7 @@ export default function UserDialogNew({
     if (Object.keys(next).length > 0) {
       const first = Object.keys(next)[0]
       if (['full_name', 'email', 'phone', 'password', 'confirmPassword'].includes(first)) setCurrentStep('basic')
-      else if (['role_code', 'organization_id', 'initial_role_id', 'initial_access_reason'].includes(first)) setCurrentStep('access')
+      else if (['role_code', 'organization_id', 'initial_role_id', 'initial_profiles', 'initial_access_reason'].includes(first)) setCurrentStep('access')
       else setCurrentStep('banking')
       return false
     }
@@ -1157,27 +1174,33 @@ export default function UserDialogNew({
           </div>
         </div>
       ) : null}
+      {user ? (
+        <div role="note" className="rounded-lg border border-[var(--sera-line)] p-4 text-xs text-[var(--sera-muted)]">
+          Business access for an existing person is managed with Access Profiles in{' '}
+          <a href="/security-access" className="font-medium text-[var(--sera-orange)] underline">Security &amp; Access → People &amp; Access</a>
+          {' '}(grants, scopes, revocation and audit use the same authorization rules). The legacy level above is a compatibility field only.
+        </div>
+      ) : null}
       {!user && !isGuest && formData.organization_id && accessInfo ? (
         accessChoiceRequired ? (
-          <div className="space-y-2 rounded-lg border border-[var(--sera-line)] p-4">
-            <Label>Business access <span className="text-red-500">*</span></Label>
-            <p className="text-xs text-[var(--sera-muted)]">A Security &amp; Access business role decides what this person can do. Add more roles later in Security &amp; Access → People &amp; Access.</p>
-            <Select value={(formData as any).initial_role_id || undefined} onValueChange={v => { setFormData(prev => ({ ...prev, initial_role_id: v } as any)); clearFieldError('initial_role_id') }}>
-              <SelectTrigger aria-label="Business access"><SelectValue placeholder="Choose business access" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="self">Employee self-service only (no business role)</SelectItem>
-                {initialRoles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            {renderFieldError('initial_role_id')}
-            {(formData as any).initial_role_id && (formData as any).initial_role_id !== 'self' ? (
-              <>
-                <Input placeholder="Reason (recorded in the access audit)" value={(formData as any).initial_access_reason || ''}
-                  onChange={e => { setFormData(prev => ({ ...prev, initial_access_reason: e.target.value } as any)); clearFieldError('initial_access_reason') }} />
-                {renderFieldError('initial_access_reason')}
-              </>
-            ) : null}
-          </div>
+          <>
+            <AccessProfileSelector
+              disabled={saving}
+              organizationName={accessOrg?.name ?? selectedOrg?.org_name ?? null}
+              organizationTypeCode={accessOrg?.typeCode ?? selectedOrg?.org_type_code ?? null}
+              profiles={initialProfiles}
+              scopes={initialScopes}
+              mode={(((formData as any).initial_role_id as string) || '') as AccessMode}
+              items={((formData as any).initial_profiles as ProfileChoice[]) || []}
+              reason={(formData as any).initial_access_reason || ''}
+              legacyLevelLabel={availableRoles.find(r => r.role_code === formData.role_code) ? `Level ${availableRoles.find(r => r.role_code === formData.role_code)!.role_level} — ${availableRoles.find(r => r.role_code === formData.role_code)!.role_name}` : null}
+              legacyReadOnly={accessInfo.legacyReadOnly}
+              errors={{ mode: errors.initial_role_id, items: errors.initial_profiles, reason: errors.initial_access_reason }}
+              onMode={m => { setFormData(prev => ({ ...prev, initial_role_id: m, ...(m === 'self' ? { initial_profiles: [] } : {}) } as any)); clearFieldError('initial_role_id') }}
+              onItems={items => { setFormData(prev => ({ ...prev, initial_profiles: items } as any)); clearFieldError('initial_profiles') }}
+              onReason={v => { setFormData(prev => ({ ...prev, initial_access_reason: v } as any)); clearFieldError('initial_access_reason') }}
+            />
+          </>
         ) : !accessInfo.canAssign ? (
           <div role="note" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900">
             You cannot grant business access in this organization.{accessInfo.legacyReadOnly ? ' The new user will only have employee self-service until' : ' Ask'} a Security &amp; Access administrator {accessInfo.legacyReadOnly ? 'grants a business role' : 'to grant business roles'} in Security &amp; Access → People &amp; Access.

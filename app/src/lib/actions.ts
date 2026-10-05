@@ -87,6 +87,8 @@ export async function createUserWithAuth(userData: {
   /** Optional initial S&A business role (Security & Access administrators only; re-checked in the database). */
   initial_role_id?: string | null
   initial_access_reason?: string | null
+  /** Several Access Profiles, each with its own explicit scope (validated together, all or nothing, in the database). */
+  initial_profiles?: Array<{ role_id: string; scope_id: string }> | null
 }, _callerInfo?: { id: string, role_code: string }) {
   try {
     const supabase = await createClient()
@@ -137,8 +139,11 @@ export async function createUserWithAuth(userData: {
         employmentType: userData.employment_type ?? null,
         joinDate: userData.join_date ?? null,
       },
-      initialAccess: userData.initial_role_id && userData.initial_role_id !== 'self'
+      initialAccess: !userData.initial_profiles?.length && userData.initial_role_id && userData.initial_role_id !== 'self'
         ? { roleId: userData.initial_role_id, reason: userData.initial_access_reason?.trim() || 'Initial access at onboarding' }
+        : undefined,
+      initialProfiles: userData.initial_profiles?.length
+        ? userData.initial_profiles.map(p => ({ roleId: p.role_id, scopeIds: [p.scope_id], reason: userData.initial_access_reason?.trim() || 'Initial access at onboarding' }))
         : undefined,
       source: 'user_management',
     })
@@ -257,7 +262,43 @@ export async function listInitialAccessRoles(organizationId: string | null) {
       .select('id, name, description, role_key, source')
       .eq('status', 'active').neq('source', 'legacy').neq('role_key', 'employee-self-service')
       .order('name')
-    return { success: true, roles: (data || []).map((r: any) => ({ id: r.id, name: r.name, description: r.description ?? null })) as InitialRole[], canAssign: true, legacyReadOnly }
+    const roles = (data || []).map((r: any) => ({ id: r.id, name: r.name, description: r.description ?? null })) as InitialRole[]
+    // Additive Access Profile metadata (applicability, sensitivity) and the scopes an
+    // administrator may choose for this organization. Every read is tolerant: before the
+    // Access Profiles migration is applied, the plain role list above is all that is offered.
+    let profiles: any[] | undefined
+    let scopes: any[] = []
+    let organization: { name: string | null; typeCode: string | null } | null = null
+    try {
+      const { data: org } = await admin.from('organizations').select('org_name, org_type_code').eq('id', organizationId).maybeSingle()
+      organization = org ? { name: org.org_name ?? null, typeCode: org.org_type_code ?? null } : null
+      const ids = (data || []).map((r: any) => r.id)
+      const { data: extra, error: extraError } = await admin.from('sa_business_roles')
+        .select('id, applicable_account_types, applicable_org_types, permissions:sa_business_role_permissions(permission:sa_permissions(permission_key))').in('id', ids)
+      if (!extraError && extra) {
+        const byId = new Map<string, any>(extra.map((x: any) => [x.id, x]))
+        const accountType = ['MFG', 'DIST', 'SHOP'].includes(String(organization?.typeCode || '').toUpperCase()) ? 'partner' : 'internal'
+        profiles = []
+        for (const r of roles) {
+          const x = byId.get(r.id)
+          const keys: string[] = (x?.permissions || []).map((p: any) => p?.permission?.permission_key).filter(Boolean)
+          const sensitive = keys.some(k => k.startsWith('security.') || ['hr.data.reset', 'platform.data.destructive', 'finance.data.reset'].includes(k))
+          const accountTypes: string[] = x?.applicable_account_types || []
+          const orgTypes: string[] = x?.applicable_org_types || []
+          const applicable = (!accountTypes.length || accountTypes.includes(accountType)) && (!orgTypes.length || orgTypes.includes(String(organization?.typeCode || '').toUpperCase()))
+          // Sensitive administrative / reset profiles are assigned afterwards in People & Access, never at creation.
+          if (applicable && !sensitive) profiles.push({ ...r, permissionCount: keys.length, accountTypes, orgTypes })
+        }
+      }
+      const { data: children } = await admin.from('organizations').select('id').eq('parent_org_id', organizationId)
+      const childIds = (children || []).map((c: any) => c.id)
+      const { data: grandchildren } = childIds.length ? await admin.from('organizations').select('id').in('parent_org_id', childIds) : { data: [] }
+      const orgIds = [organizationId, ...childIds, ...(grandchildren || []).map((c: any) => c.id)]
+      const { data: scopeRows } = await admin.from('sa_scope_definitions')
+        .select('id, organization_id, scope_type, display_name').eq('status', 'active').in('organization_id', orgIds).neq('scope_type', 'own_record').order('display_name')
+      scopes = scopeRows || []
+    } catch { /* optional metadata */ }
+    return { success: true, roles, canAssign: true, legacyReadOnly, ...(profiles ? { profiles } : {}), scopes, organization }
   } catch {
     return none(false)
   }

@@ -72,6 +72,32 @@ describe('Add User wizard — initial Security & Access role', () => {
   })
 })
 
+describe('Add User wizard — several Access Profiles, each with its own scope', () => {
+  it('passes every profile with its own scope to canonical provisioning (no shared or defaulted scope)', async () => {
+    authGetUser.mockResolvedValue({ data: { user: { id: 'sec-admin' } }, error: null })
+    checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 1 } })
+    provisionIdentity.mockResolvedValue({ ok: true, userId: 'u-2', outcome: 'CREATED', principalType: 'INTERNAL_EMPLOYEE' })
+    const { createUserWithAuth } = await import('@/lib/actions')
+    await createUserWithAuth({ email: 'w@y.test', password: 'p-123456', full_name: 'W', role_code: 'USER', organization_id: 'org-a',
+      initial_profiles: [{ role_id: 'r-wh', scope_id: 's-balakong' }, { role_id: 'r-rcv', scope_id: 's-alma' }], initial_access_reason: 'Warehouse duty' })
+    const call = provisionIdentity.mock.calls.at(-1)![0]
+    expect(call.initialProfiles).toEqual([
+      { roleId: 'r-wh', scopeIds: ['s-balakong'], reason: 'Warehouse duty' },
+      { roleId: 'r-rcv', scopeIds: ['s-alma'], reason: 'Warehouse duty' },
+    ])
+    expect(call.initialAccess).toBeUndefined()
+  })
+
+  it('keeps the offered role list shape and adds scopes/organization additively and tolerantly', async () => {
+    authGetUser.mockResolvedValue({ data: { user: { id: 'sec-admin' } }, error: null })
+    checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 1 } })
+    const { listInitialAccessRoles } = await import('@/lib/actions')
+    const result: any = await listInitialAccessRoles('org-a')
+    expect(result.roles).toEqual([{ id: 'r-1', name: 'Order Approver', description: 'Approves orders' }])
+    expect(result.scopes).toEqual([])                  // optional metadata failing never hides the roles
+  })
+})
+
 describe('HR Add Employee — one form, identity resolved on the server', () => {
   const view = readFileSync(resolve(process.cwd(), 'src/components/hr/HrPeopleView.tsx'), 'utf8')
   it('has no "link existing or create new" decision, no role picker and no login-less option', () => {

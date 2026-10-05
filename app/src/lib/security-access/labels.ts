@@ -88,11 +88,15 @@ export function resourceTypeLabel(resourceType: string): string {
   return RESOURCE_TYPE_LABELS[resourceType] ?? titleCase(resourceType)
 }
 
+/**
+ * ONE vocabulary for the four stored migration modes (sa_migration_modes.mode),
+ * used by every Security & Access screen. Never rename a stored value here.
+ */
 export const MODE_LABELS: Record<string, { label: string; tone: string; help: string }> = {
-  LEGACY_ENFORCED: { label: 'Legacy enforced', tone: 'bg-gray-100 text-gray-700', help: 'Existing role permissions decide. The new model is not consulted for the outcome.' },
-  SHADOW: { label: 'Shadow', tone: 'bg-blue-50 text-blue-700', help: 'Existing role permissions decide; the new model is evaluated and compared for diagnostics.' },
-  NEW_ENFORCED: { label: 'New enforced', tone: 'bg-emerald-50 text-emerald-700', help: 'The new Security & Access model decides. A legacy allow cannot override a new deny.' },
-  LEGACY_RETIRED: { label: 'Legacy retired', tone: 'bg-purple-50 text-purple-700', help: 'Only the new Security & Access model is used.' },
+  LEGACY_ENFORCED: { label: 'Legacy enforced', tone: 'bg-gray-100 text-gray-700', help: 'Legacy authorization decides. The new model is not used for the outcome.' },
+  SHADOW: { label: 'Monitoring / Shadow', tone: 'bg-blue-50 text-blue-700', help: 'Legacy authorization decides; new Security & Access decisions are evaluated and compared for diagnostics.' },
+  NEW_ENFORCED: { label: 'New Access Active', tone: 'bg-emerald-50 text-emerald-700', help: 'New Security & Access authorization decides. A legacy allow cannot override a new deny.' },
+  LEGACY_RETIRED: { label: 'Legacy Retired', tone: 'bg-purple-50 text-purple-700', help: 'Legacy authorization is retired; only the new Security & Access model is used.' },
 }
 
 export function modeLabel(mode: string) {

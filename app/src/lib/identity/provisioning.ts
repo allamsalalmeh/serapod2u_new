@@ -51,6 +51,8 @@ export interface ProvisionIdentityInput {
     joinDate?: string | null
   }
   initialAccess?: { roleId: string; scopeIds?: string[]; reason: string }
+  /** Several Access Profiles, each with its own explicit scope. Assigned all-or-nothing inside the provisioning transaction. */
+  initialProfiles?: Array<{ roleId: string; scopeIds: string[]; reason?: string }>
   source: IdentitySource
   reason?: string
 }
@@ -91,8 +93,16 @@ const DB_ERROR_MAP: Array<[RegExp, IdentityErrorCode, number, string]> = [
     'That role cannot be granted: it is unknown, inactive, or above your own access level.'],
   [/sa_authorization_required|sa_actor_inactive|sa_actor_required|identity_self_/, 'FORBIDDEN', 403,
     'You are not authorized to perform this identity or access change.'],
+  [/sa_profile_not_applicable/, 'ROLE_GRANT_NOT_ALLOWED', 400,
+    'One of the selected Access Profiles does not apply to this organization or account type. Nothing was created; choose a suitable profile.'],
+  [/sa_profile_sensitive_not_initial/, 'ROLE_GRANT_NOT_ALLOWED', 400,
+    'Administrative or reset profiles cannot be assigned while creating a user. Create the user first, then assign them in Security & Access → People & Access. Nothing was created.'],
+  [/sa_scope_required|sa_scope_outside_membership/, 'INVALID_INPUT', 400,
+    'Each Access Profile needs its own scope inside this person\'s organization. Nothing was created.'],
+  [/sa_initial_access_duplicate|sa_initial_access_invalid/, 'INVALID_INPUT', 400,
+    'The Access Profile selection is not valid (each profile once, at most ten). Nothing was created.'],
   [/identity_consumer_cannot_receive_business_role|sa_self_assignment_prohibited|sod_violation|sa_role_not_assignable|sa_scope_/, 'FORBIDDEN', 403,
-    'The requested initial access cannot be granted to this person.'],
+    'The requested initial access cannot be granted to this person. Nothing was created.'],
   [/identity_organization_unknown|identity_organization_required|identity_hr_reference_outside_organization|identity_principal_type_mismatch|identity_hr_requires_enterprise/, 'INVALID_ORGANIZATION', 400,
     'The organization, department, position or manager does not fit this person.'],
   [/identity_email_invalid|identity_phone_invalid|identity_account_scope_invalid|identity_authorizing_permission_invalid/, 'INVALID_INPUT', 400,
@@ -187,6 +197,7 @@ export async function provisionIdentity(input: ProvisionIdentityInput): Promise<
     initial_role_id: input.initialAccess?.roleId ?? null,
     initial_scope_ids: input.initialAccess?.scopeIds ?? [],
     initial_reason: input.initialAccess?.reason ?? null,
+    initial_access: (input.initialProfiles ?? []).map(p => ({ role_id: p.roleId, scope_ids: p.scopeIds, reason: p.reason ?? null })),
   }
   let data: any
   try {

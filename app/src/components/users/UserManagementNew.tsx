@@ -1035,7 +1035,11 @@ export default function UserManagementNew({
           employment_status: (userData as any).employment_status || 'active',
           can_be_reference: Boolean((userData as any).can_be_reference),
           // 'self' = employee self-service only: no business role is granted.
-          initial_role_id: (userData as any).initial_role_id && (userData as any).initial_role_id !== 'self' ? (userData as any).initial_role_id : null,
+          // 'self' = employee self-service only; 'profiles' = the Access Profiles chosen below (each with its own scope).
+          initial_role_id: (userData as any).initial_role_id && !['self', 'profiles'].includes((userData as any).initial_role_id) ? (userData as any).initial_role_id : null,
+          initial_profiles: (userData as any).initial_role_id === 'profiles'
+            ? ((userData as any).initial_profiles || []).filter((p: any) => p.roleId && p.scopeId).map((p: any) => ({ role_id: p.roleId, scope_id: p.scopeId }))
+            : null,
           initial_access_reason: (userData as any).initial_access_reason || null,
         }, {
           id: userProfile.id,

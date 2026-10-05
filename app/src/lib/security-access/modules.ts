@@ -125,6 +125,42 @@ export function classifyPermission(permissionKey: string): ModuleClass {
   return { groupId: group.id, areaId: area?.id ?? null, areaName: area?.name ?? null }
 }
 
+/** Position of an area inside its group (taxonomy order); unmatched permissions sort last. */
+export function areaRank(groupId: string, areaId: string | null): number {
+  const i = MODULE_TAXONOMY.find(g => g.id === groupId)?.areas?.findIndex(a => a.id === areaId) ?? -1
+  return i >= 0 ? i : 999
+}
+
+export interface TaxonomyArea<T> { id: string; name: string; items: T[] }
+export interface TaxonomyModule<T> { id: string; name: string; areas: Array<TaxonomyArea<T>>; total: number }
+/** Functional area shown for permissions of a module that match no area. */
+export const GENERAL_AREA = { id: '_general', name: 'General' }
+
+/**
+ * THE module → functional area → operation grouping used by Migration Modes,
+ * the Permission Catalogue, Access Profiles (details and editor) and People &
+ * Access. Ids, names and ordering come only from MODULE_TAXONOMY. It is a
+ * navigation aid: it never grants or inherits anything.
+ */
+export function groupByTaxonomy<T>(items: T[], keyOf: (item: T) => string): Array<TaxonomyModule<T>> {
+  const modules = new Map<string, Map<string, TaxonomyArea<T>>>()
+  for (const item of items) {
+    const c = classifyPermission(keyOf(item))
+    const areas = modules.get(c.groupId) ?? new Map<string, TaxonomyArea<T>>()
+    const id = c.areaId ?? GENERAL_AREA.id
+    const area = areas.get(id) ?? { id, name: c.areaName ?? GENERAL_AREA.name, items: [] }
+    area.items.push(item)
+    areas.set(id, area)
+    modules.set(c.groupId, areas)
+  }
+  return Array.from(modules.entries())
+    .sort(([a], [b]) => moduleGroupRank(a) - moduleGroupRank(b))
+    .map(([id, areas]) => {
+      const list = Array.from(areas.values()).sort((a, b) => areaRank(id, a.id === GENERAL_AREA.id ? null : a.id) - areaRank(id, b.id === GENERAL_AREA.id ? null : b.id))
+      return { id, name: moduleGroupName(id), areas: list, total: list.reduce((n, a) => n + a.items.length, 0) }
+    })
+}
+
 /** "Supply Chain · Stock Count" — for grouped selects. */
 export function permissionModuleLabel(permissionKey: string) {
   const c = classifyPermission(permissionKey)

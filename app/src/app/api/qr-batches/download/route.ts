@@ -2,6 +2,7 @@ import { guardUserOperation } from '@/lib/security-access/operation'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { canAccessBatchForOrder } from '@/lib/qr-batch-access'
 
 const BUCKET_NAME = 'qr-codes'
 
@@ -39,6 +40,19 @@ export async function POST(request: NextRequest) {
     }
     const saDenied = await guardUserOperation(user.id, 'qr.batch.manage')
     if (saDenied) return saDenied
+
+    // The signed URL is created with the service role below, so ownership is
+    // decided here from trusted rows: a partner (manufacturer) only reaches
+    // batches of the orders placed with it.
+    const adminForScope = createAdminClient() as any
+    const { data: actorRow } = await adminForScope.from('users').select('organization_id, organizations:organization_id(org_type_code)').eq('id', user.id).maybeSingle()
+    const actorOrgType = String(actorRow?.organizations?.org_type_code || '').toUpperCase()
+    const actorOrgId = String(actorRow?.organization_id || '')
+    const { data: scoped } = await adminForScope.from('qr_batches')
+      .select('id, order:orders!qr_batches_order_id_fkey(seller_org_id, buyer_org_id, company_id)').eq('id', batchId).maybeSingle()
+    if (!scoped || !canAccessBatchForOrder(actorOrgType, actorOrgId, scoped.order)) {
+      return NextResponse.json({ error: 'Batch not found' }, { status: 404 })
+    }
 
     const { data: batch, error: batchError } = await supabase
       .from('qr_batches')

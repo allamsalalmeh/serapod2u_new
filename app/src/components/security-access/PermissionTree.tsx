@@ -20,6 +20,8 @@ interface Props {
   renderDetails?: (p: RolloutPermission) => React.ReactNode
   /** Extra line under the permission name (e.g. its description). */
   renderSubtitle?: (p: RolloutPermission) => React.ReactNode
+  /** Action beside a module / subgroup name (outside its expand toggle, so it never opens or closes the row). */
+  renderGroupActions?: (node: RolloutNode) => React.ReactNode
   initialQuery?: string
   searchPlaceholder?: string
   emptyText?: string
@@ -32,7 +34,7 @@ interface Props {
  * rendered, so nothing hidden can receive focus.
  */
 export default function PermissionTree({
-  rollout, title, description, showModes = true, renderDetails, renderSubtitle, initialQuery = '',
+  rollout, title, description, showModes = true, renderDetails, renderSubtitle, renderGroupActions, initialQuery = '',
   searchPlaceholder = 'Search modules', emptyText = 'No permissions are registered in this environment yet.',
 }: Props) {
   const [query, setQuery] = useState(initialQuery)
@@ -142,11 +144,14 @@ export default function PermissionTree({
                   <Fragment key={g.id}>
                     <tr className="border-t border-gray-100 bg-gray-50/70">
                       <th scope="row" className="px-4 py-2 text-left">
-                        <ToggleButton open={gOpen} onClick={() => toggle(g.id)} label={`${g.name}, ${g.total} permission${g.total === 1 ? '' : 's'}`}>
-                          <Icon className="h-4 w-4 shrink-0 text-gray-500" aria-hidden />
-                          <span className="font-semibold text-gray-900">{g.name}</span>
-                          <span className="text-xs font-normal text-gray-400">{g.total} permission{g.total === 1 ? '' : 's'}</span>
-                        </ToggleButton>
+                        <div className="flex items-center justify-between gap-3">
+                          <ToggleButton open={gOpen} onClick={() => toggle(g.id)} label={`${g.name}, ${g.total} permission${g.total === 1 ? '' : 's'}`}>
+                            <Icon className="h-4 w-4 shrink-0 text-gray-500" aria-hidden />
+                            <span className="font-semibold text-gray-900">{g.name}</span>
+                            <span className="text-xs font-normal text-gray-400">{g.total} permission{g.total === 1 ? '' : 's'}</span>
+                          </ToggleButton>
+                          {renderGroupActions?.(g)}
+                        </div>
                       </th>
                       {countCells(g, true)}
                     </tr>
@@ -156,10 +161,13 @@ export default function PermissionTree({
                         <Fragment key={c.id}>
                           <tr className="border-t border-gray-100">
                             <th scope="row" className="py-1.5 pl-10 pr-4 text-left">
-                              <ToggleButton open={cOpen} onClick={() => toggle(c.id)} label={`${g.name}: ${c.name}, ${c.total} permission${c.total === 1 ? '' : 's'}`}>
-                                <span className="font-medium text-gray-800">{c.name}</span>
-                                <span className="text-xs font-normal text-gray-400">{c.total}</span>
-                              </ToggleButton>
+                              <div className="flex items-center justify-between gap-3">
+                                <ToggleButton open={cOpen} onClick={() => toggle(c.id)} label={`${g.name}: ${c.name}, ${c.total} permission${c.total === 1 ? '' : 's'}`}>
+                                  <span className="font-medium text-gray-800">{c.name}</span>
+                                  <span className="text-xs font-normal text-gray-400">{c.total}</span>
+                                </ToggleButton>
+                                {renderGroupActions?.(c)}
+                              </div>
                             </th>
                             {countCells(c)}
                           </tr>

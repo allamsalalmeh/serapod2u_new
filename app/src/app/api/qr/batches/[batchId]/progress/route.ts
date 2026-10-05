@@ -1,5 +1,7 @@
 import { guardUserOperation } from '@/lib/security-access/operation'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { canAccessBatchForOrder } from '@/lib/qr-batch-access'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -55,6 +57,18 @@ export async function GET(
         { error: 'Batch ID is required' },
         { status: 400 }
       )
+    }
+
+    // A partner (manufacturer) only sees batches of the orders placed with it;
+    // qr_batches.company_id is the HQ, so ownership comes from the order.
+    {
+      const admin = createAdminClient() as any
+      const { data: actorRow } = await admin.from('users').select('organization_id, organizations:organization_id(org_type_code)').eq('id', saUser.id).maybeSingle()
+      const { data: scoped } = await admin.from('qr_batches')
+        .select('id, order:orders!qr_batches_order_id_fkey(seller_org_id, buyer_org_id, company_id)').eq('id', batchId).maybeSingle()
+      if (!scoped || !canAccessBatchForOrder(String(actorRow?.organizations?.org_type_code || '').toUpperCase(), String(actorRow?.organization_id || ''), scoped.order)) {
+        return NextResponse.json({ error: 'Batch not found' }, { status: 404 })
+      }
     }
 
     // ====================================================================

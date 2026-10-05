@@ -161,7 +161,7 @@ describe('Security & Access Overview', () => {
   it('shows every mode present, including ones outside the three rollout columns', () => {
     const withLegacy = { ...base, modes: [...modes, { permission_key: 'qr.batch.manage', mode: 'LEGACY_ENFORCED' }] }
     render(<OverviewPanel data={withLegacy} onNavigate={vi.fn()} />)
-    expect(within(screen.getByRole('table')).getAllByText('Legacy Active').length).toBeGreaterThan(0)
+    expect(within(screen.getByRole('table')).getAllByText('Legacy enforced').length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: /^Supply Chain, 2 permissions/ })).toBeTruthy()
   })
 

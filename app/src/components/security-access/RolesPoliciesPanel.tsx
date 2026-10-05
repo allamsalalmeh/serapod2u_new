@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { modeLabel, permissionLabel } from '@/lib/security-access/labels'
-import { buildRollout } from '@/lib/security-access/rollout'
+import { buildRollout, type RolloutNode } from '@/lib/security-access/rollout'
 import { CROSS_MODULE, MODULE_FILTER_OPTIONS, OTHER_MODULE, classifyRole, groupByModule, moduleGroupName, permissionModuleLabel, roleInModule, rolePermissionKeys, type RoleModules } from '@/lib/security-access/modules'
 import { callApi } from './client-api'
+import AccessProfilesPanel from './AccessProfilesPanel'
+import BulkModeDialog from './BulkModeDialog'
 import PermissionTree from './PermissionTree'
 import { EmptyState, Feedback, FilterChips, SearchInput, SectionTabs, ShowMore, ToggleButton, useLimit } from './ui'
 
@@ -27,6 +29,7 @@ type Section = 'modes' | 'roles' | 'scopes' | 'catalogue' | 'authority'
 export default function RolesPoliciesPanel({ data, governance, onChanged, initialQuery = '' }: Props) {
   const [section, setSection] = useState<Section>('modes')
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
+  const [bulkGroup, setBulkGroup] = useState<{ id: string; name: string; total: number } | null>(null)
   const readiness = useMemo(() => new Map<string, any>((governance?.readiness || []).map((r: any) => [r.permission_key, r])), [governance])
   const roles: any[] = data.roles || []
   const scopes: any[] = data.scopeDefinitions || []
@@ -35,6 +38,12 @@ export default function RolesPoliciesPanel({ data, governance, onChanged, initia
   const modeRollout = useMemo(() => buildRollout((data.modes || []).map((m: any) => ({
     key: m.permission_key, label: permissionLabel(m.permission_key).label, mode: m.mode, enforcementReady: readiness.has(m.permission_key),
   }))), [data.modes, readiness])
+  // Full (unfiltered) group sizes: a search never narrows what a group action applies to.
+  const fullGroups = useMemo(() => {
+    const map = new Map<string, RolloutNode>()
+    for (const g of modeRollout.groups) { map.set(g.id, g); for (const c of g.children) map.set(c.id, c) }
+    return map
+  }, [modeRollout])
   const modeByKey = useMemo(() => new Map<string, string>((data.modes || []).map((m: any) => [m.permission_key, m.mode])), [data.modes])
   const catalogue = useMemo(() => buildRollout((data.permissions || []).map((p: any) => ({
     key: p.permission_key, label: permissionLabel(p.permission_key).label, mode: modeByKey.get(p.permission_key) ?? 'UNREGISTERED', enforcementReady: false,
@@ -52,7 +61,7 @@ export default function RolesPoliciesPanel({ data, governance, onChanged, initia
   return <div className="space-y-4">
     <SectionTabs label="Roles & Policies sections" value={section} onChange={setSection} items={[
       { id: 'modes', label: 'Migration modes', count: modeRollout.total },
-      { id: 'roles', label: 'Business roles', count: roles.length },
+      { id: 'roles', label: 'Access Profiles', count: roles.length },
       { id: 'scopes', label: 'Scopes', count: scopes.length },
       { id: 'catalogue', label: 'Permission catalogue', count: catalogue.total },
       { id: 'authority', label: 'Authority policies', count: governance ? policies.length : null },
@@ -65,6 +74,14 @@ export default function RolesPoliciesPanel({ data, governance, onChanged, initia
       searchPlaceholder="Search permissions"
       title="Operations and migration modes"
       description="Only operations whose every path is wired (server route and database backstop) can be enforced. A new-model denial never falls back to a legacy allow."
+      renderGroupActions={node => {
+        const full = fullGroups.get(node.id) ?? node
+        return <button type="button" onClick={() => setBulkGroup({ id: full.id, name: full.level === 'subgroup' ? `${fullGroups.get(full.id.split('/')[0])?.name ?? ''} · ${full.name}` : full.name, total: full.total })}
+          aria-label={`Change group mode for ${full.name}, ${full.total} permission${full.total === 1 ? '' : 's'}`}
+          className="shrink-0 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500">
+          Change group mode
+        </button>
+      }}
       renderSubtitle={p => {
         const tightening = readiness.get(p.key)?.intentional_tightening
         return tightening ? <div className="text-xs text-amber-700" title="Expected difference when enforced">Tightening: {tightening}</div> : null
@@ -72,8 +89,8 @@ export default function RolesPoliciesPanel({ data, governance, onChanged, initia
       renderDetails={p => {
         const ready = readiness.get(p.key)
         return <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className={ready ? 'text-emerald-700' : 'text-gray-500'} title={ready ? ready.notes : 'Not every path is wired for enforcement'}>
-            {ready ? `Ready · ${String(ready.database_backstop).replace(/_/g, ' ')}` : 'Monitoring only'}
+          <span className={ready ? 'text-emerald-700' : 'text-gray-500'} title={ready ? ready.notes : 'Not every path is wired for enforcement; only Legacy enforced or Monitoring / Shadow can be chosen'}>
+            {ready ? `Ready · ${String(ready.database_backstop).replace(/_/g, ' ')}` : 'Not ready for enforcement'}
           </span>
           <select aria-label={`Change mode for ${p.label}`} value="" onChange={e => e.target.value && changeMode(p.key, e.target.value)}
             className="rounded-md border border-gray-200 px-2 py-1 text-xs focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-100">
@@ -84,7 +101,9 @@ export default function RolesPoliciesPanel({ data, governance, onChanged, initia
       }}
     />}
 
-    {section === 'roles' && <BusinessRoles roles={roles} />}
+    {bulkGroup && <BulkModeDialog groupId={bulkGroup.id} groupName={bulkGroup.name} total={bulkGroup.total} onClose={() => setBulkGroup(null)} onChanged={onChanged} />}
+
+    {section === 'roles' && <AccessProfilesPanel permissions={data.permissions || []} onChanged={onChanged} fallback={<BusinessRoles roles={roles} />} />}
     {section === 'scopes' && <Scopes scopes={scopes} />}
 
     {section === 'catalogue' && <PermissionTree
@@ -139,7 +158,7 @@ function BusinessRoles({ roles }: { roles: any[] }) {
 
   return <section className="rounded-xl border border-gray-200 bg-white shadow-sm">
     <div className="space-y-3 border-b border-gray-100 p-4">
-      <div className="min-w-0"><h2 className="font-semibold text-gray-950">Business roles</h2>
+      <div className="min-w-0"><h2 className="font-semibold text-gray-950">Access Profiles (read-only list)</h2>
         <p className="text-sm text-gray-500">Grouped by the module of their permissions; roles spanning several modules are under Shared / Cross-module and also appear in each module's filter. Grouping is display only.</p></div>
       <div className="flex flex-wrap items-center gap-2">
         <SearchInput value={query} onChange={setQuery} placeholder="Search roles or permissions" label="Search roles" className="basis-full sm:basis-auto sm:w-64" />

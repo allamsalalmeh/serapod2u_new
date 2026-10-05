@@ -13,6 +13,8 @@ export interface SelectOption {
   group?: string
   /** Extra text that matches the search box but is not shown. */
   keywords?: string
+  /** Shown but not selectable (e.g. already held). */
+  disabled?: boolean
 }
 
 interface SearchableSelectProps {
@@ -25,10 +27,13 @@ interface SearchableSelectProps {
   disabled?: boolean
   allowClear?: boolean
   hint?: string
+  /** Server-side search: called as the user types; the list is then not filtered locally. */
+  onQueryChange?: (query: string) => void
+  loading?: boolean
 }
 
 export default function SearchableSelect({
-  label, options, value, onChange, placeholder = 'Select…', emptyText = 'No matches.', disabled, allowClear, hint,
+  label, options, value, onChange, placeholder = 'Select…', emptyText = 'No matches.', disabled, allowClear, hint, onQueryChange, loading,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false)
   const selected = options.find(o => o.value === value)
@@ -68,15 +73,16 @@ export default function SearchableSelect({
           </button>
         </PopoverTrigger>
         <PopoverContent className="w-[--radix-popover-trigger-width] min-w-[18rem] p-0" align="start">
-          <Command>
-            <CommandInput placeholder={`Search ${label.toLowerCase()}…`} />
+          <Command shouldFilter={!onQueryChange}>
+            <CommandInput placeholder={`Search ${label.toLowerCase()}…`} onValueChange={onQueryChange} />
             <CommandList className="max-h-72">
-              <CommandEmpty>{emptyText}</CommandEmpty>
+              <CommandEmpty>{loading ? 'Searching…' : emptyText}</CommandEmpty>
               {groups.map(([group, items]) => (
                 <CommandGroup key={group || 'all'} heading={group || undefined}>
                   {items.map(option => (
                     <CommandItem
                       key={option.value}
+                      disabled={option.disabled}
                       value={`${option.label} ${option.description ?? ''} ${option.keywords ?? ''} ${option.value}`}
                       onSelect={() => { onChange(option.value); setOpen(false) }}
                     >
