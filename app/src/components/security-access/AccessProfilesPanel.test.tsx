@@ -79,12 +79,52 @@ describe('Access Profiles', () => {
     await userEvent.click(screen.getByRole('button', { name: /^Custom\s*3$/ }))
     await openProfile('Supply Chain', /^Counter Staff/)
     expect((screen.getByRole('button', { name: /^Retire Counter Staff/ }) as HTMLButtonElement).disabled).toBe(true)
-    await userEvent.click(screen.getByRole('button', { name: /Show holders of Counter Staff/ }))
+    await userEvent.click(screen.getByRole('button', { name: /Show holders \(2\) of Counter Staff/ }))
     expect(await screen.findByText(/1 more in organizations you cannot view/)).toBeTruthy()
     expect(screen.getByText(/Wati Warehouse/)).toBeTruthy()
     expect(screen.getByText(/Balakong WH \(Warehouse\) · Scope: Balakong WH/)).toBeTruthy()
     await openProfile('Finance', /^Unused Profile/)
     expect((screen.getByRole('button', { name: /^Retire Unused Profile/ }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('holder toggle: Show/Hide (N) with expanded state, and 0 holders is inert and never requests', async () => {
+    const f = stub((b: any) => b.action === 'holders' ? { ok: true, result: { total: 2, visible: 1, holders: [PREVIEW.holders[0]] } } : { ok: true, result: {} })
+    await mount()
+    await userEvent.click(screen.getByRole('button', { name: /^Custom\s*3$/ }))
+    await openProfile('Supply Chain', /^Counter Staff/)
+    const toggle = screen.getByRole('button', { name: /Show holders \(2\) of Counter Staff/ })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    await userEvent.click(toggle)
+    expect(await screen.findByText(/Wati Warehouse/)).toBeTruthy()
+    const hide = screen.getByRole('button', { name: /Hide holders \(2\) of Counter Staff/ })
+    expect(hide.getAttribute('aria-expanded')).toBe('true')
+    await userEvent.click(hide)
+    expect(screen.queryByText(/Wati Warehouse/)).toBeNull()
+    expect(screen.getByRole('button', { name: /Show holders \(2\)/ }).getAttribute('aria-expanded')).toBe('false')
+    await openProfile('Finance', /^Unused Profile/)
+    for (const el of screen.getAllByText('0 holders')) expect(el.closest('button')).toBeNull()
+    expect(posts(f).filter((b: any) => b.action === 'holders')).toHaveLength(1)
+  })
+
+  it('Assign profile is offered for active profiles only when the actor may assign, including with zero holders', async () => {
+    const onAssign = vi.fn()
+    stub(undefined, PROFILES, { migrationReady: true, capabilities: { canAssign: true } })
+    render(<AccessProfilesPanel permissions={PERMS} onChanged={vi.fn()} onAssignProfile={onAssign} fallback={<p>x</p>} />)
+    await screen.findByRole('button', { name: /^Standard\s*\d+$/ })
+    await userEvent.click(screen.getByRole('button', { name: /^Custom\s*3$/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^Expand all/ }))
+    const buttons = screen.getAllByRole('button', { name: /^Assign profile/ })
+    expect(buttons.map(b => b.textContent)).toEqual(['Assign profile Counter Staff', 'Assign profile Unused Profile']) // not the draft
+    await userEvent.click(buttons[1])
+    expect(onAssign).toHaveBeenCalledWith(expect.objectContaining({ id: 'free' }))
+  })
+
+  it('Assign profile is hidden without assign authority', async () => {
+    stub()
+    render(<AccessProfilesPanel permissions={PERMS} onChanged={vi.fn()} onAssignProfile={vi.fn()} fallback={<p>x</p>} />)
+    await screen.findByRole('button', { name: /^Standard\s*\d+$/ })
+    await userEvent.click(screen.getByRole('button', { name: /^Expand all/ }))
+    expect(screen.queryByRole('button', { name: /^Assign profile/ })).toBeNull()
   })
 
   it('a never-published copy is marked as a draft that cannot be assigned', async () => {

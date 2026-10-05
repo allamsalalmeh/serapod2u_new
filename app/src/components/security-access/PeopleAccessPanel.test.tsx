@@ -198,6 +198,39 @@ describe('People & Access', () => {
     expect(onChanged).toHaveBeenCalled()
   })
 
+  it('"Grant role" keeps the person selected, scrolls the form heading into view and focuses it; searching does not scroll', async () => {
+    const scroll = vi.fn(); Element.prototype.scrollIntoView = scroll
+    await mountPanel(data)
+    await userEvent.type(screen.getByRole('textbox', { name: 'Search people' }), 'Siti')
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Siti Staff/ })).toBeTruthy())
+    expect(scroll).not.toHaveBeenCalled()
+    await openGrantFor('Siti Staff')
+    const heading = screen.getByRole('heading', { name: 'Grant a business role' })
+    await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1))
+    expect(scroll.mock.instances[0]).toBe(heading)
+    expect(document.activeElement).toBe(heading)
+    expect(screen.getAllByText(/Siti Staff/).length).toBeGreaterThan(0) // person still selected
+    expect(heading.className).toContain('scroll-mt-') // clears a sticky header
+  })
+
+  it('profile-first: the chosen profile is preselected, held profiles read "Already held", and inapplicable memberships are not selectable', async () => {
+    const intent = { roleId: 'r-crm', roleName: 'CRM User', orgTypes: ['HQ'], nonce: 1 }
+    const d = { ...data, people: data.people.map(p => p.id === 'u4' ? { ...p, membership: p.membership.map((m: any) => ({ ...m, organization: { org_type_code: m.organization_id === HQ ? 'HQ' : 'DIST' } })) } : p) }
+    const fetchMock = serve(d.people)
+    vi.stubGlobal('fetch', fetchMock)
+    render(<PeopleAccessPanel data={d} onChanged={vi.fn()} grantIntent={intent} />)
+    await screen.findByText(/Assigning the profile/)
+    expect(screen.getByRole('note').textContent).toMatch(/CRM User/)
+    expect(screen.getByRole('combobox', { name: 'Business role' }).textContent).toMatch(/CRM User/)
+    await userEvent.click(screen.getByRole('combobox', { name: 'Person' }))
+    await userEvent.click(await screen.findByRole('option', { name: /Dina Dual/ }))
+    expect(screen.getByRole('combobox', { name: 'Business role' }).textContent).toMatch(/CRM User/) // survives choosing a person
+    await userEvent.click(screen.getByRole('combobox', { name: 'Membership organization' }))
+    expect(screen.getByRole('option', { name: /North Distributor/ }).getAttribute('aria-disabled')).toBe('true')
+    expect((screen.getByRole('button', { name: /^Grant access$/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(fetchMock.mock.calls.some(c => c[1]?.method === 'POST')).toBe(false) // nothing granted by opening
+  })
+
   it('shows a role the person already holds as "Already held" and never lets it be granted twice', async () => {
     await mountPanel(data)
     await openGrantFor('Jafar Admin')

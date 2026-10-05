@@ -85,6 +85,7 @@ const FRIENDLY: Array<[RegExp, number, string]> = [
   [/sa_review_items_pending/, 409, 'Every review item must be decided before completing the review.'],
   [/sa_not_enforcement_ready/, 409, 'This operation is not fully wired for enforcement yet.'],
   [/sa_retire_requires_new_enforced/, 409, 'Retire legacy only after New Enforced.'],
+  [/sa_profile_not_applicable/, 400, 'This profile does not apply to that organization.'],
   [/sa_role_already_held/, 409, 'This person already holds that role. Nothing to grant.'],
   [/sa_assignment_not_restorable/, 409, 'Only automatic access an administrator revoked can be restored. Grant other roles again instead.'],
   [/sa_compat_role_stale/, 409, 'The person\'s legacy role has changed since this access was revoked, so it cannot be restored.'],

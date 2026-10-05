@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { requireSecurityActor } from '@/lib/security-access/admin-api'
+import { actorAlsoHolds, requireSecurityActor } from '@/lib/security-access/admin-api'
 import { isEnforcementReady } from '@/lib/security-access/readiness'
 
 export const dynamic = 'force-dynamic'
@@ -56,7 +56,7 @@ export async function GET() {
       .select('id,organization_id,scope_type,scope_value,display_name,status').eq('status', 'active').order('display_name').limit(1000)
     // Administrator-overridden automatic access that may be restored (optional before the restore migration).
     const { data: restorable, error: restorableError } = await admin.rpc('sa_restorable_assignments')
-    return NextResponse.json({ schemaReady: true, metrics: { businessIdentities: memberships || 0, activeAssignments: assignments || 0, shadowMismatches: (decisions || []).filter((d: any) => !['MATCH_ALLOW','MATCH_DENY'].includes(d.comparison)).length }, modes: (modes || []).map((m: any) => ({ ...m, enforcementReady: isEnforcementReady(m.permission_key) })), decisions: decisions || [], permissions: permissions || [], roles: roles || [], people: people || [], retention: retentionError ? null : retention, scopeDefinitions: scopeDefinitions || [], restorableAssignmentIds: restorableError ? [] : (restorable || []).map((r: any) => r.assignment_id), viewerId: actor.userId, viewerOrganizationId: actor.organizationId, ...directory })
+    return NextResponse.json({ schemaReady: true, metrics: { businessIdentities: memberships || 0, activeAssignments: assignments || 0, shadowMismatches: (decisions || []).filter((d: any) => !['MATCH_ALLOW','MATCH_DENY'].includes(d.comparison)).length }, modes: (modes || []).map((m: any) => ({ ...m, enforcementReady: isEnforcementReady(m.permission_key) })), decisions: decisions || [], permissions: permissions || [], roles: roles || [], people: people || [], retention: retentionError ? null : retention, scopeDefinitions: scopeDefinitions || [], restorableAssignmentIds: restorableError ? [] : (restorable || []).map((r: any) => r.assignment_id), viewerId: actor.userId, viewerOrganizationId: actor.organizationId, capabilities: { canManageModes: await actorAlsoHolds(actor, 'security.permission.manage').catch(() => false) }, ...directory })
   } catch (error) {
     return NextResponse.json({ schemaReady: false, error: 'Wave 1 schema has not been applied in this environment.', metrics: {}, modes: [], decisions: [], permissions: [], roles: [], people: [] })
   }

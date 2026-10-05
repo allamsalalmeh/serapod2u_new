@@ -25,6 +25,17 @@ const data = {
 const governance = { readiness: [{ permission_key: 'finance.ledger.view', database_backstop: 'rls_gate', notes: 'wired' }], authorityPolicies: [] }
 
 describe('Roles & Policies', () => {
+  it('hides group mode changes and disables single changes only when the server says the viewer lacks the authority', async () => {
+    const props = { governance, onChanged: vi.fn(), initialQuery: 'finance.ledger.view' }
+    const { unmount } = render(<RolesPoliciesPanel data={{ ...data, capabilities: { canManageModes: false } }} {...props} />)
+    expect(screen.queryByRole('button', { name: /^Change group mode for/ })).toBeNull()
+    expect((screen.getByRole('combobox', { name: /^Change mode for/ }) as HTMLSelectElement).disabled).toBe(true)
+    unmount()
+    render(<RolesPoliciesPanel data={{ ...data, capabilities: { canManageModes: true } }} {...props} />)
+    expect(screen.getAllByRole('button', { name: /^Change group mode for/ }).length).toBeGreaterThan(0)
+    expect((screen.getByRole('combobox', { name: /^Change mode for/ }) as HTMLSelectElement).disabled).toBe(false)
+  })
+
   it('shows one section at a time, with counts', async () => {
     render(<RolesPoliciesPanel data={data} governance={governance} onChanged={vi.fn()} />)
     expect(screen.getByRole('tab', { name: /^Migration modes\s*2$/ }).getAttribute('aria-selected')).toBe('true')

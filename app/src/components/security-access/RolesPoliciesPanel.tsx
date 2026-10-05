@@ -6,6 +6,7 @@ import { buildRollout, type RolloutNode } from '@/lib/security-access/rollout'
 import { CROSS_MODULE, MODULE_FILTER_OPTIONS, OTHER_MODULE, classifyRole, groupByModule, moduleGroupName, permissionModuleLabel, roleInModule, rolePermissionKeys, type RoleModules } from '@/lib/security-access/modules'
 import { callApi } from './client-api'
 import AccessProfilesPanel from './AccessProfilesPanel'
+import type { ProfileSummary } from '@/lib/security-access/profiles'
 import BulkModeDialog from './BulkModeDialog'
 import PermissionTree from './PermissionTree'
 import { EmptyState, Feedback, FilterChips, SearchInput, SectionTabs, ShowMore, ToggleButton, useLimit } from './ui'
@@ -16,6 +17,8 @@ interface Props {
   onChanged: () => void
   /** Starting search (e.g. opened from Overview for one permission). */
   initialQuery?: string
+  /** Profile-first assignment: hands the profile to People & Access (the existing grant form). */
+  onAssignProfile?: (profile: ProfileSummary) => void
 }
 
 const MODES = ['LEGACY_ENFORCED', 'SHADOW', 'NEW_ENFORCED', 'LEGACY_RETIRED'] as const
@@ -26,12 +29,14 @@ type Section = 'modes' | 'roles' | 'scopes' | 'catalogue' | 'authority'
  * roles, typed scopes, the permission catalogue and authority policies — one
  * section at a time, grouped and collapsed like the Overview.
  */
-export default function RolesPoliciesPanel({ data, governance, onChanged, initialQuery = '' }: Props) {
+export default function RolesPoliciesPanel({ data, governance, onChanged, initialQuery = '', onAssignProfile }: Props) {
   const [section, setSection] = useState<Section>('modes')
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
   const [bulkGroup, setBulkGroup] = useState<{ id: string; name: string; total: number } | null>(null)
   const readiness = useMemo(() => new Map<string, any>((governance?.readiness || []).map((r: any) => [r.permission_key, r])), [governance])
   const roles: any[] = data.roles || []
+  // Display only (the server and database enforce): hidden/disabled only when the server says the viewer cannot manage modes.
+  const canManageModes = data.capabilities?.canManageModes !== false
   const scopes: any[] = data.scopeDefinitions || []
   const policies: any[] = governance?.authorityPolicies || []
 
@@ -75,6 +80,7 @@ export default function RolesPoliciesPanel({ data, governance, onChanged, initia
       title="Operations and migration modes"
       description="Only operations whose every path is wired (server route and database backstop) can be enforced. A new-model denial never falls back to a legacy allow."
       renderGroupActions={node => {
+        if (!canManageModes) return null
         const full = fullGroups.get(node.id) ?? node
         return <button type="button" onClick={() => setBulkGroup({ id: full.id, name: full.level === 'subgroup' ? `${fullGroups.get(full.id.split('/')[0])?.name ?? ''} · ${full.name}` : full.name, total: full.total })}
           aria-label={`Change group mode for ${full.name}, ${full.total} permission${full.total === 1 ? '' : 's'}`}
@@ -92,7 +98,7 @@ export default function RolesPoliciesPanel({ data, governance, onChanged, initia
           <span className={ready ? 'text-emerald-700' : 'text-gray-500'} title={ready ? ready.notes : 'Not every path is wired for enforcement; only Legacy enforced or Monitoring / Shadow can be chosen'}>
             {ready ? `Ready · ${String(ready.database_backstop).replace(/_/g, ' ')}` : 'Not ready for enforcement'}
           </span>
-          <select aria-label={`Change mode for ${p.label}`} value="" onChange={e => e.target.value && changeMode(p.key, e.target.value)}
+          <select aria-label={`Change mode for ${p.label}`} value="" disabled={!canManageModes} title={canManageModes ? undefined : 'Changing migration modes needs the “Manage permissions” authority'} onChange={e => e.target.value && changeMode(p.key, e.target.value)}
             className="rounded-md border border-gray-200 px-2 py-1 text-xs focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-100">
             <option value="">Change…</option>
             {MODES.filter(x => x !== p.mode).map(x => <option key={x} value={x} disabled={(x === 'NEW_ENFORCED' || x === 'LEGACY_RETIRED') && !ready}>{modeLabel(x).label}</option>)}
@@ -103,7 +109,7 @@ export default function RolesPoliciesPanel({ data, governance, onChanged, initia
 
     {bulkGroup && <BulkModeDialog groupId={bulkGroup.id} groupName={bulkGroup.name} total={bulkGroup.total} onClose={() => setBulkGroup(null)} onChanged={onChanged} />}
 
-    {section === 'roles' && <AccessProfilesPanel permissions={data.permissions || []} onChanged={onChanged} fallback={<BusinessRoles roles={roles} />} />}
+    {section === 'roles' && <AccessProfilesPanel permissions={data.permissions || []} onChanged={onChanged} onAssignProfile={onAssignProfile} fallback={<BusinessRoles roles={roles} />} />}
     {section === 'scopes' && <Scopes scopes={scopes} />}
 
     {section === 'catalogue' && <PermissionTree
@@ -180,7 +186,7 @@ function BusinessRoles({ roles }: { roles: any[] }) {
     </div>
     {filtering && <p role="status" className="border-b border-gray-100 bg-orange-50/40 px-4 py-1.5 text-xs text-gray-600">Showing {rows.length} of {pool.length} roles.</p>}
     {rows.length === 0 && <EmptyState>{q ? `No roles match “${query.trim()}”.` : 'No roles in this view.'}</EmptyState>}
-    <ul>{groups.map(g => {
+    <ul className="text-sm">{groups.map(g => {
       const gOpen = expanded.has(g.id)
       return <li key={g.id} className="border-t border-gray-100 first:border-t-0">
         <div className="flex items-center gap-2 bg-gray-50/70 px-4 py-2">
@@ -246,7 +252,7 @@ function Scopes({ scopes }: { scopes: any[] }) {
       <SearchInput value={query} onChange={setQuery} placeholder="Search scopes" label="Search scopes" />
     </div>
     {groups.length === 0 && <EmptyState>{q ? `No scopes match “${query.trim()}”.` : 'No scopes defined.'}</EmptyState>}
-    <ul className="divide-y divide-gray-100">{groups.map(([type, list]) => {
+    <ul className="divide-y divide-gray-100 text-sm">{groups.map(([type, list]) => {
       const isOpen = q ? true : open.has(type)
       return <li key={type}>
         <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50/70">

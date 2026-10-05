@@ -5,7 +5,8 @@ let actor: any
 const requireSecurityActor = vi.fn(async (_p: string) => actor)
 const runProfileAction = vi.fn()
 const loadProfiles = vi.fn()
-vi.mock('@/lib/security-access/admin-api', () => ({ requireSecurityActor: (p: string) => requireSecurityActor(p) }))
+const actorAlsoHolds = vi.fn(async (_a: any, _p: string) => true)
+vi.mock('@/lib/security-access/admin-api', () => ({ requireSecurityActor: (p: string) => requireSecurityActor(p), actorAlsoHolds: (a: any, p: string) => actorAlsoHolds(a, p) }))
 vi.mock('@/lib/security-access/profiles', async () => ({ ...(await vi.importActual<any>('@/lib/security-access/profiles')), runProfileAction: (...a: any[]) => runProfileAction(...a), loadProfiles: (...a: any[]) => loadProfiles(...a) }))
 const post = async (body: unknown) => { const { POST } = await import('./route'); return POST({ json: async () => body } as any) }
 const ROLE = '11111111-1111-4111-8111-111111111111'
@@ -41,5 +42,13 @@ describe('/api/security-access/profiles', () => {
     const { GET } = await import('./route')
     expect((await GET()).status).toBe(200)
     expect(requireSecurityActor).toHaveBeenLastCalledWith('security.access.view')
+  })
+  it('reports whether the viewer may assign profiles (display only; the grant is re-checked)', async () => {
+    loadProfiles.mockResolvedValue({ ok: true, value: { migrationReady: true, profiles: [] } })
+    const { GET } = await import('./route')
+    expect((await (await GET()).json()).capabilities).toEqual({ canAssign: true })
+    expect(actorAlsoHolds).toHaveBeenLastCalledWith(actor, 'security.role.assign')
+    actorAlsoHolds.mockResolvedValueOnce(false)
+    expect((await (await GET()).json()).capabilities).toEqual({ canAssign: false })
   })
 })

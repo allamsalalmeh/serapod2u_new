@@ -217,6 +217,13 @@ export default function QRBatchesView({ userProfile, onViewChange }: QRBatchesVi
           const outcome = await triggerQRBatchProcessing(batchId)
           await loadBatches(true)
 
+          if (outcome === 'waiting_for_worker') {
+            // Confirmed queued; this process may not run the worker. The 2s poll below shows real progress.
+            toast({ title: 'Batch queued', description: 'Batch queued. Waiting for the staging worker.' })
+            await loadBatches(true)
+            return
+          }
+
           if (outcome === 'complete' || outcome === 'idle') {
             finished++
             break

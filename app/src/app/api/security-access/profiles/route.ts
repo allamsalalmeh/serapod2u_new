@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireSecurityActor } from '@/lib/security-access/admin-api'
+import { actorAlsoHolds, requireSecurityActor } from '@/lib/security-access/admin-api'
 import { loadProfiles, profileActionSchema, runProfileAction } from '@/lib/security-access/profiles'
 
 export const dynamic = 'force-dynamic'
@@ -10,7 +10,9 @@ export async function GET() {
   if (actor instanceof NextResponse) return actor
   const result = await loadProfiles(actor.admin, actor.userId)
   if (!result.ok) return NextResponse.json({ error: result.error, code: result.code }, { status: result.status })
-  return NextResponse.json({ ok: true, ...result.value }, { headers: { 'Cache-Control': 'no-store' } })
+  // Whether the Assign profile entry point is offered; the grant itself is re-checked by the assignments route and the database.
+  const canAssign = await actorAlsoHolds(actor, 'security.role.assign').catch(() => false)
+  return NextResponse.json({ ok: true, ...result.value, capabilities: { canAssign } }, { headers: { 'Cache-Control': 'no-store' } })
 }
 
 /**

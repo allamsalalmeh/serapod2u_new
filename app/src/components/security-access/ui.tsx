@@ -4,11 +4,13 @@
  * Small shared presentation pieces for the Security & Access tabs (compact,
  * accessible, one design language). Presentation only.
  */
-import { useState } from 'react'
+import { useState, type Ref } from 'react'
 import { ChevronDown, ChevronRight, Plus, Search, X } from 'lucide-react'
 import { rolloutMode } from '@/lib/security-access/rollout'
 import { moduleGroupName, moduleGroupRank } from '@/lib/security-access/modules'
 
+/** Base size for grouped lists (headings, row names): matches Migration modes / Access Profiles. Detail text stays text-xs. */
+export const LIST_TEXT = 'text-sm'
 export const FOCUS = 'focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500'
 
 export function ModeStatus({ mode, short }: { mode: string; short?: boolean }) {
@@ -92,14 +94,14 @@ export function FilterChips<T extends string>({ value, onChange, items, label }:
 }
 
 /** A form or detail block that stays closed until asked for. */
-export function DisclosurePanel({ title, description, open, onToggle, actionLabel, children }: {
-  title: string; description?: string; open: boolean; onToggle: () => void; actionLabel: string; children: React.ReactNode
+export function DisclosurePanel({ title, description, open, onToggle, actionLabel, children, headingRef }: {
+  headingRef?: Ref<HTMLHeadingElement>; title: string; description?: string; open: boolean; onToggle: () => void; actionLabel: string; children: React.ReactNode
 }) {
   return (
     <section className="rounded-xl border border-gray-200 bg-white shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
         <div className="min-w-0">
-          <h3 className="font-semibold text-gray-950">{title}</h3>
+          <h3 ref={headingRef} tabIndex={headingRef ? -1 : undefined} className="scroll-mt-24 font-semibold text-gray-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500">{title}</h3>
           {description && <p className="text-sm text-gray-500">{description}</p>}
         </div>
         <button type="button" onClick={onToggle} aria-expanded={open}

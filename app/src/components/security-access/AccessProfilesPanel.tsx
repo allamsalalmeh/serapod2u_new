@@ -1,7 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Copy, Pencil, Plus, Users } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Copy, Pencil, Plus, UserPlus, Users } from 'lucide-react'
 import { callApi } from './client-api'
 import { EmptyState, Feedback, FilterChips, FOCUS, SearchInput, ToggleButton } from './ui'
 import ProfileEditorDialog from './ProfileEditorDialog'
@@ -16,6 +16,8 @@ interface Props {
   /** sa_permissions rows (catalogue) used by the editor. */
   permissions: any[]
   onChanged: () => void
+  /** Opens People & Access with this profile preselected in the existing grant form (no second assignment path). */
+  onAssignProfile?: (profile: ProfileSummary) => void
   /** Read-only role list shown when profile management is unavailable (migration not applied). */
   fallback: React.ReactNode
 }
@@ -28,7 +30,7 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(
  * the lifecycle, shown separately and never editable). A profile is a business
  * role; assigning it, scopes and SoD all work exactly as before.
  */
-export default function AccessProfilesPanel({ permissions, onChanged, fallback }: Props) {
+export default function AccessProfilesPanel({ permissions, onChanged, onAssignProfile, fallback }: Props) {
   const [profiles, setProfiles] = useState<ProfileSummary[] | null>(null)
   const [error, setError] = useState<{ text: string; code?: string } | null>(null)
   const [view, setView] = useState<View>('standard')
@@ -44,11 +46,14 @@ export default function AccessProfilesPanel({ permissions, onChanged, fallback }
   const [copying, setCopying] = useState<ProfileSummary | null>(null)
   const [holders, setHolders] = useState<Record<string, any>>({})
   const [migrationReady, setMigrationReady] = useState(true)
+  const [canAssign, setCanAssign] = useState(false)
+  const [holdersOpen, setHoldersOpen] = useState<Set<string>>(new Set())
+  const holderRequest = useRef<Record<string, number>>({})
 
   const load = useCallback(async () => {
     const res = await callApi('/api/security-access/profiles')
     if (!res.ok) { setError({ text: res.error || 'Access Profiles could not be loaded.', code: res.code }); setProfiles(null); return }
-    setError(null); setProfiles(res.data.profiles); setMigrationReady(res.data.migrationReady !== false)
+    setError(null); setProfiles(res.data.profiles); setMigrationReady(res.data.migrationReady !== false); setCanAssign(res.data.capabilities?.canAssign === true)
   }, [])
   useEffect(() => { load() }, [load])
   const refresh = () => { load(); onChanged() }
@@ -101,10 +106,29 @@ export default function AccessProfilesPanel({ permissions, onChanged, fallback }
   const moduleOptions = [{ id: 'all', name: 'All modules' }, ...MODULE_TAXONOMY.map(g => ({ id: g.id, name: g.name })), CROSS_MODULE, OTHER_MODULE]
     .filter(m => m.id === 'all' || (profiles || []).some(p => p.kind === view && roleInModule({ permissions: p.permissionKeys }, m.id, classes.get(p.id))))
 
-  async function showHolders(p: ProfileSummary) {
-    const res = await callApi('/api/security-access/profiles', { body: { action: 'holders', roleId: p.id } })
-    setHolders(h => ({ ...h, [p.id]: res.ok ? res.data.result : { error: res.error || 'Holders could not be loaded.' } }))
+  async function loadHolders(id: string) {
+    const token = (holderRequest.current[id] = (holderRequest.current[id] ?? 0) + 1)
+    const res = await callApi('/api/security-access/profiles', { body: { action: 'holders', roleId: id } })
+    if (token !== holderRequest.current[id]) return // a newer request superseded this one
+    setHolders(h => ({ ...h, [id]: res.ok ? res.data.result : { error: res.error || 'Holders could not be loaded.' } }))
   }
+  // Only profiles with holders are ever requested; collapsing keeps the data but never re-requests it.
+  function toggleHolders(p: ProfileSummary) {
+    if (p.holders === 0) return
+    const opening = !holdersOpen.has(p.id)
+    setHoldersOpen(prev => { const n = new Set(prev); if (opening) n.add(p.id); else n.delete(p.id); return n })
+    if (opening) { setHolders(h => { const { [p.id]: _drop, ...rest } = h; return rest }); loadHolders(p.id) }
+  }
+  // After a reload (grant, revoke, publish) the counts changed: refresh holder lists that are open.
+  useEffect(() => {
+    if (!profiles) return
+    for (const id of holdersOpen) {
+      const p = profiles.find(x => x.id === id)
+      if (p && p.holders > 0) loadHolders(id)
+      else setHolders(h => { const { [id]: _drop, ...rest } = h; return rest })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profiles])
   async function retire(p: ProfileSummary) {
     const reason = window.prompt(`Retire “${p.name}”? It can no longer be assigned. Reason?`)
     if (!reason || reason.trim().length < 10) { if (reason !== null) setMessage({ tone: 'error', text: 'A reason of at least 10 characters is required.' }); return }
@@ -142,19 +166,29 @@ export default function AccessProfilesPanel({ permissions, onChanged, fallback }
           {p.kind === 'standard' && <button type="button" onClick={() => setCopying(p)} disabled={!migrationReady} className={`inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 ${FOCUS}`}><Copy className="h-3 w-3" aria-hidden />Copy &amp; Customize<span className="sr-only"> {p.name}</span></button>}
           {p.kind === 'custom' && p.status !== 'deprecated' && <button type="button" onClick={() => setEditor({ profile: p })} className={`inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 ${FOCUS}`}><Pencil className="h-3 w-3" aria-hidden />{p.draft ? 'Continue draft' : 'Edit (as draft)'}<span className="sr-only"> {p.name}</span></button>}
           {p.kind === 'custom' && p.draft?.status === 'in_review' && <button type="button" onClick={() => setPublish(p)} className={`rounded-md bg-orange-500 px-2 py-1 text-xs font-medium text-white hover:bg-orange-600 ${FOCUS}`}>Review &amp; publish<span className="sr-only"> {p.name}</span></button>}
-          {p.kind !== 'compatibility' && <button type="button" onClick={() => showHolders(p)} className={`inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 ${FOCUS}`}><Users className="h-3 w-3" aria-hidden />Show holders<span className="sr-only"> of {p.name}</span></button>}
+          {p.kind !== 'compatibility' && (p.holders > 0
+            ? <button type="button" onClick={() => toggleHolders(p)} aria-expanded={holdersOpen.has(p.id)} aria-controls={`holders-${p.id}`}
+                title="Counts active assignments; a person holding the profile in several organizations counts once per assignment."
+                className={`inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 ${FOCUS}`}><Users className="h-3 w-3" aria-hidden />{holdersOpen.has(p.id) ? 'Hide' : 'Show'} holders ({p.holders})<span className="sr-only"> of {p.name}</span></button>
+            : <span className="inline-flex items-center gap-1 px-2 py-1 text-xs text-gray-500"><Users className="h-3 w-3" aria-hidden />0 holders</span>)}
+          {canAssign && onAssignProfile && p.kind !== 'compatibility' && p.status === 'active' && <button type="button" onClick={() => onAssignProfile(p)} disabled={!migrationReady}
+            title="Opens the People & Access grant form with this profile selected. Nothing is granted until you submit it there."
+            className={`inline-flex items-center gap-1 rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700 hover:bg-orange-100 disabled:opacity-40 ${FOCUS}`}><UserPlus className="h-3 w-3" aria-hidden />Assign profile<span className="sr-only"> {p.name}</span></button>}
           {p.kind === 'custom' && p.status !== 'deprecated' && <button type="button" onClick={() => retire(p)} disabled={p.holders > 0} title={p.holders > 0 ? 'Revoke or replace the assignments first' : undefined}
             className={`rounded-md px-2 py-1 text-xs text-gray-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-40 ${FOCUS}`}>Retire<span className="sr-only"> {p.name}</span></button>}
         </div>
         {p.kind === 'compatibility' && <p className="text-xs text-gray-500">Managed by the lifecycle; not editable.</p>}
-        {h && (h.error ? <p role="alert" className="text-xs text-red-700">{h.error}</p> : <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Holders · {h.visible} shown{h.total > h.visible ? ` · ${h.total - h.visible} more in organizations you cannot view` : ''}</div>
+        {holdersOpen.has(p.id) && p.holders > 0 && <div id={`holders-${p.id}`}>
+          {!h && <p role="status" className="text-xs text-gray-500">Loading holders…</p>}
+          {h && (h.error ? <p role="alert" className="text-xs text-red-700">{h.error}</p> : <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Holders · {h.visible} assignment{h.visible === 1 ? '' : 's'} shown{new Set(h.holders.map((x: any) => x.userId)).size !== h.holders.length ? ` (${new Set(h.holders.map((x: any) => x.userId)).size} people)` : ''}{h.total > h.visible ? ` · ${h.total - h.visible} more in organizations you cannot view` : ''}</div>
           {h.holders.length === 0 ? <p className="text-xs text-gray-500">No active holders in your organizations.</p> : <ul className="mt-1 divide-y divide-gray-100 rounded-md border border-gray-200 bg-white text-xs">
             {h.holders.map((x: any) => <li key={x.assignmentId} className="flex flex-wrap items-center justify-between gap-2 px-2 py-1">
               <span><span className="font-medium text-gray-900">{x.name}</span> <span className="text-gray-500">{x.email}</span></span>
               <span className="text-gray-600">{x.organization} ({orgTypeLabel(x.organizationType)}) · Scope: {(x.scopes || []).join(', ') || '—'}</span></li>)}
           </ul>}
         </div>)}
+        </div>}
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Permissions · {p.permissionKeys.length}</div>
           {p.permissionKeys.length === 0 ? <p className="text-xs text-gray-500">{p.status === 'draft' ? 'None until published.' : 'No permissions.'}</p> : <div className="mt-1 space-y-2">
@@ -207,7 +241,7 @@ export default function AccessProfilesPanel({ permissions, onChanged, fallback }
     </div>
     {searching && <p role="status" className="border-b border-gray-100 bg-orange-50/40 px-4 py-1.5 text-xs text-gray-600">Showing {rows.length} matching profile{rows.length === 1 ? '' : 's'}. Your normal expansion returns when the search is cleared.</p>}
     {searching && rows.length === 0 && <EmptyState>{`No profiles match “${query.trim()}”.`}</EmptyState>}
-    <ul>{groupIds.map(gid => {
+    <ul className="text-sm">{groupIds.map(gid => {
       const items = byGroup.get(gid) || []
       const mOpen = expanded.has(`m:${gid}`)
       const assignments = items.reduce((n, p) => n + p.holders, 0)

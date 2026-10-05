@@ -40,6 +40,16 @@ describe('interpretQRWorkerResponse', () => {
     ).rejects.toThrow('HTTP 503')
   })
 
+  it('treats the remote-DB guard 409 as "waiting" only when the API confirms the batch is queued', async () => {
+    const guard = { error: 'Background worker disabled for a local process connected to a remote database', status: 'REMOTE_DB_WORKER_BLOCKED' }
+    await expect(interpretQRWorkerResponse(json({ ...guard, batch_id: 'b', batch_status: 'queued' }, 409))).resolves.toBe('waiting_for_worker')
+    await expect(interpretQRWorkerResponse(json({ ...guard, batch_id: 'b', batch_status: 'processing' }, 409))).resolves.toBe('waiting_for_worker')
+    // No confirmation, a failed batch, or any other 409: still an error.
+    await expect(interpretQRWorkerResponse(json(guard, 409))).rejects.toMatchObject({ status: 409 })
+    await expect(interpretQRWorkerResponse(json({ ...guard, batch_status: 'failed' }, 409))).rejects.toMatchObject({ status: 409 })
+    await expect(interpretQRWorkerResponse(json({ error: 'conflict', batch_status: 'queued' }, 409))).rejects.toMatchObject({ status: 409 })
+  })
+
   it('throws on a non-JSON error page', async () => {
     const res = new Response('<html>Bad Gateway</html>', { status: 502 })
 

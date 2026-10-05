@@ -12,6 +12,7 @@ import AccessChangeLog, { ParityEvidence } from './AccessChangeLog'
 import { SectionTabs } from './ui'
 import { callApi } from './client-api'
 import OverviewPanel, { type OverviewTarget } from './OverviewPanel'
+import type { GrantIntent } from './PeopleAccessPanel'
 
 type Tab = 'overview' | 'people' | 'roles' | 'governance' | 'technical' | 'audit'
 const tabs: Array<{ id: Tab; label: string }> = [
@@ -30,7 +31,10 @@ export default function SecurityAccessView({ userProfile }: { userProfile: any }
   const [auditDifferencesOnly, setAuditDifferencesOnly] = useState(false)
   const [rolesQuery, setRolesQuery] = useState('')
   const [auditSection, setAuditSection] = useState<'decisions' | 'changes' | 'parity' | 'simulator'>('decisions')
-  const selectTab = (next: Tab) => { setAuditDifferencesOnly(false); setRolesQuery(''); setTab(next) }
+  // Profile-first assignment: People & Access opens its existing grant form with this profile selected.
+  const [grantIntent, setGrantIntent] = useState<GrantIntent | null>(null)
+  const selectTab = (next: Tab) => { setAuditDifferencesOnly(false); setRolesQuery(''); setGrantIntent(null); setTab(next) }
+  const assignProfile = (p: { id: string; name: string; orgTypes: string[] }) => { setGrantIntent({ roleId: p.id, roleName: p.name, orgTypes: p.orgTypes, nonce: Date.now() }); setTab('people') }
   const navigate = (target: OverviewTarget) => {
     setAuditDifferencesOnly(target.tab === 'audit' && target.differencesOnly)
     setRolesQuery(target.tab === 'roles' ? target.query : '')
@@ -55,8 +59,8 @@ export default function SecurityAccessView({ userProfile }: { userProfile: any }
 
       {tab === 'overview' && <OverviewPanel data={data} onNavigate={navigate} />}
 
-      {tab === 'people' && <PeopleAccessPanel data={data} onChanged={load} />}
-      {tab === 'roles' && <RolesPoliciesPanel key={`roles-${rolesQuery}`} data={data} governance={governance} onChanged={load} initialQuery={rolesQuery} />}
+      {tab === 'people' && <PeopleAccessPanel data={data} onChanged={load} grantIntent={grantIntent} />}
+      {tab === 'roles' && <RolesPoliciesPanel key={`roles-${rolesQuery}`} data={data} governance={governance} onChanged={load} initialQuery={rolesQuery} onAssignProfile={assignProfile} />}
       {tab === 'governance' && <GovernancePanel data={data} governance={governance} />}
       {tab === 'technical' && <div className="space-y-4"><TechnicalAccessPanel governance={governance} error={governanceError} /><LegacyCompatibilityPanel governance={governance} /></div>}
       {tab === 'audit' && <div className="space-y-4">

@@ -33,6 +33,13 @@ describe('POST /api/security-access/modes/bulk', () => {
     expect(applyBulkModeChange).not.toHaveBeenCalled()
   })
 
+  it('explains an authority denial instead of a bare "Forbidden"', async () => {
+    actor = NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    const body = await (await post({ action: 'preview', groupId: 'finance', mode: 'SHADOW' })).json()
+    expect(body.code).toBe('forbidden')
+    expect(body.error).toMatch(/Manage permissions/)
+  })
+
   it('rejects client-supplied permission lists and other forged input', async () => {
     for (const body of [
       { action: 'preview', groupId: 'finance', mode: 'SHADOW', permissions: ['finance.ledger.view'] },

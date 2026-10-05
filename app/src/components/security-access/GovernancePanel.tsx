@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, CheckCircle2, ClipboardCheck, GitBranch, KeyRound, Lock, Send, XCircle } from 'lucide-react'
 import SearchableSelect from './SearchableSelect'
 import { callApi, formatDate, toIso } from './client-api'
-import { Collapsible, DisclosurePanel, EmptyState, FilterChips, FOCUS, ModuleFilterSelect, SearchInput, SectionTabs, ShowMore, ToggleButton, useLimit } from './ui'
+import { Collapsible, DisclosurePanel, EmptyState, FilterChips, FOCUS, LIST_TEXT, ModuleFilterSelect, SearchInput, SectionTabs, ShowMore, ToggleButton, useLimit } from './ui'
 import { OTHER_MODULE, classifyPermission, classifyRole, moduleGroupName, permissionModuleLabel } from '@/lib/security-access/modules'
 import { OUTCOMES, RULE_KINDS, enforcementOf, groupSodRules, humanize, outcomeOf, ruleKindLabel, type SodMitigation, type SodRule, type SodViolation } from '@/lib/security-access/sod'
 import { permissionLabel } from '@/lib/security-access/labels'
@@ -345,7 +345,7 @@ function SegregationOfDuties({ nameOf }: any) {
           <div className={`${SOD_ROW} hidden border-b border-gray-100 px-4 py-2 text-xs font-medium text-gray-500 md:grid`} aria-hidden>
             <span>Module / rule</span><span>Type</span><span>Enforcement</span><span>Status</span><span className="md:text-right">Conflicts</span>
           </div>
-          <ul>{groups.map(g => {
+          <ul className={LIST_TEXT}>{groups.map(g => {
             const gOpen = expanded.has(g.id)
             return <li key={g.id} className="border-t border-gray-100 first:border-t-0">
               <div className="bg-gray-50/70 px-4 py-2">

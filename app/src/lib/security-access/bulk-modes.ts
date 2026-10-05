@@ -152,6 +152,9 @@ export interface BulkApplyResult {
   items: Array<{ permissionKey: string; from: string; to: string; status: 'changed' | 'unchanged' | 'skipped'; blockers: string[] }>
 }
 
+/** Shown when the actor lacks security.permission.manage (route or database). Authority, not readiness. */
+export const MODE_FORBIDDEN_TEXT = 'You need the Security & Access “Manage permissions” authority (security.permission.manage) in your organization to change migration modes. Nothing was changed.'
+
 const DATABASE_ERRORS: Array<[RegExp, number, string, string]> = [
   [/sa_bulk_stale_preview/, 409, 'stale_preview', 'The group changed since this preview. Review a fresh preview before applying.'],
   [/sa_bulk_blocked/, 409, 'blocked', 'Some permissions are blocked, so nothing was changed. Choose “Eligible permissions only” to skip them.'],
@@ -162,7 +165,7 @@ const DATABASE_ERRORS: Array<[RegExp, number, string, string]> = [
   [/sa_reason_required/, 400, 'reason_required', 'A reason of at least 10 characters is required.'],
   [/sa_not_enforcement_ready/, 409, 'not_enforcement_ready', 'A permission is not enforcement-ready. Nothing was changed.'],
   [/sa_retire_requires_new_enforced/, 409, 'retire_requires_new_enforced', 'A permission must be New Access Active before legacy is retired. Nothing was changed.'],
-  [/sa_authorization_required|sa_actor_inactive|sa_actor_required/, 403, 'forbidden', 'Forbidden'],
+  [/sa_authorization_required|sa_actor_inactive|sa_actor_required/, 403, 'forbidden', MODE_FORBIDDEN_TEXT],
 ]
 
 export function mapDatabaseError(error: any): { status: number; code: string; error: string } {

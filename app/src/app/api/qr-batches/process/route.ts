@@ -80,5 +80,12 @@ export async function POST(request: NextRequest) {
   const outcome = await withWorkerLease(admin, WORKER_NAMES.qrGeneration, () =>
     runQRBatchGeneration(admin, { batchId: batch.id, notificationBaseUrl: resolveTrackingBaseUrl() })
   )
+  if (outcome.status === 'blocked') {
+    // The remote-DB guard refused to run a worker in THIS process. The batch itself is untouched and still
+    // queued for the deployed worker: say so explicitly (with the batch state the server just read) so the
+    // UI can show "waiting" instead of a failure. The guard stays on; no override is applied here.
+    const body = await outcome.response.json().catch(() => ({}))
+    return NextResponse.json({ ...body, batch_id: batch.id, batch_status: batch.status }, { status: outcome.response.status })
+  }
   return outcome.status === 'ran' ? outcome.result : outcome.response
 }

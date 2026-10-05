@@ -4,15 +4,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Clock, Info, Plus, RotateCcw, ShieldOff, SlidersHorizontal, UserRound } from 'lucide-react'
 import SearchableSelect from './SearchableSelect'
 import { callApi, formatDate, one, toIso } from './client-api'
-import { DisclosurePanel, EmptyState, FilterChips, FOCUS, SearchInput, ToggleButton } from './ui'
+import { DisclosurePanel, EmptyState, FilterChips, FOCUS, LIST_TEXT, SearchInput, ToggleButton } from './ui'
 import {
   CROSS_MODULE, MODULE_FILTER_OPTIONS, OTHER_MODULE, classifyRole, groupByModule, moduleGroupName, roleInModule, type RoleModules,
 } from '@/lib/security-access/modules'
 import { CATEGORY_LABELS, GRANT_BLOCK_TEXT, type GrantBlock, ORG_TYPE_OPTIONS, categoryLabel, grantBlock, isPartnerOrgType, orgTypeLabel } from '@/lib/security-access/directory-labels'
 
+/** A profile chosen in Access Profiles: preselects the role in the grant form; never grants anything by itself. */
+export interface GrantIntent { roleId: string; roleName: string; orgTypes: string[]; nonce: number }
+
 interface Props {
   data: any
   onChanged: () => void
+  grantIntent?: GrantIntent | null
 }
 
 type PersonFilter = 'all' | 'granted' | 'temporary'
@@ -74,7 +78,7 @@ function localDirectory(people: any[], q: string, filter: string, orgId: string)
  * grant: grant eligibility is computed per membership by the server and again
  * by the database when the grant is submitted.
  */
-export default function PeopleAccessPanel({ data, onChanged }: Props) {
+export default function PeopleAccessPanel({ data, onChanged, grantIntent = null }: Props) {
   const allRoles: any[] = useMemo(() => data.roles || [], [data.roles])
   const grantableRoles: any[] = allRoles.filter((r: any) => r.source !== 'legacy' && r.status === 'active')
   const scopes: any[] = data.scopeDefinitions || []
@@ -103,6 +107,12 @@ export default function PeopleAccessPanel({ data, onChanged }: Props) {
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const request = useRef(0)
+  const grantLock = useRef(false)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  // Profile pinned by "Assign profile"; survives choosing a person but not closing the form.
+  const [pinned, setPinned] = useState<{ roleId: string; roleName: string; orgTypes: string[] } | null>(null)
+  // Bumped only by an explicit grant start; the effect below scrolls once the form is rendered.
+  const [scrollRequest, setScrollRequest] = useState(0)
 
   useEffect(() => { const t = setTimeout(() => setDebounced(query.trim()), 250); return () => clearTimeout(t) }, [query])
 
@@ -184,6 +194,8 @@ export default function PeopleAccessPanel({ data, onChanged }: Props) {
   }, [grantResults, people, formPerson, fallback, data.people])
   const grantCandidates = Array.from(known.values()).filter(p => p.id !== data.viewerId && (p.membership || []).some(canGrantOn))
 
+  // Memberships whose organization type the pinned profile does not cover are shown but not selectable (the database checks too).
+  const applies = (m: any) => !pinned || pinned.orgTypes.length === 0 || pinned.orgTypes.includes(String(one(m.organization)?.org_type_code ?? '').toUpperCase())
   const eligibleMemberships = (userId: string): any[] => ((known.get(userId)?.membership) || []).filter(canGrantOn)
   const memberships: any[] = form.userId ? eligibleMemberships(form.userId) : []
   // Profiles the person already holds in this membership are shown as "Already held" (not selectable):
@@ -202,14 +214,14 @@ export default function PeopleAccessPanel({ data, onChanged }: Props) {
   // Never submit a selection that is no longer offered (stale after a filter change).
   const roleValid = roleOptions.some(r => r.id === form.roleId)
   const scopeValid = scopeOptions.some(s => s.id === form.scopeId)
-  const membershipValid = memberships.some(m => m.organization_id === form.organizationId)
+  const membershipValid = memberships.some(m => m.organization_id === form.organizationId && applies(m))
 
   const pickPerson = (userId: string) => {
     const person = userId ? known.get(userId) ?? null : null
     setFormPerson(person)
-    const eligible = userId ? eligibleMemberships(userId) : []
+    const eligible = userId ? eligibleMemberships(userId).filter(applies) : []
     // Exactly one eligible membership is selected for you; never a default HQ.
-    setForm({ ...EMPTY_FORM, userId, organizationId: eligible.length === 1 ? eligible[0].organization_id : '' })
+    setForm(f => ({ ...EMPTY_FORM, roleId: pinned && f.roleId === pinned.roleId ? f.roleId : '', userId, organizationId: eligible.length === 1 ? eligible[0].organization_id : '' }))
   }
   const pickModule = (module: string) => setForm(f => ({
     ...f, module, roleId: grantableRoles.some(r => r.id === f.roleId && roleInModule(r, module, roleModules.get(r.id))) ? f.roleId : '',
@@ -221,21 +233,47 @@ export default function PeopleAccessPanel({ data, onChanged }: Props) {
     pickPerson(userId)
     setMessage(null)
     setFormOpen(true)
-    if (typeof window !== 'undefined') { try { window.scrollTo?.({ top: 0, behavior: 'smooth' }) } catch { /* not supported */ } }
+    setScrollRequest(n => n + 1)
   }
+  const closeForm = () => { setFormOpen(false); setPinned(null) }
+
+  // Profile-first entry: open the same grant form with the chosen profile selected (no person yet).
+  useEffect(() => {
+    if (!grantIntent) return
+    setPinned({ roleId: grantIntent.roleId, roleName: grantIntent.roleName, orgTypes: (grantIntent.orgTypes || []).map(t => t.toUpperCase()) })
+    setFormPerson(null); setForm({ ...EMPTY_FORM, roleId: grantIntent.roleId }); setMessage(null); setFormOpen(true)
+    setScrollRequest(n => n + 1)
+  }, [grantIntent?.nonce]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Scroll the real scrolling container (this page nests one) to the form heading, then focus it. Runs after the
+  // form is committed and only for an explicit grant start — never for searches or background refreshes.
+  useEffect(() => {
+    if (scrollRequest === 0) return
+    const el = headingRef.current
+    if (!el) return
+    const reduce = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    try { el.scrollIntoView?.({ behavior: reduce ? 'auto' : 'smooth', block: 'start' }) } catch { /* not supported */ }
+    el.focus({ preventScroll: true })
+  }, [scrollRequest])
 
   async function grant() {
-    if (!roleValid || !scopeValid || !membershipValid) return
+    if (!roleValid || !scopeValid || !membershipValid || grantLock.current) return
+    grantLock.current = true
     setBusy(true); setMessage(null)
     const result = await callApi('/api/security-access/assignments', { body: {
       action: 'grant', userId: form.userId, roleId: form.roleId, organizationId: form.organizationId,
       scopeIds: [form.scopeId], effectiveUntil: toIso(form.until), reason: form.reason,
     } })
-    setBusy(false)
-    if (!result.ok) { setMessage({ tone: 'error', text: result.error || 'Unable to grant access' }); return }
+    setBusy(false); grantLock.current = false
+    if (!result.ok) {
+      const held = /already holds/i.test(result.error || '')
+      setMessage({ tone: 'error', text: held ? 'Already assigned: this person already holds that profile. Nothing was changed.' : result.error || 'Unable to grant access' })
+      if (held) afterChange() // the directory was stale: reload so the existing assignment is visible
+      return
+    }
     setMessage({ tone: 'ok', text: 'Access granted and recorded in the access change log.' })
     setForm(EMPTY_FORM)
-    setFormOpen(false)
+    setFormOpen(false); setPinned(null)
     afterChange()
   }
 
@@ -267,15 +305,17 @@ export default function PeopleAccessPanel({ data, onChanged }: Props) {
   const formBlock = selectedPerson ? grantBlock(selectedPerson, data.viewerId) : null
 
   return <div className="space-y-4">
-    <DisclosurePanel title="Grant a business role" open={formOpen} onToggle={() => (formOpen ? setFormOpen(false) : startGrant())} actionLabel="Grant access"
+    <DisclosurePanel headingRef={headingRef} title="Grant a business role" open={formOpen} onToggle={() => (formOpen ? closeForm() : startGrant())} actionLabel="Grant access"
       description="Access is granted to one organization membership and always carries a scope. Module only narrows the role list; it never grants module-wide access.">
+      {pinned && <p role="note" className="border-b border-gray-100 bg-orange-50/40 px-4 py-2 text-xs text-gray-700">
+        Assigning the profile <span className="font-medium">{pinned.roleName}</span>. Choose a person, an active membership and an explicit scope, then give a reason. {grantableRoles.some(r => r.id === pinned.roleId) ? 'The profile itself is not changed.' : 'This profile is no longer assignable (draft, retired or compatibility), so it cannot be granted here.'}</p>}
       <div className="grid gap-4 p-4 md:grid-cols-3">
         <SearchableSelect label="Person" value={form.userId} onChange={pickPerson} onQueryChange={fallback ? undefined : setGrantQuery} loading={grantSearching}
           options={grantCandidates.map(p => ({ value: p.id, label: p.full_name || p.email, description: `${p.email} · ${(p.membership || []).filter(canGrantOn).map(nameOf).join(', ')}`, keywords: p.role_code }))}
           placeholder="Search a person you can grant to" emptyText="No grantable person matches." />
         <div>
           <SearchableSelect label="Membership organization" value={form.organizationId} onChange={v => setForm({ ...form, organizationId: v, scopeId: '' })}
-            options={memberships.map(m => ({ value: m.organization_id, label: nameOf(m), description: `${orgTypeLabel(one(m.organization)?.org_type_code)}${m.is_primary ? ' · Primary membership' : ''}` }))}
+            options={memberships.map(m => ({ value: m.organization_id, label: nameOf(m), disabled: !applies(m), description: `${orgTypeLabel(one(m.organization)?.org_type_code)}${m.is_primary ? ' · Primary membership' : ''}${applies(m) ? '' : ' · Profile does not apply to this organization type'}` }))}
             placeholder={!form.userId ? 'Choose a person first' : memberships.length ? 'Choose a membership' : 'No active membership'} disabled={!form.userId || memberships.length === 0} />
           {form.userId && memberships.length === 1 && <p className="mt-1 text-xs text-gray-500">Their only active membership — selected for you.</p>}
           {form.userId && selectedBlocked && <p role="note" className="mt-1 text-xs text-gray-600">{GRANT_BLOCK_TEXT[formBlock ?? 'no_membership']}</p>}
@@ -363,7 +403,7 @@ export default function PeopleAccessPanel({ data, onChanged }: Props) {
       {!loading && !loadError && people.length === 0 && <div className="px-4 py-6 text-center text-sm text-gray-500">
         {debounced ? `No people match “${debounced}” in ${scopeLabel}.` : filtersActive ? `No people match these filters in ${scopeLabel}.` : `No people in ${scopeLabel} for this view.`}
         {filtersActive && <> <button type="button" onClick={clearFilters} className={`rounded font-medium text-orange-600 underline ${FOCUS}`}>Clear filters</button></>}</div>}
-      <ul className="divide-y divide-gray-100">
+      <ul className={`divide-y divide-gray-100 ${LIST_TEXT}`}>
         {!loading && people.map(p => {
           const active = activeAssignments(p)
           const count = (k: AccessKind) => active.filter((a: any) => accessKind(a) === k).length
