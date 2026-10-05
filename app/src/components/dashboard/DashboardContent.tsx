@@ -78,6 +78,7 @@ import BalanceSheetView from '@/components/accounting/reports/BalanceSheetView'
 import GLDetailView from '@/components/accounting/reports/GLDetailView'
 import BankAccountsView from '@/components/accounting/BankAccountsView'
 import BankReconciliationView from '@/components/accounting/BankReconciliationView'
+import BankStatementsView from '@/components/accounting/BankStatementsView'
 import CashFlowView from '@/components/accounting/CashFlowView'
 import ChartOfAccountsTab from '@/components/settings/ChartOfAccountsTab'
 import DefaultAccountsSettings from '@/components/settings/DefaultAccountsSettings'
@@ -944,6 +945,8 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
       // Cash & Banking
       case 'finance/cash/bank-accounts':
         return <BankAccountsView userProfile={userProfile} />
+      case 'finance/cash/statements':
+        return <BankStatementsView userProfile={userProfile} />
       case 'finance/cash/reconciliation':
         return <BankReconciliationView userProfile={userProfile} />
       case 'finance/cash/cashflow':

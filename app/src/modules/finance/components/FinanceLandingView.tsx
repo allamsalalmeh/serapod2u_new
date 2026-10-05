@@ -19,7 +19,7 @@ const cardDescriptions: Record<string, { description: string; status: 'live' | '
     'finance-gl': { description: 'Manage journal entries, review pending postings, and maintain your Chart of Accounts.', status: 'live' },
     'finance-ar': { description: 'Track customer invoices, receipts, and aging analysis. Malaysia SST/e-Invoice ready.', status: 'live' },
     'finance-ap': { description: 'Manage supplier bills, payment vouchers, and AP aging. Integrates with Purchase Orders.', status: 'live' },
-    'finance-cash': { description: 'Bank account register, reconciliation workflows, and cash flow monitoring.', status: 'live' },
+    'finance-cash': { description: 'Bank account register, bank statement import, reconciliation workflows, and cash flow monitoring.', status: 'live' },
     'finance-reports': { description: 'Trial Balance, Profit & Loss, Balance Sheet, GL Detail, and Cash Flow Statement.', status: 'live' },
     'finance-settings': { description: 'Default posting accounts, currency, fiscal year periods, posting rules, and permissions.', status: 'live' },
 }

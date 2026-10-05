@@ -113,6 +113,7 @@ export const financeNavGroups: FinanceNavGroup[] = [
         icon: Landmark,
         children: [
             { id: 'finance/cash/bank-accounts', label: 'Bank Accounts', icon: Landmark, href: toHref('finance/cash/bank-accounts') },
+            { id: 'finance/cash/statements', label: 'Bank Statements', icon: FileText, href: toHref('finance/cash/statements') },
             { id: 'finance/cash/reconciliation', label: 'Bank Reconciliation', icon: ArrowLeftRight, href: toHref('finance/cash/reconciliation') },
             { id: 'finance/cash/cashflow', label: 'Cash Flow', icon: TrendingUp, href: toHref('finance/cash/cashflow') },
         ],

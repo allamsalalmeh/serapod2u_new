@@ -28,6 +28,7 @@ export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
   "accounting/ar/invoices": { kind: 'ENTERPRISE', permissions: ["finance.receivable.view"] },
   "accounting/ar/receipts": { kind: 'ENTERPRISE', permissions: ["finance.receivable.view"] },
   "accounting/cash/bank-accounts": { kind: 'ENTERPRISE', permissions: ["finance.cash.view", "finance.reconciliation.perform"] },
+  "accounting/cash/bank-statements": { kind: 'ENTERPRISE', permissions: ["finance.cash.view", "finance.reconciliation.perform"] },
   "accounting/cash/cashflow": { kind: 'ENTERPRISE', permissions: ["finance.report.view_sensitive"] },
   "accounting/cash/reconciliation": { kind: 'ENTERPRISE', permissions: ["finance.cash.view", "finance.reconciliation.perform"] },
   "accounting/document-status/[id]": { kind: 'ENTERPRISE', permissions: ["finance.ledger.view"] },
