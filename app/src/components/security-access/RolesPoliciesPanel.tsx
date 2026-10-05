@@ -6,6 +6,7 @@ import { buildRollout, type RolloutNode } from '@/lib/security-access/rollout'
 import { CROSS_MODULE, MODULE_FILTER_OPTIONS, OTHER_MODULE, classifyRole, groupByModule, moduleGroupName, permissionModuleLabel, roleInModule, rolePermissionKeys, type RoleModules } from '@/lib/security-access/modules'
 import { callApi } from './client-api'
 import AccessProfilesPanel from './AccessProfilesPanel'
+import { scopeLabels } from '@/lib/security-access/scope-labels'
 import type { ProfileSummary } from '@/lib/security-access/profiles'
 import BulkModeDialog from './BulkModeDialog'
 import PermissionTree from './PermissionTree'
@@ -110,7 +111,7 @@ export default function RolesPoliciesPanel({ data, governance, onChanged, initia
     {bulkGroup && <BulkModeDialog groupId={bulkGroup.id} groupName={bulkGroup.name} total={bulkGroup.total} onClose={() => setBulkGroup(null)} onChanged={onChanged} />}
 
     {section === 'roles' && <AccessProfilesPanel permissions={data.permissions || []} onChanged={onChanged} onAssignProfile={onAssignProfile} fallback={<BusinessRoles roles={roles} />} />}
-    {section === 'scopes' && <Scopes scopes={scopes} />}
+    {section === 'scopes' && <Scopes scopes={scopes} organizations={data.organizations || []} />}
 
     {section === 'catalogue' && <PermissionTree
       rollout={catalogue}
@@ -231,18 +232,19 @@ function BusinessRoles({ roles }: { roles: any[] }) {
   </section>
 }
 
-function Scopes({ scopes }: { scopes: any[] }) {
+function Scopes({ scopes, organizations }: { scopes: any[]; organizations: any[] }) {
+  const labels = useMemo(() => scopeLabels(scopes, new Map<string, string>(organizations.map((o: any) => [o.id, o.org_name]))), [scopes, organizations])
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState<Set<string>>(new Set())
   const q = query.trim().toLowerCase()
   const groups = useMemo(() => {
     const map = new Map<string, any[]>()
     for (const s of scopes) {
-      if (q && !`${s.display_name} ${s.scope_type}`.toLowerCase().includes(q)) continue
+      if (q && !`${labels.get(s.id) ?? s.display_name} ${s.scope_type}`.toLowerCase().includes(q)) continue
       map.set(s.scope_type, [...(map.get(s.scope_type) || []), s])
     }
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b))
-  }, [scopes, q])
+  }, [scopes, q, labels])
   const toggle = (id: string) => setOpen(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
 
   return <section className="rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -261,17 +263,17 @@ function Scopes({ scopes }: { scopes: any[] }) {
           </ToggleButton>
           <span className="text-xs text-gray-500">{list.length}</span>
         </div>
-        {isOpen && <ScopeList list={list} />}
+        {isOpen && <ScopeList list={list} labels={labels} />}
       </li>
     })}</ul>
   </section>
 }
 
-function ScopeList({ list }: { list: any[] }) {
+function ScopeList({ list, labels }: { list: any[]; labels: Map<string, string> }) {
   const page = useLimit(25)
   return <>
     <ul className="divide-y divide-gray-50">{list.slice(0, page.limit).map(s =>
-      <li key={s.id} className="py-1.5 pl-10 pr-4 text-sm text-gray-800">{s.display_name}</li>)}</ul>
+      <li key={s.id} className="py-1.5 pl-10 pr-4 text-sm text-gray-800">{labels.get(s.id) ?? s.display_name}</li>)}</ul>
     <ShowMore shown={Math.min(page.limit, list.length)} total={list.length} onMore={page.more} />
   </>
 }

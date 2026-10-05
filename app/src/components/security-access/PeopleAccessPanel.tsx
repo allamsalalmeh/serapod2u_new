@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Clock, Info, Plus, RotateCcw, ShieldOff, SlidersHorizontal, UserRound } from 'lucide-react'
 import SearchableSelect from './SearchableSelect'
+import { scopeLabels } from '@/lib/security-access/scope-labels'
 import { callApi, formatDate, one, toIso } from './client-api'
 import { DisclosurePanel, EmptyState, FilterChips, FOCUS, LIST_TEXT, SearchInput, ToggleButton } from './ui'
 import {
@@ -210,6 +211,7 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
   const visibleRoles = grantableRoles.filter(r => roleInModule(r, form.module, roleModules.get(r.id)))
   const roleOptions = visibleRoles.filter(r => !heldKinds.has(r.id))
   const heldRoles = visibleRoles.filter(r => heldKinds.has(r.id))
+  const scopeText = useMemo(() => scopeLabels(scopes, new Map<string, string>((data.organizations || []).map((o: any) => [o.id, o.org_name]))), [scopes, data.organizations])
   const scopeOptions = scopes.filter(s => !!form.organizationId && s.organization_id === form.organizationId && s.scope_type !== 'own_record')
   // Never submit a selection that is no longer offered (stale after a filter change).
   const roleValid = roleOptions.some(r => r.id === form.roleId)
@@ -335,7 +337,7 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
           })}
           placeholder={roleOptions.length ? 'Choose a role' : 'No roles in this module'} />
         <SearchableSelect label="Scope" value={scopeValid ? form.scopeId : ''} onChange={v => setForm({ ...form, scopeId: v })}
-          options={scopeOptions.map(s => ({ value: s.id, label: s.display_name, description: s.scope_type.replace(/_/g, ' ') }))}
+          options={scopeOptions.map(s => ({ value: s.id, label: scopeText.get(s.id) ?? s.display_name, description: s.scope_type.replace(/_/g, ' ') }))}
           placeholder={form.organizationId ? 'Choose a scope' : 'Choose a membership first'} disabled={!form.organizationId} />
         <label className="text-sm"><span className="text-gray-600">Ends (optional — temporary access)</span>
           <input type="datetime-local" value={form.until} onChange={e => setForm({ ...form, until: e.target.value })} className="mt-1 w-full rounded-lg border px-3 py-2" /></label>
