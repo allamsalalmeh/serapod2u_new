@@ -159,7 +159,52 @@ match) enables "new vs returning" without coupling anonymous data to auth.
 
 ---
 
-## 7. Security & Access (S&A) — availability on `origin/staging` vs `issues-fixing-oct2`
+## 7. Security & Access (S&A) — model, grouping, and base availability
+
+### How S&A decides (verified)
+- Permission keys are `module.resource.action` (3 dot-separated parts), enforced by a CHECK in
+  `sa_permissions` (`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`). Examples:
+  `roadtour.campaign.manage`, `customer.campaign.manage`, `marketing.module.view`,
+  `customer.report.view`, `ecommerce.module.view`.
+- `sa_permissions` stores `module`, `resource`, `action`, `description`, `source`, `status`;
+  `sa_migration_modes(permission_key, mode, legacy_permission_key, notes)` holds each key's mode.
+- `authorizeOperation` → `authorize` (`app/src/lib/security-access/authorization.ts`) reads the key's
+  mode, evaluates the legacy evaluator (when provided) plus the new policy, then applies
+  `authoritativeOutcome`. Modes: `LEGACY_ENFORCED`/`SHADOW` (legacy decides) vs `NEW_ENFORCED`/
+  `LEGACY_RETIRED` (S&A alone decides; a legacy ALLOW never overrides an S&A DENY).
+- Legacy evaluators: `legacy-rules.ts` `legacyRoleLevelAtMost(userId, maxLevel)` (account_scope
+  `portal` + `role.role_level <= max`) plus per-route rules (`stage2d-catalog.ts` `legacyRule`).
+- Every decision is audited to `sa_authorization_decisions`.
+
+### The ONE grouping that drives Policies / Group Policies / Migration Modes
+`app/src/lib/security-access/modules.ts` → `MODULE_TAXONOMY` + `classifyPermission(key)` +
+`groupByTaxonomy(...)`. Its comment states it is used by "Migration Modes, the Permission Catalogue,
+Group Policies (details and editor) and People & Access". It is **display-only** (never grants).
+- `customer_growth` group currently matches `mod('customer','roadtour','ecommerce','marketing')`
+  with areas `crm`, `loyalty`, `messaging`, `roadtour`, `marketing`, `outdoor`, `ecommerce`.
+- **Event Management must add a new area** `{ id:'event', name:'Event Management', match: mod('event') }`
+  and add `event` to the group's `mod(...)` match, so `event.*` keys classify as
+  "Customer & Growth · Event Management" consistently across Policies, Group Policies and Migration Modes.
+- `labels.ts` `permissionLabel` has a fallback; add `event: 'Customer & Growth'` to its `MODULE_GROUPS`
+  map (and optionally `event.*` nouns to `RESOURCES`) for correct catalogue labels.
+
+### Sidebar / page access / API authorization (target on issues-fixing-oct2)
+- One destination table `nav-access.ts` → `CUSTOMER_GROWTH_DESTINATIONS` (and `ROADTOUR_DESTINATIONS`)
+  maps each nav child id to the permission(s) that unlock it.
+- Server page guards call `resolveDestinationAccess` (`lib/server/nav-access.ts`); the per-user snapshot
+  `GET /api/security-access/me/navigation` → `useNavAccess()` drives sidebar, top nav and landing cards.
+  "Hiding navigation is not authorization": every route/API decides again.
+- Event Management therefore needs: (1) a child in `customerGrowthNav.ts` `cg-marketing`; (2) a
+  destination entry `event-management: { org: [ …event keys… ] }` in `CUSTOMER_GROWTH_DESTINATIONS`;
+  (3) `authorizeOperation`/`guardUserOperation` + `organizationResource` in every admin page/API.
+- **Consistency rule:** sidebar visibility (destination), page guard and API guard must use the same
+  `event.*` key(s) and the caller's organization scope — no surface uses a different check.
+
+### Public QR registration is outside S&A
+The public visitor has no `sa_organization_memberships` / `sa_role_assignments` / Group Policy, so
+`authorizeOperation` would DENY. Public endpoints therefore resolve the token with the service-role/
+admin client (like `resolveRoadtourByToken`) and never call `authorizeOperation`. Scanning a public QR
+must not require — and must never grant — an admin Group Policy.
 
 ### Available on this base (`origin/staging`)
 - `app/src/lib/security-access/operation.ts` — `authorizeOperation`, `guardOperation`,
@@ -167,7 +212,11 @@ match) enables "new vs returning" without coupling anonymous data to auth.
 - `app/src/lib/security-access/modules.ts` — `MODULE_TAXONOMY` (display grouping). `customer_growth`
   group already has areas `crm`, `loyalty`, `messaging`, `roadtour`, `marketing`, `outdoor`, `ecommerce`.
   **Event Management needs a new area here.**
-- Permission catalogs `catalog.ts`, `stage2d-catalog.ts`.
+- Permission catalogs `catalog.ts`, `stage2d-catalog.ts`; also present: `labels.ts`,
+  `legacy-rules.ts`, `authorization.ts`, `enforcement.ts`.
+- The `sa_permissions` + `sa_migration_modes` foundation is applied on staging/production
+  (`20260927140000_sa_wave1_foundation.sql` and later per `PRODUCTION_MIGRATION_STATUS.md`), so
+  registering `event.*` keys is a normal additive migration here.
 - Registered permission keys (dot notation, seeded in `sa_permissions`) include:
   - `customer.campaign.manage`, `customer.consumer.view`, `customer.crm.view`,
     `customer.loyalty.adjust`, `customer.messaging.manage`, `customer.program.manage`,
@@ -184,13 +233,16 @@ match) enables "new vs returning" without coupling anonymous data to auth.
   `ROADTOUR_DESTINATIONS`, `SUPPLY_CHAIN_*`, `snapshotAllows`, `computeDestinations`,
   `productCatalogHome`, `customerGrowthChildVisible`, etc. This is where Event Management's
   sidebar/destination permission mapping belongs.
+- `app/src/lib/server/nav-access.ts` — `resolveDestinationAccess` (server page guard for destinations).
 - `app/src/lib/security-access/group-policies.ts` — Group Policies / module "Full Access" standard
   policies (`customer-growth-full-access` etc.) and drift reporting (`sa_standard_policy_drift`,
   `sa_extend_standard_policy`).
+- `supabase/migrations/20261009100000_sa_group_policies_full_access.sql` — seeds the Full Access policies.
 - `app/src/app/api/security-access/me/navigation/route.ts` — per-user navigation snapshot handler
   (the directory only holds `route.test.ts` on this base).
+- `app/src/lib/security-access/bulk-modes.ts` + `app/src/app/api/security-access/modes/*` — Migration Modes UI.
 - Also newer: `profiles.ts`, `scope-grant.ts`, `delegation.ts`, `ess-eligibility.ts`,
-  `grant-identity.ts`, `system-logs-catalog.ts`, `user-admin-catalog.ts`, `bulk-modes.ts`.
+  `grant-identity.ts`, `system-logs-catalog.ts`, `user-admin-catalog.ts`.
 
 **Evidence this base is incomplete:** `app/src/lib/security-access/nav-access.test.ts` exists on
 `origin/staging` but imports `from './nav-access'`, whose source is absent here — so the
@@ -201,11 +253,14 @@ existing `authorizeOperation`/`guardUserOperation` + `sa_permissions` keys + `MO
 The richer destination-based nav snapshot is only on `issues-fixing-oct2`. Document that as a
 dependency rather than merging the whole branch (see HANDOFF.md).
 
-### Full Access coverage
-`customer-growth-full-access` holds a fixed, explicit permission list and is **not** auto-extended:
-newly registered permissions surface via `sa_standard_policy_drift()` and require an explicit
-`sa_extend_standard_policy(...)`. So Event Management permissions will **not** be covered by the
-existing Full Access policy until explicitly extended. Do not silently modify existing grants.
+### Full Access coverage (precise)
+The standard "Customer & Growth Full Access" (`customer-growth-full-access`, 23 explicit keys) and the
+whole Group Policies / standard-policy mechanism are introduced by
+`20261009100000_sa_group_policies_full_access.sql` + `group-policies.ts`, which exist **only on
+`issues-fixing-oct2`** — not on `origin/staging`. Full Access holds an explicit, fixed key list and is
+**not** auto-extended: newly registered keys surface via `sa_standard_policy_drift()` and require
+`sa_extend_standard_policy(role_key, keys[], reason)`. **Conclusion:** `event.*` will NOT be covered by
+Customer & Growth Full Access until explicitly extended. Surface the drift; do not silently modify grants.
 
 ## 8. Public form protections & rate limiting
 

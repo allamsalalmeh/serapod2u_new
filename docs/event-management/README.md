@@ -42,7 +42,10 @@ of writing).
 - Module tabs: Overview / Events / Settings. Inside an event: Overview /
   Visitors / Staff & QR / Settings.
 - Navigation: Customer & Growth → Marketing → Event Management, placed directly
-  below Road Tour.
+  below Road Tour (sidebar + Marketing overview card + top dropdown).
+- S&A permissions group under **Customer & Growth → Event Management** in
+  Policies, Group Policies and Migration Modes; sidebar visibility, page access
+  and API authorization use the same `event.*` keys + organization scope.
 
 **Explicitly out of scope** (do not add): ticketing, payments, prizes, loyalty
 points, sample inventory, automated broadcasts, budgeting.
@@ -52,7 +55,10 @@ points, sample inventory, automated broadcasts, budgeting.
 - Which contact fields are required vs optional (not yet finalised).
 - Whether a duplicate phone per event is the right dedupe rule.
 - Whether the first valid staff attribution stays fixed.
-- Exact permission key names for Event Management (`event.*` proposed).
+- Exact permission key names (`event.*` 3-part keys proposed: `event.event.view`,
+  `event.event.manage`, `event.registration.view`, `event.report.view`,
+  `event.registration.export`), plus whether to extend Customer & Growth Full
+  Access via `sa_extend_standard_policy` (it is **not** auto-extended).
 - Whether to base the S&A navigation work on the `nav-access.ts` layer that
   only exists on `issues-fixing-oct2` (see ASSESSMENT.md § "Security & Access").
 

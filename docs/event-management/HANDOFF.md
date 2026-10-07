@@ -19,13 +19,18 @@ Do not start implementation until the user reviews these findings and answers th
    or allow email-only / name-only dedupe.
 3. **First staff attribution** — confirm it stays fixed once set (a later resubmission never
    overwrites the first valid staff).
-4. **Permission naming** — confirm the proposed `event.*` keys (`event.view`, `event.manage`,
-   `event.registration.view`, `event.export`) vs. folding under `customer.*`.
-5. **S&A base dependency** — Event Management needs to know whether to build sidebar/visibility on
-   the **existing** `authorizeOperation` + `MODULE_TAXONOMY` (available on this branch) or to depend
-   on the newer `nav-access.ts` / `group-policies.ts` layer that only exists on `issues-fixing-oct2`.
-   Merging that entire branch is out of scope.
-6. **Ellbow brand link** — confirm whether an Ellbow `brands` row (and `logo_url`) exists in the
+4. **Permission naming** — confirm the proposed 3-part `event.*` keys
+   (`event.event.view`, `event.event.manage`, `event.registration.view`, `event.report.view`,
+   `event.registration.export`) vs folding under `customer.*`; and whether export needs its own
+   `.export` action or reuses `.view` (see IMPLEMENTATION_PLAN.md §3).
+5. **Full Access extension** — confirm whether `customer-growth-full-access` should be extended with
+   `event.*` via `sa_extend_standard_policy(...)`. It is **not** auto-extended and only exists on
+   `issues-fixing-oct2`; do not silently modify it.
+6. **S&A base dependency** — build sidebar/visibility on the **existing** `authorizeOperation` +
+   `MODULE_TAXONOMY` (available on this branch), or depend on the newer `nav-access.ts` /
+   `group-policies.ts` layer that only exists on `issues-fixing-oct2`. Merging that whole branch is
+   out of scope.
+7. **Ellbow brand link** — confirm whether an Ellbow `brands` row (and `logo_url`) exists in the
    database; the checkout cannot read live DB data.
 
 ## Approved (confirmed by the user this round)
@@ -44,7 +49,10 @@ Do not start implementation until the user reviews these findings and answers th
 ## Proposed (not yet approved)
 
 - Folder layout `app/src/modules/event-management/` (not `app/src/features/`).
-- `event.*` permission namespace and the permission matrix in IMPLEMENTATION_PLAN.md.
+- 3-part `event.*` permission keys (`event.event.view`, `event.event.manage`,
+  `event.registration.view`, `event.report.view`, `event.registration.export`) + the permission
+  matrix and S&A wiring steps in IMPLEMENTATION_PLAN.md §3.
+- `modules.ts` `event` area + `labels.ts` `MODULE_GROUPS` entry (Customer & Growth → Event Management).
 - Data model (6 tables) and the `event01`–`event04` migration sequence.
 - Duplicate/attribution rules in IMPLEMENTATION_PLAN.md §5.
 
@@ -74,11 +82,14 @@ Do not start implementation until the user reviews these findings and answers th
 ```
 You are working on the `event_management` branch (base origin/staging @ 9e27404d) of Serapod2U.
 First read docs/event-management/README.md, ASSESSMENT.md, IMPLEMENTATION_PLAN.md, and HANDOFF.md.
-Implement only Phase 1 (data model + migrations + event.* permission seeding + modules.ts event area).
+Implement only Phase 1 (data model + migrations + event.* permission seeding in sa_permissions with
+sa_migration_modes mode NEW_ENFORCED + modules.ts event area + labels.ts MODULE_GROUPS entry).
 Follow the repository conventions recorded in those docs: app/src/modules/event-management/,
 server-side QR token resolution, E.164 phone normalization via app/src/utils/phone.ts,
-authorizeOperation/guardUserOperation for org-scoped authorization, and the manual migration
-workflow tracked in supabase/migrations/PRODUCTION_MIGRATION_STATUS.md. Do not push, merge, deploy,
-or run migrations yourself — I run them manually. Write Vitest tests colocated with source. Show me
-the migration files and the diff before I apply anything.
+authorizeOperation/guardUserOperation + organizationResource for org-scoped authorization, and the
+manual migration workflow tracked in supabase/migrations/PRODUCTION_MIGRATION_STATUS.md. Public QR
+registration stays outside S&A (service-role token resolution, no Group Policy). Do not push, merge,
+deploy, or run migrations yourself — I run them manually. Write Vitest tests colocated with source
+(add the required .gitignore un-ignore rules). Show me the migration files and the diff before I
+apply anything.
 ```

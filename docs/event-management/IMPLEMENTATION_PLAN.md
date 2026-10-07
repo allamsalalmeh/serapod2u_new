@@ -131,42 +131,63 @@ event_consents                       # registration consent vs marketing consent
 - `phone_normalized`/`email_normalized` reuse `normalizePhoneE164` / `identity_normalize_email`.
 - QR tokens contain no personal data and resolve event+staff **server-side** only.
 
-### Permission matrix (proposed `event.*` namespace)
+### Permission matrix (proposed `event.*` namespace, 3-part keys)
 
-| Action | Permission (proposed) | Surface |
+Permission keys must be `module.resource.action` (3 parts — `sa_permissions` CHECK constraint), so the
+shorthand `event.view` / `event.manage` / `event.export` are **invalid**. Use module `event` (grouped
+under Customer & Growth, like `roadtour`).
+
+| Capability | Permission (proposed) | Surface |
 |---|---|---|
-| View events / overview / counts | `event.view` | page guard + list API |
-| Create / edit / cancel events | `event.manage` | form + write API |
-| Assign staff / generate QRs | `event.manage` | Staff & QR tab |
+| View events / overview / counts | `event.event.view` | page guard + list API |
+| Create / edit / cancel events | `event.event.manage` | form + write API |
+| Assign staff / generate / revoke QRs | `event.event.manage` | Staff & QR tab |
 | View / search / filter visitors | `event.registration.view` | Visitors tab + list API |
-| Compare staff counts / new-returning | `event.registration.view` | reports |
-| Export visitors | `event.export` | export API |
-| Public registration (anonymous) | **none** (public, rate-limited) | `/api/event-management/public/*` |
+| Correct / delete registrations (Phase 2) | `event.registration.manage` | deferred |
+| View reports (staff comparison, new/returning) | `event.report.view` | reports |
+| Export visitors | `event.registration.export` | export API |
+| Public registration (anonymous) | **none** | `/api/event-management/public/*` |
 
-- Register these in `sa_permissions` via the first migration (mirror `roadtour.*`).
-- Add an `event` area under `customer_growth` in `modules.ts` (`match: mod('event')`), so the S&A UI
-  groups it as "Customer & Growth → Event Management" in Policies / Group Policies / Migration Modes.
-- Sidebar/page/API each call `authorizeOperation`/`guardUserOperation` with `organizationResource(...)`.
-  Visibility mirrors RoadTour: the destination is `{ org: ['event.view','event.manage','event.registration.view'] }`.
+Notes:
+- `event.event.*` is redundant (module = resource) but honest and consistent with the 3-part format;
+  alternative naming is a decision for the user (see HANDOFF.md). `export` is a new action suffix not in
+  `labels.ts` `ACTIONS` — it falls back to `titleCase('export')` ("Export …"); alternatively gate export
+  on `event.registration.view` (matching `journey/download-qr-excel`, which gates on `customer.campaign.manage`).
+- Register keys in `sa_permissions` and seed `sa_migration_modes` with **`NEW_ENFORCED`** (Event
+  Management is new — no legacy evaluator exists, so it must not be `LEGACY_ENFORCED`).
+
+### S&A wiring (what to touch — target state on issues-fixing-oct2)
+1. `modules.ts` — add `event` to the `customer_growth` match and an
+   `{ id:'event', name:'Event Management', match: mod('event') }` area → groups keys under
+   "Customer & Growth · Event Management" in Policies / Group Policies / Migration Modes.
+2. `labels.ts` — add `event: 'Customer & Growth'` to `MODULE_GROUPS` (and optional `event.*` nouns in `RESOURCES`).
+3. Migration — insert `event.*` keys into `sa_permissions` and `sa_migration_modes` (mode `NEW_ENFORCED`).
+4. `customerGrowthNav.ts` — add `{ id:'event-management', … }` child to `cg-marketing` (below Road Tour).
+5. `nav-access.ts` (issues-fixing-oct2) — add `event-management: { org: ['event.event.view','event.event.manage','event.registration.view'] }` to `CUSTOMER_GROWTH_DESTINATIONS` (mirror `roadtour`).
+6. Every admin page/API — `authorizeOperation`/`guardUserOperation` + `organizationResource(...)` with the
+   same `event.*` key; org scope comes from the server (never request input).
+7. **Consistency rule:** sidebar visibility (destination), page guard and API guard use the same
+   `event.*` key + org scope — no surface uses a different check.
+
 - **Public QR registration is separate** from staff/admin: it never requires a Group Policy and uses
-  service-role server resolution of the token (like `validate_roadtour_qr_token`).
-- **Full Access:** `customer-growth-full-access` will NOT cover `event.*` until
-  `sa_extend_standard_policy('customer-growth-full-access', ['event.*'], reason)` is run. Document and
-  defer that decision to the user — do not silently modify grants.
+  service-role server resolution of the token (like `validate_roadtour_qr_token`) — no `authorizeOperation`.
+- **Full Access:** `customer-growth-full-access` (issues-fixing-oct2 only) will NOT cover `event.*` until
+  `sa_extend_standard_policy('customer-growth-full-access', ['event.*'], reason)` is run. Surface
+  `sa_standard_policy_drift()`; do not silently modify grants.
 
 ## 4. API & public registration design
 
 ### Admin APIs (authenticated, org-scoped)
-- `GET/POST /api/event-management/events` — list/create; `guardUserOperation(userId, 'event.manage')`
-  for POST, `'event.view'` for GET.
+- `GET/POST /api/event-management/events` — list/create; `guardUserOperation(userId, 'event.event.manage')`
+  for POST, `'event.event.view'` for GET.
 - `GET/PATCH /api/event-management/events/[eventId]` — read/update; org-scoped via `organizationResource`.
 - `POST /api/event-management/events/[eventId]/qr` — generate staff/booth QR; returns token (never PII).
 - `GET /api/event-management/events/[eventId]/qr/[token]/image` — render PNG via `qrcode`
   (mirror `/api/roadtour/qr-image/[token]`).
 - `GET /api/event-management/events/[eventId]/registrations` — search/filter; `'event.registration.view'`.
-- `GET /api/event-management/events/[eventId]/stats` — counts + per-staff comparison.
+- `GET /api/event-management/events/[eventId]/stats` — counts + per-staff comparison; `'event.report.view'`.
 - `GET /api/event-management/events/[eventId]/registrations/export` — CSV/Excel via ExcelJS;
-  `'event.export'`.
+  `'event.registration.export'`.
 
 ### Public APIs (anonymous, rate-limited, no PII leakage)
 - `GET /api/event-management/public/event/[token]` — resolves token server-side → returns only the
@@ -230,7 +251,7 @@ order, verification queries, and rollback notes.
 | # | File | Purpose | Depends on |
 |---|---|---|---|
 | event01 | `20261007_event01_create_event_tables.sql` | `event_events`, `event_staff`, `event_qr_tokens`, `event_contacts`, `event_registrations`, `event_consents` + indexes + RLS | existing `users`/`organizations`/`brands` |
-| event02 | `20261007_event02_seed_event_permissions.sql` | register `event.*` in `sa_permissions` | S&A `sa_permissions` (wave1/foundation) |
+| event02 | `20261007_event02_seed_event_permissions.sql` | register `event.*` in `sa_permissions` + seed `sa_migration_modes` (mode `NEW_ENFORCED`) | `sa_permissions`/`sa_migration_modes` foundation (wave1) |
 | event03 | `20261007_event03_event_qr_functions.sql` | `validate_event_qr_token(token)` RPC + duplicate/attribution helpers | event01 |
 | event04 | `20261007_event04_event_rls_and_grants.sql` | finalize RLS + grants to `authenticated`/`service_role` | event01–03 |
 
@@ -247,14 +268,14 @@ permission keys. Acceptance: migrations apply cleanly on staging; `event.*` appe
 permission catalogue grouped under Customer & Growth → Event Management.
 
 **Phase 2 — admin CRUD.** Events list/create/edit + Staff & QR + booth QR render.
-Acceptance: org isolation holds; a user with only `event.view` cannot create; QR images render.
+Acceptance: org isolation holds; a user with only `event.event.view` cannot create; QR images render.
 
 **Phase 3 — public registration.** `/event/[token]` Ellbow form + `POST public/register` +
 middleware public path. Acceptance: no auth required; token resolves server-side; duplicate rule
 enforced; booth vs staff attribution correct; no PII in QR URL; rate-limited.
 
 **Phase 4 — visitors/reports/export.** Visitors tab, search/filter, stats + staff comparison,
-new/returning, export. Acceptance: exports gate on `event.export`; booth never inflates staff rank.
+new/returning, export. Acceptance: exports gate on `event.registration.export`; booth never inflates staff rank.
 
 **Phase 5 — navigation.** Add Event Management below Road Tour in `customerGrowthNav.ts`
 (and reconcile `marketingNav.ts`), add `event` area + destination mapping, breadcrumbs.
