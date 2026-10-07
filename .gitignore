@@ -202,6 +202,11 @@ z_*
 !/docs/runbooks/
 !/docs/runbooks/**
 
+# Event Management planning docs are implementation artifacts
+!/docs/event-management/
+!/docs/event-management/**
+
+
 # Local reporting audit exports stay private
 /exports/reporting-audit/
 
