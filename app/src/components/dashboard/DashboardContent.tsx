@@ -150,6 +150,7 @@ import CustomerGrowthTopNav from '@/modules/customer-growth/components/CustomerG
 import { ecommerceHrefForView, isCustomerGrowthViewId, isEcommerceViewId } from '@/modules/customer-growth/customerGrowthNav'
 import HeroBannersUnifiedView from '@/modules/ecommerce/components/HeroBannersUnifiedView'
 import StoreOrdersView from '@/modules/ecommerce/components/StoreOrdersView'
+import TikTokShopView from '@/modules/ecommerce/components/TikTokShopView'
 // RoadTour Module Components
 import { RoadtourLandingView } from '@/modules/roadtour/components/RoadtourLandingView'
 import { RoadtourCampaignsView } from '@/modules/roadtour/components/RoadtourCampaignsView'
@@ -671,6 +672,8 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
         return <HeroBannersUnifiedView userProfile={userProfile} onViewChange={handleViewChange} initialTab="login" />
       case 'store-orders':
         return <StoreOrdersView userProfile={userProfile} onViewChange={handleViewChange} />
+      case 'ecommerce/tiktok-shop':
+        return <TikTokShopView userProfile={userProfile} onViewChange={handleViewChange} />
       case 'ecommerce/payment-gateway':
         return (
           <PaymentGatewaySettingsView

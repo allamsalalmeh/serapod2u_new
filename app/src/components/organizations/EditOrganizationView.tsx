@@ -14,6 +14,7 @@ import { Loader2, ArrowLeft, Save, Info, AlertTriangle, Star, Link as LinkIcon, 
 import OrgLogoUpload from './OrgLogoUpload'
 import DistributorOrderFulfillmentCard from './DistributorOrderFulfillmentCard'
 import OnlineShopWarehouseCard from './OnlineShopWarehouseCard'
+import ManufacturerCategoriesCard from './ManufacturerCategoriesCard'
 import { compressAvatar, formatFileSize } from '@/lib/utils/imageCompression'
 import {
   getOwnedOrganizationLogoPath,
@@ -937,6 +938,12 @@ export default function EditOrganizationView({ userProfile, onViewChange }: Edit
                 is_active: formData.is_active ?? organization.is_active ?? true,
               }}
               parentHq={{ id: parentHqDetails.id, org_name: parentHqDetails.org_name }}
+            />
+          )}
+
+          {organization?.org_type_code === 'MFG' && (
+            <ManufacturerCategoriesCard
+              manufacturer={{ id: organization.id, org_name: formData.org_name || organization.org_name }}
             />
           )}
 

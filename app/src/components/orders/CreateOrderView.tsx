@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -177,6 +177,12 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
   // Track if we're editing an existing order
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
   const [editingOrderNo, setEditingOrderNo] = useState<string | null>(null)
+  // updated_at exactly as loaded: the server rejects the save if the order changed since
+  const [editingOrderUpdatedAt, setEditingOrderUpdatedAt] = useState<string | null>(null)
+  // Synchronous in-flight guard (state updates are too late to stop a double click) and the
+  // id of the order being created, fixed per form so a retry can never create a second order.
+  const saveInFlightRef = useRef(false)
+  const newOrderIdRef = useRef<string>(crypto.randomUUID())
 
   // Organizations
   const [buyerOrg, setBuyerOrg] = useState<Organization | null>(null)
@@ -807,6 +813,7 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
 
       // Store the order number for editing
       setEditingOrderNo(orderData.order_no)
+      setEditingOrderUpdatedAt(orderData.updated_at ?? null)
 
       // Load buyer organization
       const { data: buyerOrg } = await supabase
@@ -1129,6 +1136,7 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
   }
 
   const saveOrder = async (status: 'draft' | 'submitted') => {
+    if (saveInFlightRef.current) return
     if (!editingOrderId && orderType === 'H2M' && !canCreateH2M) {
       toast({
         title: 'Unauthorized',
@@ -1168,254 +1176,76 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
         return
       }
 
+      saveInFlightRef.current = true
       setSaving(true)
 
-      // Get company_id (root HQ)
-      const { data: companyData } = await supabase
-        .rpc('get_company_id', { p_org_id: userProfile.organization_id })
-
-      const companyId = companyData || userProfile.organization_id
-
-      // Check if we're editing an existing order
-      if (editingOrderId && editingOrderNo) {
-        console.log('📝 Updating existing order:', editingOrderNo)
-
-        // STEP 1: Update order to draft status first (RLS requirement for order_items)
-        const orderUpdateData: any = {
-          seller_org_id: sellerOrg.id,
-          status: 'draft', // Keep as draft during item updates
-          units_per_case: useCustomUnitsPerCase && customUnitsPerCase ? parseInt(customUnitsPerCase) : unitsPerCase,
-          qr_buffer_percent: resolveQrBufferPercent(qrBuffer),
-          extra_qr_master: Math.max(0, Math.min(10, masterQrDuplicates)),
-          has_rfid: enableRFID,
-          has_points: hasPoints,
-          has_lucky_draw: enableLuckyDraw,
-          has_redeem: enableRedeem,
-          notes: notes || `Customer: ${customerName}, Phone: ${phoneNumber}, Address: ${deliveryAddress}`,
-          updated_at: new Date().toISOString()
-        }
-
-        const { error: updateError } = await supabase
-          .from('orders')
-          .update(orderUpdateData)
-          .eq('id', editingOrderId)
-
-        if (updateError) {
-          console.error('Error updating order:', updateError)
-          throw new Error(`Failed to update order: ${updateError.message}`)
-        }
-
-        // STEP 2: Delete existing order items
-        const { error: deleteItemsError } = await supabase
-          .from('order_items')
-          .delete()
-          .eq('order_id', editingOrderId)
-
-        if (deleteItemsError) {
-          console.error('Error deleting old order items:', deleteItemsError)
-          throw new Error(`Failed to update order items: ${deleteItemsError.message}`)
-        }
-
-        // STEP 3: Insert updated order items (works because order is draft)
-        const itemsToInsert = orderItems.map(item => ({
-          order_id: editingOrderId,
+      const isUpdate = Boolean(editingOrderId && editingOrderNo)
+      const saveRequest = {
+        mode: isUpdate ? 'update' : 'create',
+        orderId: isUpdate ? editingOrderId : newOrderIdRef.current,
+        requestedStatus: status,
+        expectedUpdatedAt: isUpdate ? editingOrderUpdatedAt : null,
+        sellerOrgId: sellerOrg.id,
+        unitsPerCase: useCustomUnitsPerCase && customUnitsPerCase ? parseInt(customUnitsPerCase) : unitsPerCase,
+        qrBufferPercent: resolveQrBufferPercent(qrBuffer),
+        extraQrMaster: Math.max(0, Math.min(10, masterQrDuplicates)),
+        hasRfid: enableRFID,
+        hasPoints,
+        hasLuckyDraw: enableLuckyDraw,
+        hasRedeem: enableRedeem,
+        notes: notes || `Customer: ${customerName}, Phone: ${phoneNumber}, Address: ${deliveryAddress}`,
+        items: orderItems.map(item => ({
           product_id: item.product_id,
           variant_id: item.variant_id,
           qty: item.qty,
           unit_price: item.unit_price,
-          company_id: companyId,
           ...(useIndividualCases && item.units_per_case ? { units_per_case: item.units_per_case } : {})
-        }))
+        })),
+      }
 
-        const { error: itemsError } = await supabase
-          .from('order_items')
-          .insert(itemsToInsert)
+      // One atomic request: header + items + requested status commit together or not at all.
+      // No automatic retry: an error response means nothing changed; no response means the
+      // outcome is unknown, so the user is told to check rather than blindly re-sending.
+      let response: Response
+      try {
+        response = await fetch('/api/orders/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(saveRequest),
+        })
+      } catch {
+        toast({
+          title: 'Could Not Confirm Save',
+          description: 'We lost the connection before the server replied, so we cannot tell whether the order was saved. Check the Orders list before saving again. Your form has been kept.',
+          variant: 'destructive',
+        })
+        return
+      }
 
-        if (itemsError) {
-          console.error('Error inserting updated order items:', itemsError)
-          throw new Error(`Failed to update order items: ${itemsError.message}`)
-        }
-
-        // STEP 4: Update status to submitted if requested (after items are inserted)
-        if (status === 'submitted') {
-          const { error: statusUpdateError } = await supabase
-            .from('orders')
-            .update({ status: 'submitted' })
-            .eq('id', editingOrderId)
-
-          if (statusUpdateError) {
-            console.error('Error updating order status:', statusUpdateError)
-            throw new Error(`Failed to submit order: ${statusUpdateError.message}`)
-          }
-
-          await fetch('/api/notifications/order-event', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ orderId: editingOrderId, eventCode: 'order_submitted' })
-          }).catch((error) => {
-            console.warn('Failed to queue order_submitted notification:', error)
+      const result = await response.json().catch(() => null)
+      if (!response.ok || !result?.success) {
+        const reference = result?.correlationId ? ` (ref ${String(result.correlationId).slice(0, 8)})` : ''
+        if (result?.outcome === 'not_saved') {
+          toast({
+            title: 'Order Not Saved',
+            description: `${result.message}${reference}`,
+            variant: 'destructive',
           })
-
-          // Fire-and-forget: trigger notification worker to send WhatsApp/SMS/Email immediately
-          fetch('/api/cron/notification-outbox-worker').catch(() => { })
-        }
-
-        console.log('✅ Order updated successfully:', editingOrderNo)
-
-        // Navigate back to orders list
-        if (onViewChange) {
-          onViewChange('orders')
+        } else {
+          toast({
+            title: 'Could Not Confirm Save',
+            description: `The server did not give a clear answer, so we cannot tell whether the order was saved. Check the Orders list before saving again. Your form has been kept.${reference}`,
+            variant: 'destructive',
+          })
         }
         return
       }
 
-      // CREATING NEW ORDER (not editing)
-      // For H2M orders: Get the HQ's default warehouse
-      let warehouseOrgId: string | null = null
-      if (orderType === 'H2M' && buyerOrg) {
-        const { data: hqData, error: hqError } = await supabase
-          .from('organizations')
-          .select('default_warehouse_org_id')
-          .eq('id', buyerOrg.id)
-          .single()
-
-        if (hqError) {
-          console.error('Error fetching HQ default warehouse:', hqError)
-          toast({
-            title: 'Error',
-            description: 'Failed to fetch HQ configuration. Please contact support.',
-            variant: 'destructive',
-          })
-          setSaving(false)
-          return
-        }
-
-        // For H2M orders, if the buyer (manufacturer) doesn't have a default warehouse set,
-        // we can't create the order because we don't know where to inventory the goods.
-        // TODO: Allow selecting a warehouse manually if default is not set?
-        if (!hqData?.default_warehouse_org_id) {
-          toast({
-            title: 'Configuration Error',
-            description: 'Your organization does not have a default warehouse configured. Cannot route inventory.',
-            variant: 'destructive',
-          })
-          setSaving(false)
-          return
-        }
-
-        warehouseOrgId = hqData.default_warehouse_org_id
-      }
-
-      // Note: order_no is NOT set here - the database trigger orders_before_insert() 
-      // will generate it in the format ORD-HM-YYMM-XX (for H2M), ORD-DH-YYMM-XX (for D2H), etc.
-      // The orders_auto_display_doc_no trigger will then generate display_doc_no
-
-      // Fetch seller organization's payment terms
-      const sellerOrgResponse = await ((supabase
-        .from('organizations') as any)
-        .select('*, payment_terms(*)')  // Join with payment_terms table
-        .eq('id', sellerOrg.id)
-        .single())
-
-      const sellerOrgData = sellerOrgResponse.data
-      const sellerOrgError = sellerOrgResponse.error
-
-      if (sellerOrgError) {
-        console.error('Error fetching seller payment terms:', sellerOrgError)
-      }
-
-      // Build payment_terms jsonb based on organization's payment term
-      let paymentTermsData: any = {
-        deposit_pct: 0.5,
-        balance_pct: 0.5,
-        balance_trigger: 'on_first_receive'
-      }
-
-      const sellerOrgAny = sellerOrgData as any
-      if (sellerOrgAny?.payment_terms) {
-        const depositPct = sellerOrgAny.payment_terms.deposit_percentage / 100
-        const balancePct = sellerOrgAny.payment_terms.balance_percentage / 100
-        paymentTermsData = {
-          deposit_pct: depositPct,
-          balance_pct: balancePct,
-          balance_trigger: 'on_first_receive'
-        }
-      }
-
-      // STEP 1: Always create order in 'draft' status first (required by RLS policy)
-      // Note: order_no is NOT set - database trigger will generate it
-      const orderData = {
-        order_type: orderType,
-        // order_no is auto-generated by database trigger orders_before_insert()
-        company_id: companyId,
-        buyer_org_id: buyerOrg!.id,
-        seller_org_id: sellerOrg.id,
-        warehouse_org_id: warehouseOrgId, // Set warehouse for H2M orders
-        status: 'draft' as const, // ← Always draft first! RLS policy requires this
-        units_per_case: useCustomUnitsPerCase && customUnitsPerCase ? parseInt(customUnitsPerCase) : unitsPerCase,
-        qr_buffer_percent: resolveQrBufferPercent(qrBuffer),
-        extra_qr_master: Math.max(0, Math.min(10, masterQrDuplicates)), // Clamp between 0-10
-        has_rfid: enableRFID,
-        has_points: hasPoints,
-        has_lucky_draw: enableLuckyDraw,
-        has_redeem: enableRedeem,
-        payment_terms: paymentTermsData,
-        notes: notes || `Customer: ${customerName}, Phone: ${phoneNumber}, Address: ${deliveryAddress}`,
-        created_by: userProfile.id
-      }
-
-      const { data: order, error: orderError } = await supabase
-        .from('orders')
-        .insert(orderData)
-        .select()
-        .single()
-
-      if (orderError) throw orderError
-
-      // STEP 2: Insert order items (now passes RLS check because order is 'draft')
-      const itemsToInsert = orderItems.map(item => ({
-        order_id: order.id,
-        product_id: item.product_id,
-        variant_id: item.variant_id,
-        qty: item.qty,
-        unit_price: item.unit_price,
-        company_id: companyId,
-        ...(useIndividualCases && item.units_per_case ? { units_per_case: item.units_per_case } : {})
-      }))
-
-      const { error: itemsError } = await supabase
-        .from('order_items')
-        .insert(itemsToInsert)
-
-      if (itemsError) {
-        console.error('Error inserting order items:', itemsError)
-        // Try to delete the order if items failed
-        await supabase.from('orders').delete().eq('id', order.id)
-        throw new Error(`Failed to add products to order: ${itemsError.message}`)
-      }
-
-      // STEP 3: If requested status was 'submitted', update the order
-      if (status === 'submitted') {
-        const { error: updateError } = await supabase
-          .from('orders')
-          .update({ status: 'submitted' })
-          .eq('id', order.id)
-
-        if (updateError) {
-          console.error('Error updating order status:', updateError)
-          throw new Error(`Failed to submit order: ${updateError.message}`)
-        }
-
-        await fetch('/api/notifications/order-event', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orderId: order.id, eventCode: 'order_submitted' })
-        }).catch((error) => {
-          console.warn('Failed to queue order_submitted notification:', error)
+      if (result.notification === 'failed') {
+        toast({
+          title: 'Order Saved',
+          description: 'The order was saved, but the submission notification could not be queued.',
         })
-
-        // Fire-and-forget: trigger notification worker to send WhatsApp/SMS/Email immediately
-        fetch('/api/cron/notification-outbox-worker').catch(() => { })
       }
 
       // Navigate back to orders list
@@ -1426,11 +1256,12 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
     } catch (error: any) {
       console.error('Error saving order:', error)
       toast({
-        title: 'Error Creating Order',
-        description: error.message || 'An unexpected error occurred.',
+        title: 'Order Not Saved',
+        description: 'An unexpected error occurred before the order was sent. Your form has been kept.',
         variant: 'destructive',
       })
     } finally {
+      saveInFlightRef.current = false
       setSaving(false)
     }
   }
