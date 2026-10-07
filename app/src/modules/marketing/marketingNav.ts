@@ -13,6 +13,7 @@ import {
     BookOpen,
     MessageSquare,
     PanelTop,
+    CalendarRange,
     type LucideIcon,
 } from 'lucide-react'
 
@@ -44,6 +45,7 @@ export const marketingNavGroups: MarketingNavGroup[] = [
         children: [
             { id: 'landing-pages', label: 'Landing Pages', icon: PanelTop },
             { id: 'journey-builder', label: 'Journey Builder', icon: BookOpen },
+            { id: 'event-management', label: 'Event Management', icon: CalendarRange },
             { id: 'marketing', label: 'WhatsApp Broadcast', icon: MessageSquare },
         ],
     },
@@ -68,6 +70,7 @@ export function isMarketingViewId(viewId: string): boolean {
 export const marketingViewToPath: Record<string, string> = {
     'landing-pages': 'landing-pages',
     'journey-builder': 'journey-builder',
+    'event-management': 'event-management',
     // view id "marketing" is WhatsApp Broadcast (module landing is "mktg" at /marketing)
     'marketing': 'whatsapp',
 }

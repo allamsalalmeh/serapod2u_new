@@ -236,6 +236,12 @@ z_*
 !/app/src/lib/security/phase0b-public-endpoints.test.ts
 !/app/src/app/api/admin/store/orders/route.security.test.ts
 
+# Event Management module tests are implementation artifacts
+!/app/src/modules/event-management/**/*.test.ts
+!/app/src/app/api/event-management/**/*.test.ts
+!/supabase/tests/security/event-management/
+!/supabase/tests/security/event-management/**/*.sql
+
 # Vercel
 .vercel
 

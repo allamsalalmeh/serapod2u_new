@@ -1,9 +1,18 @@
 # Event Management — Repository Assessment
 
 Read-only findings. "Verified" = observed in source/schema on the `event_management`
-branch (`origin/staging` @ `9e27404d`) unless marked **"issues-fixing-oct2 only"**.
+branch (base `origin/staging` @ `9e27404d`; current HEAD `d7388f7d`, two documentation-only
+commits ahead of staging) unless marked **"issues-fixing-oct2 only"**.
 "Proposed" = recommendation, not yet implemented. Where the live database could
 not be read, that is stated explicitly.
+
+**Access direction (latest):** initial Event Management access reuses the existing **Marketing
+parent gate** `marketing.module.view` (see §7) for navigation, admin pages and APIs, with org
+isolation. Direct database access to `event_*` tables and RPCs is **denied** to `anon`/`authenticated`
+— all access goes through server endpoints (Strategy B, see §7). `event.*` permissions, their seed
+migration, and the Full Access extension are **deferred** to a future granular-access phase, which
+depends on the shared S&A framework on `issues-fixing-oct2` (Group Policies, Full Access, destination
+navigation). See README.md for the integration sequence.
 
 ---
 
@@ -139,6 +148,17 @@ must mirror this and never accept a client-supplied staff id.
 users or mutate `users` on anonymous submission. A nullable link to `users` (or a later identity
 match) enables "new vs returning" without coupling anonymous data to auth.
 
+### Registration rules (approved)
+- **Mandatory:** name and Malaysian mobile phone. **Optional:** email, cat name, cat breed.
+- **No** OTP or SMS verification in this version.
+- Normalize to canonical E.164 `+60` via existing helpers (`normalizePhoneE164`).
+- Validate Malaysian mobile format, length and supported prefixes server-side; client validation is
+  immediate-feedback only.
+- Reuse and inspect existing validation before proposing new logic; do **not** infer the telco from
+  the prefix; format validation does not establish ownership or active service.
+- **One normalized phone per event**; first successful registration source is fixed (including booth).
+- Metrics describe **registrations**, not verified identities.
+
 ---
 
 ## 5. Business / brand / organization / program
@@ -182,23 +202,44 @@ match) enables "new vs returning" without coupling anonymous data to auth.
 Group Policies (details and editor) and People & Access". It is **display-only** (never grants).
 - `customer_growth` group currently matches `mod('customer','roadtour','ecommerce','marketing')`
   with areas `crm`, `loyalty`, `messaging`, `roadtour`, `marketing`, `outdoor`, `ecommerce`.
-- **Event Management must add a new area** `{ id:'event', name:'Event Management', match: mod('event') }`
-  and add `event` to the group's `mod(...)` match, so `event.*` keys classify as
-  "Customer & Growth · Event Management" consistently across Policies, Group Policies and Migration Modes.
+- **Deferred (future granular-access phase):** Event Management would add a new area
+  `{ id:'event', name:'Event Management', match: mod('event') }` and add `event` to the group's
+  `mod(...)` match, so `event.*` keys classify as "Customer & Growth · Event Management" across
+  Policies, Group Policies and Migration Modes. Not required for initial (parent-gate) access.
 - `labels.ts` `permissionLabel` has a fallback; add `event: 'Customer & Growth'` to its `MODULE_GROUPS`
   map (and optionally `event.*` nouns to `RESOURCES`) for correct catalogue labels.
 
-### Sidebar / page access / API authorization (target on issues-fixing-oct2)
-- One destination table `nav-access.ts` → `CUSTOMER_GROWTH_DESTINATIONS` (and `ROADTOUR_DESTINATIONS`)
-  maps each nav child id to the permission(s) that unlock it.
-- Server page guards call `resolveDestinationAccess` (`lib/server/nav-access.ts`); the per-user snapshot
-  `GET /api/security-access/me/navigation` → `useNavAccess()` drives sidebar, top nav and landing cards.
-  "Hiding navigation is not authorization": every route/API decides again.
-- Event Management therefore needs: (1) a child in `customerGrowthNav.ts` `cg-marketing`; (2) a
-  destination entry `event-management: { org: [ …event keys… ] }` in `CUSTOMER_GROWTH_DESTINATIONS`;
-  (3) `authorizeOperation`/`guardUserOperation` + `organizationResource` in every admin page/API.
-- **Consistency rule:** sidebar visibility (destination), page guard and API guard must use the same
-  `event.*` key(s) and the caller's organization scope — no surface uses a different check.
+### Existing parent gate (verified on this base)
+- Each Customer & Growth child module gates itself in its `_lib.ts` with `authorizeOperation` +
+  `organizationResource` (org id server-derived, never request input):
+  - `app/src/app/crm/_lib.ts` → `customer.crm.view`, `organizationResource('crm_module', orgId)`, legacy `HQ ≤ 50`.
+  - `app/src/app/marketing/_lib.ts` → `marketing.module.view`, `organizationResource('marketing_module', orgId)`, legacy `HQ ≤ 30`.
+  - `app/src/app/catalog/_lib.ts` → `product.catalog.view`, `organizationResource('catalog_module', orgId)`, legacy `HQ/DIST/SHOP ≤ 50`.
+- **Gap:** there is **no** Customer & Growth domain-level parent permission — the domain landing
+  (`app/src/app/customer-growth/_lib.ts`) returns `canViewCustomerGrowth = true` for all authenticated
+  users and defers to each child module. The nearest verified parent gate for Event Management
+  (placed under Marketing) is **`marketing.module.view`**.
+- **Initial Event Management access** therefore reuses `marketing.module.view` for navigation, admin
+  pages and APIs, with org isolation. Sidebar visibility alone is insufficient — every page/API
+  re-checks. "Hiding navigation is not authorization".
+
+### Database enforcement gap (Strategy B — deny direct DB access)
+- The parent permission has **no DB equivalent usable inside RLS** for `authenticated`/`anon`:
+  - S&A evaluation is server-side: `authorization.ts` `loadNewPolicy`/`evaluateNewPolicy` reads
+    `sa_organization_memberships`, `sa_role_assignments`, `sa_business_role_permissions`,
+    `sa_assignment_scopes` via the service-role client, and audits to `sa_authorization_decisions`.
+  - The DB evaluator `public.sa_readable_organizations(actor, permission)` is `SECURITY DEFINER` but
+    `REVOKE ALL … FROM public, anon, authenticated; GRANT EXECUTE … TO service_role` only
+    (`20260930100000_sa_stage2d_deferred_closure.sql` lines 124–125). It cannot run inside an RLS
+    policy evaluated for `authenticated`.
+- **Chosen strategy:** deny direct access and route everything through server endpoints.
+  - Tables: `ENABLE ROW LEVEL SECURITY` + `REVOKE ALL … FROM public, anon, authenticated` (precedent:
+    `inventory_cutoff_allocation_requests` in `20260801190000_inventory_cutoff_allocation_resolver.sql`).
+  - RPCs: `SECURITY DEFINER`, `REVOKE ALL … FROM PUBLIC`, `GRANT EXECUTE … TO service_role` only
+    (precedent: the `sa_*` functions and stock-count RPCs).
+  - Admin endpoints verify `marketing.module.view` + org scope, then use the service-role client with
+    explicit `organization_id` filtering + ownership checks. Public registration is token-scoped via
+    the public endpoint. See IMPLEMENTATION_PLAN.md §4.
 
 ### Public QR registration is outside S&A
 The public visitor has no `sa_organization_memberships` / `sa_role_assignments` / Group Policy, so
@@ -211,7 +252,7 @@ must not require — and must never grant — an admin Group Policy.
   `guardUserOperation`, `organizationResource`, `warehouseResource`, `userAllowed`.
 - `app/src/lib/security-access/modules.ts` — `MODULE_TAXONOMY` (display grouping). `customer_growth`
   group already has areas `crm`, `loyalty`, `messaging`, `roadtour`, `marketing`, `outdoor`, `ecommerce`.
-  **Event Management needs a new area here.**
+  Event Management would add a new `event` area here **only in the deferred granular-access phase**.
 - Permission catalogs `catalog.ts`, `stage2d-catalog.ts`; also present: `labels.ts`,
   `legacy-rules.ts`, `authorization.ts`, `enforcement.ts`.
 - The `sa_permissions` + `sa_migration_modes` foundation is applied on staging/production
@@ -248,10 +289,11 @@ must not require — and must never grant — an admin Group Policy.
 `origin/staging` but imports `from './nav-access'`, whose source is absent here — so the
 destination-based sidebar/permission layer is half-present.
 
-**Implication:** on this base, sidebar visibility + page/API authorization can be built with the
-existing `authorizeOperation`/`guardUserOperation` + `sa_permissions` keys + `MODULE_TAXONOMY`.
-The richer destination-based nav snapshot is only on `issues-fixing-oct2`. Document that as a
-dependency rather than merging the whole branch (see HANDOFF.md).
+**Implication:** initial Event Management access uses the existing `authorizeOperation`/
+`guardUserOperation` + the Marketing parent gate `marketing.module.view` (no new `sa_permissions`
+keys, no `MODULE_TAXONOMY` change needed). The richer destination-based nav snapshot and the
+`event.*` granular permissions are only for a future phase and depend on `issues-fixing-oct2`.
+Document that as a dependency for the future phase rather than merging the whole branch.
 
 ### Full Access coverage (precise)
 The standard "Customer & Growth Full Access" (`customer-growth-full-access`, 23 explicit keys) and the
@@ -261,6 +303,18 @@ whole Group Policies / standard-policy mechanism are introduced by
 **not** auto-extended: newly registered keys surface via `sa_standard_policy_drift()` and require
 `sa_extend_standard_policy(role_key, keys[], reason)`. **Conclusion:** `event.*` will NOT be covered by
 Customer & Growth Full Access until explicitly extended. Surface the drift; do not silently modify grants.
+This extension is **deferred** to the future granular-access phase (not required for initial access,
+which uses the Marketing parent gate).
+
+### Branch strategy for the deferred dependency (confirmed)
+- The shared S&A framework on `issues-fixing-oct2` is required only for the **deferred** `event.*`
+  granular-access phase, not for initial (parent-gate) access.
+- Do **not** merge `issues-fixing-oct2` wholesale, move the Event Management module there, or build a
+  parallel S&A/navigation framework.
+- Preferred sequence (for the future phase): complete/validate shared S&A → integrate approved S&A to
+  `staging` → update `event_management` from `staging` → add `event.*` against the shared framework.
+- Selective cherry-picking of complete S&A dependency commits is an option **only after** dependency
+  review; not authorized now. See README.md / HANDOFF.md.
 
 ## 8. Public form protections & rate limiting
 
@@ -325,11 +379,15 @@ Customer & Growth Full Access until explicitly extended. Surface the drift; do n
 
 1. **Dual nav systems** (`customer-growth` vs `marketing` modules) must both be reconciled so Event
    Management appears consistently in the overview card and top dropdown.
-2. **S&A destination layer is half-present on this base** (see §7) — decide the dependency before
-   wiring sidebar visibility.
-3. **Ellbow brand logo may only exist as DB data** (`brands.logo_url`) not readable here.
-4. **Duplicate detection requires a canonical identity**; phone-only dedupe misses no-phone/no-email
-   visitors (see IMPLEMENTATION_PLAN § duplicate rules).
+2. **S&A destination layer is half-present on this base** (see §7) — only needed for the future
+   granular-access phase; initial sidebar visibility uses the Marketing parent gate `marketing.module.view`.
+3. **Ellbow brand logo may only exist as DB data** (`brands.logo_url`) — a read-only technical
+   verification, not a business decision; keep it pending if DB access is unavailable. Use the
+   verified Journey Builder assets (see §2) as the design reference; do not invent paths or create
+   brand data.
+4. **Duplicate detection is now phone-mandatory:** `UNIQUE (event_id, phone_normalized)` on
+   `event_contacts` plus `UNIQUE (event_id, contact_id)` on `event_registrations`; phone is
+   `NOT NULL`, so there is no no-phone dedupe gap.
 5. **Registration consent vs marketing consent** must stay separate; no consent table exists today
    (grep for "consent" found no domain model).
 

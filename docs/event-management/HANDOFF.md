@@ -5,37 +5,72 @@
 1. `README.md` — status, branch/base, scope.
 2. `ASSESSMENT.md` — verified evidence, reusable pieces, risks, Ellbow assets, migration naming.
 3. `IMPLEMENTATION_PLAN.md` — folder/route layout, data model, permissions, API, phases, tests.
-4. This file — decisions, approved vs proposed, next step, prompt.
+4. This file — decisions, confirmed vs pending vs proposed, next step, prompt.
 
-Do not start implementation until the user reviews these findings and answers the open questions.
+The core business decisions are now approved (see "Confirmed this round"). Initial implementation
+may start once separately authorized, gated by the existing Marketing parent access
+(`marketing.module.view`); the `event.*` permissions / Full Access extension are deferred to a future
+granular-access phase.
 
 ---
 
-## Decisions still requiring user answers (blocking)
+## Confirmed this round (latest user decisions)
 
-1. **Contact fields required vs optional** — Name / Phone / Email / Cat name / Cat breed /
-   current cat food. Which are required on the public form?
-2. **Duplicate rule** — confirm "one normalized phone per event" (`unique(event_id, phone_normalized)`),
-   or allow email-only / name-only dedupe.
-3. **First staff attribution** — confirm it stays fixed once set (a later resubmission never
-   overwrites the first valid staff).
-4. **Permission naming** — confirm the proposed 3-part `event.*` keys
-   (`event.event.view`, `event.event.manage`, `event.registration.view`, `event.report.view`,
-   `event.registration.export`) vs folding under `customer.*`; and whether export needs its own
-   `.export` action or reuses `.view` (see IMPLEMENTATION_PLAN.md §3).
-5. **Full Access extension** — confirm whether `customer-growth-full-access` should be extended with
-   `event.*` via `sa_extend_standard_policy(...)`. It is **not** auto-extended and only exists on
-   `issues-fixing-oct2`; do not silently modify it.
-6. **S&A base dependency** — build sidebar/visibility on the **existing** `authorizeOperation` +
-   `MODULE_TAXONOMY` (available on this branch), or depend on the newer `nav-access.ts` /
-   `group-policies.ts` layer that only exists on `issues-fixing-oct2`. Merging that whole branch is
-   out of scope.
-7. **Ellbow brand link** — confirm whether an Ellbow `brands` row (and `logo_url`) exists in the
-   database; the checkout cannot read live DB data.
+### S&A / parent-access direction (agreed)
 
-## Approved (confirmed by the user this round)
+- **Initial access uses the existing parent gate.** Event Management sits under Customer & Growth →
+  Marketing (below Road Tour), so it reuses the existing Marketing module-entry permission
+  `marketing.module.view` (see `app/src/app/marketing/_lib.ts`) via
+  `authorizeOperation`/`guardUserOperation` + `organizationResource('marketing_module', orgId)`, for
+  navigation, admin pages and APIs, with org isolation. Sidebar visibility alone is insufficient.
+- **Gap:** there is no Customer & Growth domain-level parent permission — the domain landing returns
+  `canViewCustomerGrowth = true` for all authenticated users.
+- **Database enforcement (Strategy B):** the parent permission has no DB equivalent usable inside RLS
+  (S&A evaluation is server-side; `sa_readable_organizations` is service-role only). So `event_*`
+  tables and RPCs deny direct access to `anon`/`authenticated` (RLS enabled + table grants revoked +
+  RPC `PUBLIC` EXECUTE revoked). Admin endpoints verify `marketing.module.view` + org scope and use
+  the service-role client with explicit org filtering; public registration is token-scoped. See
+  IMPLEMENTATION_PLAN.md §4.
+- **Deferred granular-access phase:** `event.*` permissions, their seed migration, and the Customer &
+  Growth Full Access extension are deferred. The shared S&A framework (Group Policies, Full Access,
+  destination navigation) on `issues-fixing-oct2` is required only for that future phase.
+  Preferred sequence: complete/validate S&A → integrate to `staging` → update `event_management` →
+  then add `event.*`. Do not merge the branch wholesale, do not create a parallel framework, and do
+  not silently extend Full Access.
+- Admin functionality must not be activated without authorization.
+- Do **not** move the Event Management module into `issues-fixing-oct2`, and do **not** merge, rebase,
+  or cherry-pick anything as part of this planning work.
 
-- Base branch: `origin/staging` @ `9e27404d`; new branch `event_management`.
+### Registration rules (approved)
+
+- **Mandatory:** name and Malaysian mobile phone. **Optional:** email, cat name, cat breed.
+- **No** OTP or SMS verification in this version.
+- Normalize to canonical E.164 `+60` using existing helpers (`normalizePhoneE164`).
+- Validate Malaysian mobile format, length, and supported prefixes on the server; client validation
+  provides immediate feedback only.
+- Reuse and inspect existing validation before proposing new logic.
+- Do **not** infer the current telco from the prefix.
+- Format validation does not establish ownership or active service.
+- **One normalized phone per event** (`UNIQUE (event_id, phone_normalized)` on `event_contacts`,
+  `phone_normalized` `NOT NULL`).
+- **First successful registration source is fixed, including booth:** booth → staff A stays booth;
+  staff A → staff B stays staff A.
+- Duplicate submissions never overwrite personal details, consent, the original QR source, or staff
+  attribution.
+- Metrics describe **registrations**, not verified identities.
+
+---
+
+## Technical verification (read-only, not a business decision)
+
+- **Ellbow `brands` row / `logo_url` existence** is a technical verification task, not a question the
+  user must answer from memory. Keep the read-only DB check pending while live DB access is
+  unavailable. Use the identified Journey Builder assets as the design reference; do not invent
+  paths, silently create brand data, or claim live DB findings.
+
+## Previously approved (unchanged)
+
+- Base branch: `origin/staging` @ `9e27404d`; branch `event_management`.
 - Place Event Management under **Customer & Growth → Marketing**, directly below **Road Tour**, in
   both the overview card and the top dropdown.
 - Group S&A permissions under **Customer & Growth → Event Management** consistently in Policies,
@@ -46,31 +81,66 @@ Do not start implementation until the user reviews these findings and answers th
 - Do **not** silently modify existing grants (e.g. `customer-growth-full-access`).
 - This round is assessment + documentation only; no implementation.
 
-## Proposed (not yet approved)
+---
+
+## Proposed (not yet approved — recommendations)
 
 - Folder layout `app/src/modules/event-management/` (not `app/src/features/`).
-- 3-part `event.*` permission keys (`event.event.view`, `event.event.manage`,
-  `event.registration.view`, `event.report.view`, `event.registration.export`) + the permission
-  matrix and S&A wiring steps in IMPLEMENTATION_PLAN.md §3.
-- `modules.ts` `event` area + `labels.ts` `MODULE_GROUPS` entry (Customer & Growth → Event Management).
-- Data model (6 tables) and the `event01`–`event04` migration sequence.
-- Duplicate/attribution rules in IMPLEMENTATION_PLAN.md §5.
+- **Deferred granular-access phase (not required for initial implementation):** the five proposed
+  `event.*` keys — `event.event.view`, `event.event.manage`, `event.registration.view`,
+  `event.report.view`, and the separate `event.registration.export` — plus their `sa_permissions`
+  seed and `modules.ts` `event` area + `labels.ts` `MODULE_GROUPS` entry. These are recommendations,
+  **not** approved grants; registering a permission and granting it are different operations.
+- Full Access extension (deferred): `customer-growth-full-access` would require
+  `sa_extend_standard_policy(...)` to cover `event.*`; it is **not** auto-extended, and the extension
+  is explicit, not silent. Do not silently extend existing Full Access policies without approval.
+- Data model (6 tables) and the `event01`–`event03` migration sequence under `supabase/migrations/`
+  (naming `YYYYMMDD_eventNN_short_description.sql`).
+- QR source of truth: `event_qr_tokens` holds both staff and booth tokens (no `booth_qr_token` column
+  on `event_events`).
+- Registration date defaults and admin overrides — see IMPLEMENTATION_PLAN.md §3–§5.
 
-## What may start next (after review)
+## What was implemented (initial phase — done and locally verified)
 
-- **Phase 1 only**: data model + migrations + `event.*` permission seeding + `modules.ts` event area.
-  This is low-risk and unblocks everything else.
+- **Initial implementation is complete** on `event_management`, gated by the existing Marketing
+  parent access `marketing.module.view` (no `event.*` keys). Schema/migrations (event01–event03),
+  shared helpers (`app/src/modules/event-management/`), admin pages/APIs
+  (`app/src/app/marketing/event-management/…`, `app/src/app/api/event-management/…`), public
+  registration (`/event/[token]` + `POST /api/event-management/public/register`), visitors/stats/
+  export, and navigation (below Road Tour) are all implemented.
+- **Verification completed:**
+  - Production build (`next build`) — clean: 518/518 pages, no errors/warnings, all 13 event
+    routes present (`/api/event-management/*`, `/event/[token]`, `/marketing/event-management*`).
+  - 45 Event Management Vitest tests pass — admin API authorization (no `marketing.module.view` →
+    403; cross-org event/contact/token IDs → denied/null; service-role queries assert an explicit
+    `organization_id` filter), registration validation, attribution, duplicate, export
+    formula-injection, nav, and jsdom component renders of the public form + admin landing view.
+  - Real-database tests (isolated disposable Postgres 17, synthetic fixtures): 26 assertions +
+    a two-connection concurrency check for same-phone dedupe.
+  - Isolated `next start` preview smoke test: public page renders its fallback (200), admin page
+    + detail page redirect to `/login` (307), admin API returns 401 without a session, public
+    register returns 400 on invalid phone (validation before DB).
+  - Remaining limitations: no live Supabase credentials / browser, so no end-to-end authenticated
+    admin render or live Ellbow brand/logo check; the 3 pre-existing inventory test failures are
+    baseline and unrelated.
+- **Migrations are CREATED / NOT APPLIED** — the user must apply `20261007_event01` → `event02` →
+  `event03` manually, in order, and record the result in
+  `supabase/migrations/PRODUCTION_MIGRATION_STATUS.md`.
 
-## What remains blocked
+## What remains blocked / deferred
 
-- Public registration form content until decision 1 is answered.
-- Sidebar/visibility wiring until decision 5 is answered.
-- New/returning identity semantics until decision 2 (and the identity-link design) is confirmed.
+- The `event.*` granular-access phase (permissions, seed migration, Full Access extension) and
+  destination-based navigation mapping (`nav-access.ts`) wait for the shared S&A framework on
+  `issues-fixing-oct2` via the agreed sequence (complete/validate S&A → integrate to staging →
+  update `event_management`).
+- Live Ellbow `brands` row / `logo_url` verification remains a read-only technical check (no live DB
+  access was available); the verified Journey Builder assets were reused and no brand data was
+  created.
 
 ## Update these documents as implementation progresses
 
-- Move a decision from "pending" to "approved" in this file when the user confirms it.
-- Mark ASSESSMENT.md findings that change (e.g. once `nav-access.ts` is available on the base).
+- Move a decision from "pending"/"proposed" to "confirmed" in this file when the user approves it.
+- Mark ASSESSMENT.md findings that change (e.g. once `nav-access.ts` is available on the branch).
 - Tick off phases and record acceptance results in IMPLEMENTATION_PLAN.md.
 - Update `README.md` "Status" when development begins.
 - Update `supabase/migrations/PRODUCTION_MIGRATION_STATUS.md` in the same commit as each migration.
@@ -80,16 +150,32 @@ Do not start implementation until the user reviews these findings and answers th
 ## Ready-to-copy prompt for the next session
 
 ```
-You are working on the `event_management` branch (base origin/staging @ 9e27404d) of Serapod2U.
+You are working on the `event_management` branch of Serapod2U (base origin/staging @ 9e27404d,
+currently 2 documentation-only commits ahead of staging).
 First read docs/event-management/README.md, ASSESSMENT.md, IMPLEMENTATION_PLAN.md, and HANDOFF.md.
-Implement only Phase 1 (data model + migrations + event.* permission seeding in sa_permissions with
-sa_migration_modes mode NEW_ENFORCED + modules.ts event area + labels.ts MODULE_GROUPS entry).
-Follow the repository conventions recorded in those docs: app/src/modules/event-management/,
-server-side QR token resolution, E.164 phone normalization via app/src/utils/phone.ts,
-authorizeOperation/guardUserOperation + organizationResource for org-scoped authorization, and the
-manual migration workflow tracked in supabase/migrations/PRODUCTION_MIGRATION_STATUS.md. Public QR
-registration stays outside S&A (service-role token resolution, no Group Policy). Do not push, merge,
-deploy, or run migrations yourself — I run them manually. Write Vitest tests colocated with source
-(add the required .gitignore un-ignore rules). Show me the migration files and the diff before I
-apply anything.
+Confirmed decisions are recorded in HANDOFF.md (name + Malaysian mobile phone mandatory, no OTP/SMS,
+email/cat name/cat breed optional, E.164 +60 normalization, one normalized phone per event, first
+successful registration source fixed including booth, duplicates never overwrite).
+Initial access reuses the existing Marketing parent gate `marketing.module.view` (see
+app/src/app/marketing/_lib.ts) via authorizeOperation/guardUserOperation + organizationResource with
+org isolation — do not introduce event.* permissions yet. Deny direct event_* table/RPC access to
+anon/authenticated (RLS enabled + revoke table grants + revoke RPC PUBLIC EXECUTE, grant to
+service_role only); route all access through server endpoints using the service-role client with
+explicit organization filtering and event/contact/token ownership checks. The event.* permissions,
+their seed migration, and the Full Access extension are deferred to a future granular-access phase
+that depends on the shared S&A framework on issues-fixing-oct2 (complete + validate S&A -> integrate
+to staging -> update event_management from staging). Do not create a parallel framework or merge that
+branch.
+Implement only the independently-authorized work (schema planning + migration preparation + UI +
+admin pages/APIs gated by the parent permission). Use the conventions in those docs:
+app/src/modules/event-management/, server-side QR token resolution, E.164 phone normalization via
+app/src/utils/phone.ts, and the single atomic registration RPC. Enforce
+NOT NULL name/phone and UNIQUE(event_id, phone_normalized) on event_contacts plus
+UNIQUE(event_id, contact_id) on event_registrations. Public QR registration stays outside S&A
+(service-role token resolution, no Group Policy). Manual migrations tracked in
+supabase/migrations/PRODUCTION_MIGRATION_STATUS.md (I run them manually). Do not push, merge, rebase,
+cherry-pick, deploy, or run migrations yourself. Write Vitest tests colocated with source (add the
+required .gitignore un-ignore rules), and add real database tests for the constraints and the atomic
+RPC behavior — mocked route tests alone do not prove those guarantees. Show me the migration files
+and the diff before I apply anything.
 ```

@@ -28,6 +28,7 @@ import {
     LogIn,
     Map,
     Music2,
+    CalendarRange,
     type LucideIcon,
 } from 'lucide-react'
 import { isCrmViewId } from '@/modules/crm/crmNav'
@@ -35,6 +36,7 @@ import { isMarketingViewId } from '@/modules/marketing/marketingNav'
 import { isLoyaltyViewId } from '@/modules/loyalty/loyaltyNav'
 import { isCatalogViewId } from '@/modules/catalog/catalogNav'
 import { isRoadtourViewId } from '@/modules/roadtour/roadtourNav'
+import { isEventManagementViewId } from '@/modules/event-management/eventManagementNav'
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -119,6 +121,7 @@ export const customerGrowthNavGroups: CustomerGrowthNavGroup[] = [
             { id: 'landing-pages', label: 'Landing Pages', icon: PanelTop, route: '/marketing/landing-pages', description: 'Curated public campaign pages with product attribution', href: '/marketing/landing-pages' },
             { id: 'journey-builder', label: 'Journey Builder', icon: BookOpen, route: '/marketing/journey-builder', description: 'Automated consumer journeys', href: '/marketing/journey-builder' },
             { id: 'roadtour', label: 'Road Tour', icon: Map, route: '/roadtour', description: 'Field-visit verification with QR codes, surveys, and rewards', href: '/roadtour' },
+            { id: 'event-management', label: 'Event Management', icon: CalendarRange, route: '/marketing/event-management', description: 'Create events, assign staff and track visitor registrations via QR', href: '/marketing/event-management' },
             { id: 'marketing', label: 'WhatsApp Broadcast', icon: MessageSquare, route: '/marketing/whatsapp', description: 'Outbound WhatsApp messaging', href: '/marketing/whatsapp' },
         ],
     },
@@ -203,7 +206,8 @@ export function isCustomerGrowthViewId(viewId: string): boolean {
         isLoyaltyViewId(viewId) ||
         isCatalogViewId(viewId) ||
         isEcommerceViewId(viewId) ||
-        isRoadtourViewId(viewId)
+        isRoadtourViewId(viewId) ||
+        isEventManagementViewId(viewId)
 }
 
 /** Determine which child module a view belongs to (returns module id, or null) */
@@ -214,6 +218,7 @@ export function getActiveCustomerGrowthModule(viewId: string): string | null {
     if (isCatalogViewId(viewId)) return 'catalog'
     if (isEcommerceViewId(viewId)) return 'ecommerce'
     if (isRoadtourViewId(viewId)) return 'mktg'
+    if (isEventManagementViewId(viewId)) return 'mktg'
     return null
 }
 
@@ -225,6 +230,7 @@ export function getActiveCustomerGrowthGroup(viewId: string): string | null {
     if (isCatalogViewId(viewId)) return 'cg-catalog'
     if (isEcommerceViewId(viewId)) return 'cg-ecommerce'
     if (isRoadtourViewId(viewId)) return 'cg-marketing'
+    if (isEventManagementViewId(viewId)) return 'cg-marketing'
     return null
 }
 

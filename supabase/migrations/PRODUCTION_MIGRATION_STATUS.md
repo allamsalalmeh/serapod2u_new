@@ -2,7 +2,7 @@
 
 **Living document.** Update it in the same commit as every new migration, and again whenever a migration is applied to staging or production (see [How to update this file](#how-to-update-this-file)).
 
-Last updated: **2026-10-06 15:00 MYT (+08:00)** — `20261006110000` and `20261006150000` (TikTok Shop) applied and verified on production in one transaction. `20261005150000` staging applied, production pending. `20261005130000` applied and verified on production 2026-10-05 13:05.
+Last updated: **2026-10-07 MYT (+08:00)** — added the Event Management module migrations `20261007_event01`/`event02`/`event03` as **CREATED / NOT APPLIED** (schema, QR functions, constraints). No existing-environment migration was run for these files; they were validated only in an isolated disposable test database. `20261006110000` and `20261006150000` (TikTok Shop) applied and verified on production in one transaction. `20261005150000` staging applied, production pending.
 
 Original full audit: 2026-10-01 15:07 MYT at `2961c21a` (read-only; every row below up to `20260930100000` comes from it unless the change log says otherwise).
 
@@ -13,8 +13,13 @@ This report records **database state**, not merely whether a file is present on 
 | Order | Migration | Staging | Production |
 |---|---|---|---|
 | 1 | `20261005150000_manufacturer_product_categories.sql` | Verified applied (2026-10-05) | **Pending** |
+| 2 | `20261007_event01_create_event_tables.sql` | **CREATED / NOT APPLIED** | **CREATED / NOT APPLIED** |
+| 3 | `20261007_event02_event_qr_functions.sql` | **CREATED / NOT APPLIED** | **CREATED / NOT APPLIED** |
+| 4 | `20261007_event03_event_constraints_verify.sql` | **CREATED / NOT APPLIED** | **CREATED / NOT APPLIED** |
 
 Production pending: `20261005150000` (new table only; ship with the manufacturer Product Categories card). Last cleared: `20261006110000` + `20261006150000` verified on production 2026-10-06 15:00; `20261005130000` verified on production 2026-10-05 13:05. Everything earlier: the first nine checks `true` on both, 2026-10-02; the three `_sms` checks `true` on both, 2026-10-02 10:35.
+
+Event Management (`event01` → `event02` → `event03`): **CREATED, not applied anywhere** — the user runs these manually, in order, and then records the application here. Each file documents its purpose, prerequisites, execution order, verification queries and rollback. These were validated only in an isolated disposable test database with synthetic fixtures (see `supabase/tests/security/event-management/event_management.sql`); no existing local/staging/production database was touched.
 
 ## Executive result
 
@@ -166,6 +171,7 @@ The repository's `.gitignore` explicitly re-includes `supabase/migrations/**/*.m
 
 | Date (MYT) | Change |
 |---|---|
+| 2026-10-07 | Added `20261007_event01_create_event_tables.sql`, `20261007_event02_event_qr_functions.sql`, `20261007_event03_event_constraints_verify.sql` (Event Management module: 6 `event_*` tables with RLS on + privileges revoked from anon/authenticated and granted to service_role; `validate_event_qr_token` and atomic `register_event_visitor` RPCs with PUBLIC EXECUTE revoked; composite FKs + partial unique indexes). **CREATED / NOT APPLIED** — validated only in an isolated disposable Postgres 17 database: 26 SQL assertions + a two-connection concurrency check (same-phone dedupe → one contact + one registration). App-side verification: `next build` clean (518/518 pages, no errors/warnings); 45 Event Management Vitest tests pass (authorization gate, cross-org scoping, validation, attribution, export formula-injection, nav, jsdom component renders); authorization coverage gate passes. Remaining pre-existing (unrelated) inventory test failures are baseline. Do not apply to staging/production yet. |
 | 2026-10-06 15:00 | `20261006110000_tiktok_shop_import.sql` + `20261006150000_tiktok_shop_api_connection.sql` applied to production in one transaction (pre-state recorded locally: no `marketplace_*` tables) and verified: six tables, RLS on, no policies, no `anon`/`authenticated` privileges, `service_role` write, unique keys. Shipped to production via PR #71. Real SeraOutdoor test data removed from staging afterwards (only the fake "Demo Outdoor" shop remains). |
 | 2026-10-06 12:45 | Added `20261006150000_tiktok_shop_api_connection.sql` (TikTok Shop API connection per shop, new table only). Applied to staging in one transaction and verified (26 columns, RLS on, no policies, no `anon`/`authenticated` privileges, unique external shop key, 0 rows). Production pending, after `20261006110000`. |
 | 2026-10-06 11:30 | Added `20261006110000_tiktok_shop_import.sql` (E-commerce TikTok Shop import, new tables only). Applied to staging in one transaction and verified (five tables, RLS on, no policies, no `anon`/`authenticated` privileges). End-to-end import test on staging with fake files only (shop "Demo Outdoor"). Production pending. |
