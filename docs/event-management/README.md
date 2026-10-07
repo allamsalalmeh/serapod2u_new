@@ -1,15 +1,14 @@
 # Event Management Module — Planning Documents
 
-> **Status: Initial implementation complete and locally verified (Phase 1–5).**
-> Schema/migrations, shared helpers, admin pages/APIs, public registration,
-> visitors/stats/export and navigation are implemented on `event_management`.
-> Verification: production build clean; 45 Event Management Vitest tests pass
-> (including admin API authorization + cross-org scoping); 26 real-DB SQL
-> assertions + a concurrency check pass in an isolated disposable database; an
-> isolated `next start` preview smoke-tested the public/admin pages and API
-> gate. Migrations are **CREATED / NOT APPLIED** — awaiting the user's manual
+> **Status: implemented (Phase 1–5), locally verified, and integrated into
+> `issues-fixing-oct2`.** The module is now developed on the
+> `issues-fixing-oct2` branch in `/Users/edierwan/serapod2u_dev`. `event_management`
+> (source branch) was merged locally (merge commit `9129fc09`) and its Event
+> Management navigation adapted to the destination-based S&A navigation framework
+> (`CUSTOMER_GROWTH_DESTINATIONS['event-management']` gated by `marketing.module.view`).
+> Migrations remain **CREATED / NOT APPLIED** — awaiting the user's manual
 > migration step (see `supabase/migrations/PRODUCTION_MIGRATION_STATUS.md`).
-> No push/merge/deploy was performed.
+> No push/deploy was performed.
 
 This folder is the entry point for the next coder working on the Event
 Management module. It records what was verified in the repository, what is

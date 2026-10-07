@@ -127,15 +127,33 @@ granular-access phase.
   `event03` manually, in order, and record the result in
   `supabase/migrations/PRODUCTION_MIGRATION_STATUS.md`.
 
+## Integration into `issues-fixing-oct2` (complete)
+
+- `event_management` was merged **locally** into `issues-fixing-oct2` (merge commit `9129fc09`,
+  parent `a19d2e65`). The module is now developed in `/Users/edierwan/serapod2u_dev`.
+- Conflict resolution: `CreateOrderView.tsx` keeps the atomic `save_order_with_items` RPC (from
+  staging) **and** the QR-buffer refactor (issues-fixing-oct2); `PRODUCTION_MIGRATION_STATUS.md`
+  unions both branches' migration entries; the subsequent `EditOrganizationView.tsx` /
+  `route-coverage.ts` conflicts from the in-flight work were resolved to the newer
+  issues-fixing-oct2 implementations and a union of route-coverage entries.
+- Event Management navigation was adapted to the destination-based S&A framework:
+  `CUSTOMER_GROWTH_DESTINATIONS['event-management'] = marketingChild()` (module entry
+  `marketing.module.view` alone, no `event.*` keys). The `customerGrowthNav` child sits below Road
+  Tour and is filtered by the per-user navigation snapshot.
+- In-flight S&A/notification/HR/finance work in `/Users/edierwan/serapod2u_dev` was preserved via a
+  `git stash` checkpoint (`stash@{0}`) and restored afterwards; it remains uncommitted.
+
 ## What remains blocked / deferred
 
-- The `event.*` granular-access phase (permissions, seed migration, Full Access extension) and
-  destination-based navigation mapping (`nav-access.ts`) wait for the shared S&A framework on
-  `issues-fixing-oct2` via the agreed sequence (complete/validate S&A → integrate to staging →
-  update `event_management`).
+- The `event.*` granular-access phase (permissions, seed migration, Full Access extension) remains
+  deferred; it needs the shared S&A framework finalized on `issues-fixing-oct2` (complete/validate
+  S&A → integrate to staging).
 - Live Ellbow `brands` row / `logo_url` verification remains a read-only technical check (no live DB
   access was available); the verified Journey Builder assets were reused and no brand data was
   created.
+- The three Event Management migrations (`20261007_event01`/`event02`/`event03`) are **CREATED /
+  NOT APPLIED** — apply them manually, in order, then record the result in
+  `supabase/migrations/PRODUCTION_MIGRATION_STATUS.md`.
 
 ## Update these documents as implementation progresses
 

@@ -1,13 +1,10 @@
 # Event Management — Implementation Plan
 
-Status: **implemented (Phase 1–5) on `event_management` and locally verified.** The initial
-module is built per the conventions below. Verification: production build clean (518/518 pages);
-45 Event Management Vitest tests pass (admin API authorization, cross-org scoping, validation,
-attribution, duplicate, export formula-injection, nav, jsdom component renders); 26 real-DB SQL
-assertions + a concurrency check pass in an isolated disposable database; an isolated `next start`
-preview smoke-tested the public/admin pages and API gate. Migrations are **CREATED / NOT APPLIED**
-(awaiting the user's manual migration step). The `event.*` granular-access phase remains
-**deferred**.
+Status: **implemented (Phase 1–5), locally verified, and integrated into `issues-fixing-oct2`**
+(now developed in `/Users/edierwan/serapod2u_dev`). The source `event_management` branch was
+merged locally (merge commit `9129fc09`) and Event Management navigation adapted to the
+destination-based S&A navigation framework. Migrations are **CREATED / NOT APPLIED** (awaiting
+the user's manual migration step). The `event.*` granular-access phase remains **deferred**.
 
 **Access model:** initial Event Management access reuses the existing **Marketing parent gate**
 `marketing.module.view` (see `app/src/app/marketing/_lib.ts`) via `authorizeOperation`/
