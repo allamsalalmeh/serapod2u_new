@@ -15,6 +15,9 @@ H="$ROOT/supabase/tests/security/sa_root_access"
 P=(psql -X -q -v ON_ERROR_STOP=1 "$URL")
 block() { awk -v s="$2" -v e="$3" 'index($0, s) == 1 {p=1} p {print} p && index($0, e) == 1 {p=0}' "$M/$1.sql" | "${P[@]}"; }
 "${P[@]}" -f "$SP/00_bootstrap.sql"
+# Supabase default privileges: every new public function/table/sequence is granted to anon, authenticated AND
+# service_role. Without this a migration that forgets to revoke service_role passes here and fails on staging.
+"${P[@]}" -c "alter default privileges in schema public grant all on functions to anon, authenticated, service_role; alter default privileges in schema public grant all on tables to anon, authenticated, service_role; alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;"
 echo "-- migration 20260927140000_sa_wave1_foundation"; "${P[@]}" -f "$M/20260927140000_sa_wave1_foundation.sql"
 "${P[@]}" -c "alter table public.sa_permissions add column if not exists audit_sensitivity text not null default 'security_sensitive'; alter table public.sa_permissions add constraint sa_permissions_audit_sensitivity_valid check (audit_sensitivity in ('ordinary','security_sensitive')); alter function public.sa_save_business_role(uuid,uuid,text,text,text,text[]) set search_path = pg_catalog, pg_temp; alter function public.sa_reject_decision_mutation() set search_path = pg_catalog, pg_temp;"
 apply() { echo "-- migration $1"; "${P[@]}" -f "$M/$1.sql"; }
@@ -43,7 +46,7 @@ block 20260930100000_sa_stage2d_deferred_closure 'create or replace function pub
 block 20260930100000_sa_stage2d_deferred_closure 'create or replace function public.sa_actor_dominates' 'grant execute on function public.sa_actor_dominates'
 "${P[@]}" -f "$EA/05_auth_mfa_standins.sql"
 "${P[@]}" -f "$EA/10_fixtures.sql"
-apply 20261024100000_sa_emergency_access_grant_flow
+if [ -n "${EMERGENCY_SQL:-}" ]; then echo "-- migration (override) $EMERGENCY_SQL"; "${P[@]}" -f "$EMERGENCY_SQL"; else apply 20261024100000_sa_emergency_access_grant_flow; fi
 "${P[@]}" -f "$H/10_fixtures.sql"
 # Negative control + baseline decisions of every person before Root Access exists.
 echo "== 20_before_tests.sql"; "${P[@]}" -o /dev/null -f "$H/20_before_tests.sql"
