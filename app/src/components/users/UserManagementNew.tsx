@@ -299,6 +299,10 @@ export default function UserManagementNew({
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [selectedUsers, setSelectedUsers] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
+  // Divider on the pinned Actions column only while table content is
+  // actually scrolled underneath it; on wide screens it is just noise.
+  const [usersTableEl, setUsersTableEl] = useState<HTMLTableElement | null>(null);
+  const [actionsCoverContent, setActionsCoverContent] = useState(false);
   const [pageSize, setPageSize] = useState<number>(20);
   const [organizationDialogOpen, setOrganizationDialogOpen] = useState(false);
   const [organizationLoading, setOrganizationLoading] = useState(false);
@@ -349,6 +353,24 @@ export default function UserManagementNew({
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isReady]);
+
+  useEffect(() => {
+    const scroller = usersTableEl?.parentElement;
+    if (!scroller) return;
+    const update = () =>
+      setActionsCoverContent(
+        scroller.scrollLeft + scroller.clientWidth < scroller.scrollWidth - 1,
+      );
+    update();
+    scroller.addEventListener("scroll", update, { passive: true });
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(update) : null;
+    observer?.observe(scroller);
+    observer?.observe(usersTableEl);
+    return () => {
+      scroller.removeEventListener("scroll", update);
+      observer?.disconnect();
+    };
+  }, [usersTableEl]);
 
   useEffect(() => {
     if (!isReady || !editUserId) return;
@@ -1983,7 +2005,7 @@ export default function UserManagementNew({
                   org-type filter returns; the Table wrapper is the only horizontal
                   scroller and Actions stays pinned right from md up. */}
               <div className="border rounded-lg overflow-hidden">
-                <Table className="table-fixed min-w-[1180px]">
+                <Table ref={setUsersTableEl} className="table-fixed min-w-[1200px]">
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-10">
@@ -2072,7 +2094,7 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead className="w-[144px] whitespace-nowrap">
+                      <TableHead className="w-[164px] whitespace-nowrap">
                         <button
                           onClick={() => handleSort("last_login_at")}
                           className="flex items-center gap-1 hover:text-[var(--sera-ink)] transition-colors font-medium"
@@ -2089,7 +2111,7 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead className="w-[192px] px-2 text-right whitespace-nowrap bg-white md:sticky md:right-0 md:z-10 md:shadow-[inset_1px_0_0_var(--sera-line)]">
+                      <TableHead className={`w-[192px] px-2 text-right whitespace-nowrap bg-white md:sticky md:right-0 md:z-10 ${actionsCoverContent ? "md:shadow-[inset_1px_0_0_var(--sera-line)]" : ""}`}>
                         Actions
                       </TableHead>
                     </TableRow>
@@ -2249,7 +2271,7 @@ export default function UserManagementNew({
                             </span>
                           </div>
                         </TableCell>
-                        <TableCell className="px-2 text-right bg-white group-hover:[background-color:color-mix(in_srgb,var(--sera-ink)_2%,white)] md:sticky md:right-0 md:z-10 md:shadow-[inset_1px_0_0_var(--sera-line)]">
+                        <TableCell className={`px-2 text-right bg-white group-hover:[background-color:color-mix(in_srgb,var(--sera-ink)_2%,white)] md:sticky md:right-0 md:z-10 ${actionsCoverContent ? "md:shadow-[inset_1px_0_0_var(--sera-line)]" : ""}`}>
                           <TooltipProvider delayDuration={150}>
                             <div className="flex flex-nowrap items-center justify-end gap-1">
                               {hasConsumerLaneConfirmation(user) && (
