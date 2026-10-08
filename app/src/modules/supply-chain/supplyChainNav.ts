@@ -180,9 +180,17 @@ export function canAccessSupplyChainView(
     viewId: string,
     orgType?: string,
     roleLevel?: number,
+    /**
+     * The order-editor answer from useOrderCreateAccess (S&A once supply_chain.order.create is enforced, else the
+     * level-40 rule). Omitted = the legacy rule. Replaces only the role level; organization rules stay.
+     */
+    orderEditorAllowed?: boolean,
 ): boolean {
     if (viewId === 'supply-chain') return true
-    if (viewId === 'create-order') return canOpenOrderEditor(roleLevel)
+    if (viewId === 'create-order') return orderEditorAllowed ?? canOpenOrderEditor(roleLevel)
+    if (viewId === 'distributor-order' && orderEditorAllowed !== undefined) {
+        return ['HQ', 'DIST'].includes(String(orgType || '').trim().toUpperCase()) && orderEditorAllowed
+    }
     if (viewId === 'view-order' || viewId === 'track-order') return canOpenOrderEditor(roleLevel)
 
     // Product list actions render as internal views rather than top-nav items.
