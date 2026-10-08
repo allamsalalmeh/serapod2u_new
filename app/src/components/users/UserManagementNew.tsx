@@ -2094,7 +2094,7 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead className="w-[164px] whitespace-nowrap">
+                      <TableHead className="w-[164px] whitespace-nowrap overflow-hidden">
                         <button
                           onClick={() => handleSort("last_login_at")}
                           className="flex items-center gap-1 hover:text-[var(--sera-ink)] transition-colors font-medium"
@@ -2111,7 +2111,7 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead className={`w-[192px] px-2 text-right whitespace-nowrap bg-white md:sticky md:right-0 md:z-10 ${actionsCoverContent ? "md:shadow-[inset_1px_0_0_var(--sera-line)]" : ""}`}>
+                      <TableHead className={`w-[192px] px-2 text-right whitespace-nowrap bg-white md:sticky md:right-0 md:z-10 ${actionsCoverContent ? "md:shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.10)]" : ""}`}>
                         Actions
                       </TableHead>
                     </TableRow>
@@ -2251,7 +2251,7 @@ export default function UserManagementNew({
                             );
                           })()}
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="overflow-hidden">
                           <div className="flex flex-wrap items-center gap-1">
                             {isUserOnline(getLatestActivityAt(user)) && (
                               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
@@ -2271,7 +2271,7 @@ export default function UserManagementNew({
                             </span>
                           </div>
                         </TableCell>
-                        <TableCell className={`px-2 text-right bg-white group-hover:[background-color:color-mix(in_srgb,var(--sera-ink)_2%,white)] md:sticky md:right-0 md:z-10 ${actionsCoverContent ? "md:shadow-[inset_1px_0_0_var(--sera-line)]" : ""}`}>
+                        <TableCell className={`px-2 text-right bg-white group-hover:[background-color:color-mix(in_srgb,var(--sera-ink)_2%,white)] md:sticky md:right-0 md:z-10 ${actionsCoverContent ? "md:shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.10)]" : ""}`}>
                           <TooltipProvider delayDuration={150}>
                             <div className="flex flex-nowrap items-center justify-end gap-1">
                               {hasConsumerLaneConfirmation(user) && (
