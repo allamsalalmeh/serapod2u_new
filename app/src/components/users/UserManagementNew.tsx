@@ -1979,11 +1979,14 @@ export default function UserManagementNew({
           )}
           {filteredUsers.length > 0 ? (
             <>
-              <div className="border rounded-lg overflow-x-auto">
-                <Table className="min-w-[720px]">
+              {/* Fixed layout keeps column widths independent of which rows the
+                  org-type filter returns; the Table wrapper is the only horizontal
+                  scroller and Actions stays pinned right from md up. */}
+              <div className="border rounded-lg overflow-hidden">
+                <Table className="table-fixed min-w-[1180px]">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-12">
+                      <TableHead className="w-10">
                         <Checkbox
                           checked={
                             filteredUsers.filter((u) => u.id !== userProfile.id)
@@ -2000,7 +2003,7 @@ export default function UserManagementNew({
                         />
                       </TableHead>
                       <TableHead className="w-12 text-center">#</TableHead>
-                      <TableHead>
+                      <TableHead className="whitespace-nowrap">
                         <button
                           onClick={() => handleSort("full_name")}
                           className="flex items-center gap-1 hover:text-[var(--sera-ink)] transition-colors font-medium"
@@ -2017,7 +2020,7 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead>
+                      <TableHead className="w-[136px] whitespace-nowrap">
                         <button
                           onClick={() => handleSort("role_code")}
                           className="flex items-center gap-1 hover:text-[var(--sera-ink)] transition-colors font-medium"
@@ -2034,7 +2037,7 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead>
+                      <TableHead className="w-[150px] whitespace-nowrap">
                         <button
                           onClick={() => handleSort("organization_id")}
                           className="flex items-center gap-1 hover:text-[var(--sera-ink)] transition-colors font-medium"
@@ -2051,8 +2054,8 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead>Program</TableHead>
-                      <TableHead>
+                      <TableHead className="w-[120px] whitespace-nowrap">Program</TableHead>
+                      <TableHead className="w-[150px] whitespace-nowrap">
                         <button
                           onClick={() => handleSort("referral_phone")}
                           className="flex items-center gap-1 hover:text-[var(--sera-ink)] transition-colors font-medium"
@@ -2069,7 +2072,7 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead>
+                      <TableHead className="w-[144px] whitespace-nowrap">
                         <button
                           onClick={() => handleSort("last_login_at")}
                           className="flex items-center gap-1 hover:text-[var(--sera-ink)] transition-colors font-medium"
@@ -2086,12 +2089,14 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
+                      <TableHead className="w-[192px] px-2 text-right whitespace-nowrap bg-white md:sticky md:right-0 md:z-10 md:shadow-[inset_1px_0_0_var(--sera-line)]">
+                        Actions
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {paginatedUsers.map((user, index) => (
-                      <TableRow key={user.id} className="hover:bg-[var(--sera-ink)]/[0.02]">
+                      <TableRow key={user.id} className="group hover:bg-[var(--sera-ink)]/[0.02]">
                         <TableCell>
                           <Checkbox
                             checked={selectedUsers.has(user.id)}
@@ -2105,8 +2110,8 @@ export default function UserManagementNew({
                           {startIndex + index + 1}
                         </TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-3">
-                            <div className="relative">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div className="relative shrink-0">
                               <Avatar className="w-10 h-10">
                                 {user.avatar_url && (
                                   <AvatarImage
@@ -2153,7 +2158,7 @@ export default function UserManagementNew({
                         <TableCell>
                           <Badge
                             variant="outline"
-                            className={getRoleBadgeColor(user.role_code)}
+                            className={`max-w-full ${getRoleBadgeColor(user.role_code)}`}
                           >
                             {roles.find((r) => r.role_code === user.role_code)
                               ?.role_name || user.role_code}
@@ -2166,16 +2171,16 @@ export default function UserManagementNew({
                               if (!org) return <span className="text-[var(--sera-muted)]/70 italic">End User</span>;
                               if (org.org_type_code === 'SHOP') {
                                 return (
-                                  <div>
+                                  <div className="min-w-0">
                                     <button
                                       type="button"
                                       onClick={() => handleOpenOrganizationDialog(user, org)}
-                                      className="text-left text-[var(--sera-ink)] font-medium hover:text-[var(--sera-orange)] hover:underline"
-                                      title="View organization master data"
+                                      className="block max-w-full truncate text-left text-[var(--sera-ink)] font-medium hover:text-[var(--sera-orange)] hover:underline"
+                                      title={org.org_name}
                                     >
                                       {org.org_name}
                                     </button>
-                                    {org.branch && <span className="text-[var(--sera-muted)] text-xs ml-1">({org.branch})</span>}
+                                    {org.branch && <span className="block truncate text-[var(--sera-muted)] text-xs" title={org.branch}>({org.branch})</span>}
                                   </div>
                                 );
                               }
@@ -2183,7 +2188,7 @@ export default function UserManagementNew({
                                 <button
                                   type="button"
                                   onClick={() => handleOpenOrganizationDialog(user, org)}
-                                  className="text-left text-[var(--sera-ink)] hover:text-[var(--sera-orange)] hover:underline"
+                                  className="block max-w-full truncate text-left text-[var(--sera-ink)] hover:text-[var(--sera-orange)] hover:underline"
                                   title="View organization master data"
                                 >
                                   {getOrgTypeName(org.org_type_code || "")}
@@ -2209,7 +2214,7 @@ export default function UserManagementNew({
                             });
 
                             if (!referenceUser) {
-                              return <span className="text-[var(--sera-ink)]">{user.referral_phone}</span>;
+                              return <span className="block truncate text-[var(--sera-ink)]">{user.referral_phone}</span>;
                             }
 
                             return (
@@ -2225,7 +2230,7 @@ export default function UserManagementNew({
                           })()}
                         </TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-1">
                             {isUserOnline(getLatestActivityAt(user)) && (
                               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
                                 <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full mr-1 animate-pulse" />
@@ -2244,13 +2249,13 @@ export default function UserManagementNew({
                             </span>
                           </div>
                         </TableCell>
-                        <TableCell className="text-right">
+                        <TableCell className="px-2 text-right bg-white group-hover:[background-color:color-mix(in_srgb,var(--sera-ink)_2%,white)] md:sticky md:right-0 md:z-10 md:shadow-[inset_1px_0_0_var(--sera-line)]">
                           <TooltipProvider delayDuration={150}>
-                            <div className="flex items-center justify-end gap-1">
+                            <div className="flex flex-nowrap items-center justify-end gap-1">
                               {hasConsumerLaneConfirmation(user) && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
-                                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-amber-200 bg-amber-50 text-amber-600">
+                                    <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-amber-200 bg-amber-50 text-amber-600">
                                       <Shield className="w-4 h-4" />
                                     </span>
                                   </TooltipTrigger>
@@ -2265,7 +2270,7 @@ export default function UserManagementNew({
                                   size="sm"
                                   onClick={() => handleAccountStatus(user.id, "ACTIVE", user.full_name || user.email)}
                                   disabled={isSaving || user.id === userProfile.id}
-                                  className="text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                                  className="h-8 w-8 shrink-0 p-0 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
                                   title="Resume user (restores the access they had)"
                                 >
                                   <PlayCircle className="w-4 h-4" />
@@ -2276,7 +2281,7 @@ export default function UserManagementNew({
                                   size="sm"
                                   onClick={() => handleAccountStatus(user.id, "SUSPENDED", user.full_name || user.email)}
                                   disabled={isSaving || user.id === userProfile.id}
-                                  className="text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                                  className="h-8 w-8 shrink-0 p-0 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
                                   title={user.id === userProfile.id ? "Cannot suspend yourself" : "Suspend user (temporary; keeps their access)"}
                                 >
                                   <PauseCircle className="w-4 h-4" />
@@ -2294,9 +2299,9 @@ export default function UserManagementNew({
                                 }
                                 disabled={isSaving || user.id === userProfile.id}
                                 className={
-                                  user.is_active
+                                  "h-8 w-8 shrink-0 p-0 " + (user.is_active
                                     ? "text-green-600 hover:text-green-700 hover:bg-green-50"
-                                    : "text-[var(--sera-muted)]/70 hover:text-[var(--sera-muted)] hover:bg-[var(--sera-ink)]/[0.02]"
+                                    : "text-[var(--sera-muted)]/70 hover:text-[var(--sera-muted)] hover:bg-[var(--sera-ink)]/[0.02]")
                                 }
                                 title={
                                   user.id === userProfile.id
@@ -2316,7 +2321,7 @@ export default function UserManagementNew({
                                   setDialogOpen(true);
                                 }}
                                 disabled={isSaving}
-                                className="text-[var(--sera-orange)] hover:text-[var(--sera-orange-deep)] hover:bg-[var(--sera-orange)]/[0.06]"
+                                className="h-8 w-8 shrink-0 p-0 text-[var(--sera-orange)] hover:text-[var(--sera-orange-deep)] hover:bg-[var(--sera-orange)]/[0.06]"
                                 title="Edit user"
                               >
                                 <Edit className="w-4 h-4" />
@@ -2332,7 +2337,7 @@ export default function UserManagementNew({
                                     )
                                   }
                                   disabled={isSaving || user.id === userProfile.id}
-                                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                  className="h-8 w-8 shrink-0 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
                                   title={
                                     user.id === userProfile.id
                                       ? "Cannot delete yourself"
