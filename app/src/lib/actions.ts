@@ -741,6 +741,12 @@ export async function setUserAccountStatus(userId: string, status: 'ACTIVE' | 'S
     if (!(await userAllowed(user.id, 'platform.identity.disable', legacyAllowed, { organizationId: await targetUserOrganization(userId) }))) {
       return { success: false, error: 'Forbidden' }
     }
+    // Suspending or disabling an account ends its Root Access in effect: only another Root Administrator may change a
+    // Root account (identity_set_account_status enforces the same rule and protects the last Root Administrator).
+    const rootGuard = await rootTargetGuard(createAdminClient(), user.id, userId)
+    if (!rootGuard.ok) {
+      return { success: false, error: rootGuard.reason === 'root_target_protected' ? ROOT_TARGET_PROTECTED_MESSAGE : 'Authorization service unavailable' }
+    }
     const result = await setIdentityAccountStatus(user.id, userId, status, reason)
     if (!result.ok) return { success: false, error: result.message }
     revalidatePath('/dashboard')

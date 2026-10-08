@@ -325,6 +325,31 @@ describe('setUserAccountStatus', () => {
     expect((await setUserAccountStatus('target', 'DISABLED', 'nope')).success).toBe(false)
     expect(adminRpc).not.toHaveBeenCalledWith('identity_set_account_status', expect.anything())
   })
+
+  it('a non-root administrator cannot suspend or disable a Root Administrator (Root would end in effect)', async () => {
+    authGetUser.mockResolvedValue({ data: { user: { id: 'admin' } }, error: null })
+    checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 1 } })
+    rootGrantRows = [{ effective_until: null }]
+    rpcRoutes({ sa_actor_is_root: () => ({ data: false }), identity_set_account_status: () => ({ data: 'SUSPENDED' }) })
+    const { setUserAccountStatus } = await import('./actions')
+    for (const status of ['SUSPENDED', 'DISABLED'] as const) {
+      expect(await setUserAccountStatus('root-target', status, 'Investigation')).toEqual({ success: false, error: 'This account holds Root Access. Only another Root Administrator can change it.' })
+    }
+    expect(adminRpc).not.toHaveBeenCalledWith('identity_set_account_status', expect.anything())
+  })
+
+  it('another Root Administrator may (the database still protects the last one); a read failure fails closed', async () => {
+    authGetUser.mockResolvedValue({ data: { user: { id: 'admin' } }, error: null })
+    checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 10 } })
+    rootGrantRows = [{ effective_until: null }]
+    rpcRoutes({ sa_actor_is_root: () => ({ data: true }), identity_set_account_status: () => ({ data: 'SUSPENDED' }) })
+    const { setUserAccountStatus } = await import('./actions')
+    expect(await setUserAccountStatus('root-target', 'SUSPENDED', 'Investigation')).toEqual({ success: true, status: 'SUSPENDED' })
+    adminRpc.mockClear()
+    rootGrantError = { code: '57014', message: 'timeout' }
+    expect((await setUserAccountStatus('root-target', 'SUSPENDED', 'Investigation')).success).toBe(false)
+    expect(adminRpc).not.toHaveBeenCalledWith('identity_set_account_status', expect.anything())
+  })
 })
 
 describe('deleteUserWithAuth history protection', () => {

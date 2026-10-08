@@ -67,4 +67,22 @@ echo "   session A ok=$(head -1 "$A")  session B ok=$(head -1 "$B")"
 [ "$(head -1 "$A")" = "true" ] && [ "$(head -1 "$B")" = "false" ] || { echo "ASSERTION FAILED: exactly session A must win"; exit 1; }
 "${P[@]}" -o /dev/null -f "$H/45_final_checks.sql"
 rm -f "$A" "$B"
+
+# 20261027100000: identity lifecycle / access functions protect Root targets.
+"${P[@]}" -f "$H/48_identity_standins.sql"
+apply 20261027100000_sa_root_identity_target_protection
+echo "-- re-applying (idempotency)"; "${P[@]}" -f "$M/20261027100000_sa_root_identity_target_protection.sql"
+echo "== 50_identity_target_tests.sql"; "${P[@]}" -o /dev/null -f "$H/50_identity_target_tests.sql"
+# Two Root Administrators deactivate each other at the same moment: the Root Access lock serializes them, so the second
+# finds its actor no longer Root and is refused; one Root Administrator remains.
+echo "== concurrency: mutual deactivation"
+A=$(mktemp); B=$(mktemp)
+psql -X -q -tA "$URL" -c "begin; select public.identity_set_account_status(saf.u(3), saf.u(10), 'SUSPENDED', 'concurrent suspend from session A'); select pg_sleep(2); commit;" >"$A" 2>&1 &
+sleep 0.5
+psql -X -q -tA "$URL" -c "select public.identity_set_account_status(saf.u(10), saf.u(3), 'SUSPENDED', 'concurrent suspend from session B')" >"$B" 2>&1 || true &
+wait
+echo "   session A: $(head -1 "$A")  session B: $(head -1 "$B")"
+grep -q '^SUSPENDED$' "$A" && grep -q 'identity_root_target_protected' "$B" || { echo "ASSERTION FAILED: session A must win, session B must be refused"; exit 1; }
+"${P[@]}" -o /dev/null -f "$H/55_identity_final_checks.sql"
+rm -f "$A" "$B"
 echo "ALL SA ROOT ACCESS TESTS PASSED"
