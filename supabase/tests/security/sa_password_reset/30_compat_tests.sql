@@ -19,4 +19,4 @@ select saf.expect((select mode from public.sa_migration_modes where permission_k
 select saf.expect(not exists ((select id, user_id, role_id, status, effective_until from public.sa_role_assignments except select * from saf.cr_assign_before)
   union all (select * from saf.cr_assign_before except select id, user_id, role_id, status, effective_until from public.sa_role_assignments)), 'no assignment created, removed or altered');
 select saf.expect(saf.audit('compat_role.permission_materialized') = 2, 'one audit entry per role (not repeated on re-apply)');
-select saf.expect(to_regclass('public.sa_mig_20261025_modes_before') is null and to_regclass('public.sa_mig_20261025_assign_before') is null, 'work tables removed');
+select saf.expect(to_regclass('public.sa_mig_20261025_modes_before') is null and to_regclass('public.sa_mig_20261025_assign_before') is null, 'no work tables are created');

@@ -41,39 +41,37 @@
 --     and p.permission_key = 'platform.user.password_reset';
 -- ============================================================================
 
-do $pre$
-begin
-  if not exists (select 1 from public.sa_permissions where permission_key = 'platform.user.password_reset' and status = 'active') then
-    raise exception 'sa_prerequisite_missing: apply 20261016100000_sa_user_password_reset_permission.sql first';
-  end if;
-  if not exists (select 1 from public.sa_legacy_compat_rules where permission_key = 'platform.user.password_reset') then
-    raise exception 'sa_prerequisite_missing: compatibility rule for platform.user.password_reset';
-  end if;
-end $pre$;
-
--- Work tables (not session temp tables) so the post-conditions see the before-state in every run mode.
-drop table if exists public.sa_mig_20261025_modes_before;
-drop table if exists public.sa_mig_20261025_assign_before;
-create table public.sa_mig_20261025_modes_before as
-  select permission_key, mode from public.sa_migration_modes;
-create table public.sa_mig_20261025_assign_before as
-  select count(*)::bigint as n, coalesce(sum(hashtext(id::text || status || coalesce(effective_until::text, ''))), 0)::bigint as h
-  from public.sa_role_assignments;
-revoke all on public.sa_mig_20261025_modes_before, public.sa_mig_20261025_assign_before from public, anon, authenticated;
-
--- ---------------------------------------------------------------------------
--- 1. Compatibility roles selected by the key's own rule gain the key (audited per role)
--- ---------------------------------------------------------------------------
-do $grant$
+-- ONE statement on purpose. The staging runner does not carry state between statements (a work table created by one
+-- statement was "does not exist" for the next, 42P01 on 2026-10-08; temp tables failed the same way on 2026-09-27).
+-- Everything below, including the before-snapshot used by the post-conditions, lives inside this single DO block,
+-- so it is all-or-nothing in any client (SQL editor, psql, autocommit or single transaction). No work tables.
+do $migration$
 declare
   v_perm uuid;
   v_rule record;
   v_role record;
   v_added integer;
+  v_modes_before jsonb;
+  v_assign_before text;
+  v_bad text;
+  v_users integer;
 begin
-  select id into v_perm from public.sa_permissions where permission_key = 'platform.user.password_reset';
+  -- Prerequisites
+  select id into v_perm from public.sa_permissions where permission_key = 'platform.user.password_reset' and status = 'active';
+  if v_perm is null then
+    raise exception 'sa_prerequisite_missing: apply 20261016100000_sa_user_password_reset_permission.sql first';
+  end if;
   select * into v_rule from public.sa_legacy_compat_rules where permission_key = 'platform.user.password_reset';
+  if not found then
+    raise exception 'sa_prerequisite_missing: compatibility rule for platform.user.password_reset';
+  end if;
 
+  -- Before-state (in variables)
+  select coalesce(jsonb_object_agg(permission_key, mode), '{}'::jsonb) into v_modes_before from public.sa_migration_modes;
+  select md5(coalesce(string_agg(id::text || ':' || status || ':' || coalesce(effective_until::text, ''), ',' order by id), ''))
+    into v_assign_before from public.sa_role_assignments;
+
+  -- 1. Compatibility roles selected by the key's own rule gain the key (audited per role)
   for v_role in
     select b.id, b.role_key, r.role_code, r.role_level
     from public.roles r
@@ -98,35 +96,23 @@ begin
       raise notice 'added platform.user.password_reset to % (level %)', v_role.role_key, v_role.role_level;
     end if;
   end loop;
-end $grant$;
 
--- ---------------------------------------------------------------------------
--- 2. Post-conditions
--- ---------------------------------------------------------------------------
-do $post$
-declare v_bad text; v_users integer;
-begin
-  -- No migration mode changed.
-  if exists (select 1 from public.sa_migration_modes m full join public.sa_mig_20261025_modes_before b using (permission_key)
-             where m.mode is distinct from b.mode) then
+  -- 2. Post-conditions (any failure rolls the whole block back)
+  if (select coalesce(jsonb_object_agg(permission_key, mode), '{}'::jsonb) from public.sa_migration_modes) is distinct from v_modes_before then
     raise exception 'postcondition: a migration mode changed';
   end if;
-  -- No assignment created, removed or altered.
-  if (select (n, h) from public.sa_mig_20261025_assign_before) is distinct from
-     (select (count(*)::bigint, coalesce(sum(hashtext(id::text || status || coalesce(effective_until::text, ''))), 0)::bigint) from public.sa_role_assignments) then
+  if (select md5(coalesce(string_agg(id::text || ':' || status || ':' || coalesce(effective_until::text, ''), ',' order by id), ''))
+      from public.sa_role_assignments) is distinct from v_assign_before then
     raise exception 'postcondition: role assignments changed';
   end if;
-  -- Only compatibility roles of level <= 10 hold the key among legacy roles (never MANAGER / POWER_USER / USER / SHOP).
   select string_agg(b.role_key, ', ') into v_bad
   from public.sa_business_role_permissions rp
   join public.sa_business_roles b on b.id = rp.role_id and b.source = 'legacy'
-  join public.sa_permissions p on p.id = rp.permission_id and p.permission_key = 'platform.user.password_reset'
-  left join public.roles r on public.sa_compat_role_key(r.role_code) = b.role_key
-  where coalesce(r.role_level, 999) > 10;
+  where rp.permission_id = v_perm
+    and coalesce((select r.role_level from public.roles r where public.sa_compat_role_key(r.role_code) = b.role_key limit 1), 999) > 10;
   if v_bad is not null then
     raise exception 'postcondition: password reset reached a compatibility role above level 10: %', v_bad;
   end if;
-  -- Still sensitive, still partner-forbidden.
   if not public.sa_permission_is_sensitive('platform.user.password_reset')
      or not public.sa_permission_forbidden_for_partner('platform.user.password_reset') then
     raise exception 'postcondition: platform.user.password_reset classification changed';
@@ -134,11 +120,7 @@ begin
 
   select count(distinct a.user_id) into v_users
   from public.sa_role_assignments a
-  join public.sa_business_role_permissions rp on rp.role_id = a.role_id
-  join public.sa_permissions p on p.id = rp.permission_id and p.permission_key = 'platform.user.password_reset'
+  join public.sa_business_role_permissions rp on rp.role_id = a.role_id and rp.permission_id = v_perm
   where a.status = 'active' and (a.effective_until is null or a.effective_until > now());
   raise notice 'people holding platform.user.password_reset through an active assignment: %', v_users;
-end $post$;
-
-drop table public.sa_mig_20261025_modes_before;
-drop table public.sa_mig_20261025_assign_before;
+end $migration$;
