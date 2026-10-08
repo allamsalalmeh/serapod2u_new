@@ -63,7 +63,7 @@ import {
 } from "@/components/ui/dialog";
 import UserDialogNew from "./UserDialogNew";
 import type { User as UserType, Role, Organization } from "@/types/user";
-import { getStorageUrl } from "@/lib/utils";
+import { getAvatarSrc } from "@/lib/utils";
 import { compressAvatar, formatFileSize } from "@/lib/utils/imageCompression";
 import { samePhone } from "@/utils/phone";
 import { SeraLoadingState } from "@/components/ui/SeraLoader";
@@ -2137,13 +2137,8 @@ export default function UserManagementNew({
                               <Avatar className="w-10 h-10">
                                 {user.avatar_url && (
                                   <AvatarImage
-                                    src={
-                                      getStorageUrl(
-                                        `${user.avatar_url.split("?")[0]}?t=${new Date(user.updated_at).getTime()}`,
-                                      ) || user.avatar_url
-                                    }
+                                    src={getAvatarSrc(user.avatar_url)}
                                     alt={getUserDisplayName(user)}
-                                    key={`avatar-${user.id}-${user.updated_at}`}
                                   />
                                 )}
                                 <AvatarFallback className="bg-gradient-to-br from-[var(--sera-orange)] to-[var(--sera-orange-deep)] text-white text-xs font-medium">

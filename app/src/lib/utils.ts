@@ -211,6 +211,17 @@ export function getStorageUrl(pathOrUrl: string | null | undefined, bucket?: str
 }
 
 /**
+ * Display URL for a stored `users.avatar_url`. Every upload writes a new
+ * timestamped object, so the stored URL already changes whenever the picture
+ * does; it must not be cache-busted per render or per profile edit, which
+ * would refetch the image and flash the initials fallback.
+ */
+export function getAvatarSrc(avatarUrl: string | null | undefined): string | undefined {
+  if (!avatarUrl) return undefined
+  return getStorageUrl(avatarUrl, 'avatars') || avatarUrl
+}
+
+/**
  * Self-hosted Kong gateways require an `apikey` on every storage request,
  * including signed URLs (which only carry a `token` param). Use this for
  * signed URLs from `createSignedUrl()` before handing them to an <img>.

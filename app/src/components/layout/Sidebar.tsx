@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { signOut } from "@/app/actions/auth";
 import { filterMenuItems, type MenuItem } from "@/lib/menu-access";
 import { usePermissions } from "@/hooks/usePermissions";
-import { getStorageUrl, cn } from "@/lib/utils";
+import { getAvatarSrc, cn } from "@/lib/utils";
 import {
   Package,
   BarChart3,
@@ -859,9 +859,7 @@ export default function Sidebar({
                   {userProfile?.avatar_url && (
                     <AvatarImage
                       src={
-                        getStorageUrl(
-                          `${userProfile.avatar_url.split("?")[0]}?t=${new Date(userProfile.updated_at || Date.now()).getTime()}`,
-                        ) || userProfile.avatar_url
+                        getAvatarSrc(userProfile.avatar_url)
                       }
                       alt={userProfile.full_name || "User"}
                     />
@@ -887,9 +885,7 @@ export default function Sidebar({
                 {userProfile?.avatar_url && (
                   <AvatarImage
                     src={
-                      getStorageUrl(
-                        `${userProfile.avatar_url.split("?")[0]}?t=${new Date(userProfile.updated_at || Date.now()).getTime()}`,
-                      ) || userProfile.avatar_url
+                      getAvatarSrc(userProfile.avatar_url)
                     }
                     alt={userProfile.full_name || "User"}
                   />

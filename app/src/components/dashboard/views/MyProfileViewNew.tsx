@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { getOrgTypeName } from '@/lib/utils/orgHierarchy'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -19,7 +20,7 @@ import SignatureUpload from '@/components/profile/SignatureUpload'
 import ChangePasswordCard from '@/components/profile/ChangePasswordCard'
 import MyAccessRequests from '@/components/security-access/MyAccessRequests'
 import { updateUserWithAuth } from '@/lib/actions'
-import { normalizePhone, validatePhoneNumber, getStorageUrl, type PhoneValidationResult } from '@/lib/utils'
+import { normalizePhone, validatePhoneNumber, getAvatarSrc, type PhoneValidationResult } from '@/lib/utils'
 import { compressAvatar, formatFileSize } from '@/lib/utils/imageCompression'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ReferencePicker, type ReferenceUser } from '@/components/ui/reference-picker'
@@ -123,6 +124,12 @@ export default function MyProfileViewNew({ userProfile: initialProfile }: MyProf
   const avatarDragRef = useRef<{ startX: number; startY: number; cropX: number; cropY: number; moved: boolean } | null>(null)
   const avatarSuppressClickRef = useRef(false)
   const avatarCropPositionRef = useRef({ x: 50, y: 50 })
+  // Only the first load shows the skeleton; later reloads keep the current
+  // profile (and avatar) on screen. Each load gets a sequence number so a slow,
+  // older response never overwrites a newer one.
+  const hasLoadedProfileRef = useRef(false)
+  const profileLoadSeqRef = useRef(0)
+  const router = useRouter()
   const [formData, setFormData] = useState({
     full_name: '',
     phone: '',
@@ -174,8 +181,10 @@ export default function MyProfileViewNew({ userProfile: initialProfile }: MyProf
   }
 
   const loadUserProfile = async () => {
+    const loadSeq = ++profileLoadSeqRef.current
+    const isStale = () => loadSeq !== profileLoadSeqRef.current
     try {
-      setIsLoading(true)
+      if (!hasLoadedProfileRef.current) setIsLoading(true)
 
       let targetUserId = initialProfile?.id
 
@@ -255,6 +264,7 @@ export default function MyProfileViewNew({ userProfile: initialProfile }: MyProf
       }
 
       if (queryError) throw queryError
+      if (isStale()) return
 
       if (profile) {
         const [departmentResult, managerResult, positionResult] = await Promise.all([
@@ -287,6 +297,8 @@ export default function MyProfileViewNew({ userProfile: initialProfile }: MyProf
           positions: positionResult.data
         }
 
+        if (isStale()) return
+        hasLoadedProfileRef.current = true
         setUserProfile(transformedProfile)
         setFormData({
           full_name: transformedProfile.full_name || '',
@@ -318,6 +330,7 @@ export default function MyProfileViewNew({ userProfile: initialProfile }: MyProf
         }
       }
     } catch (error: any) {
+      if (isStale()) return
       console.error('Error loading profile:', error?.message || error?.code || JSON.stringify(error))
       toast({
         title: "Error",
@@ -325,7 +338,7 @@ export default function MyProfileViewNew({ userProfile: initialProfile }: MyProf
         variant: "destructive",
       })
     } finally {
-      setIsLoading(false)
+      if (!isStale()) setIsLoading(false)
     }
   }
 
@@ -820,6 +833,9 @@ export default function MyProfileViewNew({ userProfile: initialProfile }: MyProf
 
       // Reload fresh data from database
       await loadUserProfile()
+      // Re-render the server shell so the sidebar picks up the saved name/avatar
+      // from the same users row, without a logout.
+      router.refresh()
 
     } catch (error: any) {
       console.error('Error updating profile:', error)
@@ -1063,7 +1079,7 @@ export default function MyProfileViewNew({ userProfile: initialProfile }: MyProf
                     />
                   ) : userProfile.avatar_url ? (
                     <AvatarImage
-                      src={getStorageUrl(`${userProfile.avatar_url.split('?')[0]}?v=${Date.now()}`)}
+                      src={getAvatarSrc(userProfile.avatar_url)}
                       alt={userProfile.full_name || 'User'}
                     />
                   ) : null}
