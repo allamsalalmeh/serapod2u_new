@@ -55,6 +55,7 @@ export interface ResolvedScope {
 export type AuthorizationReasonCode =
   | 'ALLOWED_BY_ASSIGNMENT'
   | 'ALLOWED_BY_DELEGATION'
+  | 'ALLOWED_BY_ROOT_ACCESS'
   | 'ACCOUNT_INACTIVE'
   | 'MISSING_MEMBERSHIP'
   | 'MISSING_ASSIGNMENT'

@@ -14,6 +14,7 @@ import {
 import { normalizePhoneE164, samePhone } from '@/utils/phone'
 import { checkPermissionForUser } from '@/lib/server/permissions'
 import { userAllowed } from '@/lib/security-access/operation'
+import { ROOT_TARGET_PROTECTED_MESSAGE, rootTargetGuard } from '@/lib/security-access/root-access'
 import {
   identityHistoryReferences,
   provisionIdentity,
@@ -350,6 +351,14 @@ export async function updateUserWithAuth(userId: string, userData: {
 
     if (!isAuthorized) {
       return { success: false, error: 'Unauthorized' }
+    }
+    // A Root Administrator's account (login phone, status, role, organization, profile) is changed only by another Root
+    // Administrator, never by a narrower administrator (account takeover / lock-out path).
+    if (!isSelfUpdate) {
+      const rootGuard = await rootTargetGuard(adminClient, currentUser.id, userId)
+      if (!rootGuard.ok) {
+        return { success: false, error: rootGuard.reason === 'root_target_protected' ? ROOT_TARGET_PROTECTED_MESSAGE : 'Access could not be verified. Please retry.' }
+      }
     }
 
     const requestedUpdate = userData as Record<string, unknown>

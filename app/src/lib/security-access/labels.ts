@@ -112,6 +112,7 @@ export const REASON_LABELS: Record<string, string> = {
   MISSING_CONTEXT: 'The request is missing context the user’s scope needs (for example a warehouse).',
   SCOPE_MISMATCH: 'The user’s role applies to a different organization or warehouse.',
   ALLOWED_BY_DELEGATION: 'Allowed through an active delegation from someone who currently holds this access.',
+  ALLOWED_BY_ROOT_ACCESS: 'Allowed by active Root Access (Full System Administrator): every active permission in every organization.',
   LEGACY_ALLOWED: 'Allowed by the existing (legacy) role permissions.',
   LEGACY_DENIED: 'Denied by the existing (legacy) role permissions.',
   POLICY_ERROR: 'The policy could not be evaluated; access is denied for safety.',

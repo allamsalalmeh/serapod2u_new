@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { HUMAN_PRINCIPAL_TYPES } from '@/lib/identity/resolution'
+import { loadRootAccess, withRootAccess } from './root-access'
 
 /**
  * People & Access directory: server-side search, filter and pagination across
@@ -81,10 +82,12 @@ export async function loadDirectory(admin: any, actorId: string, query: Director
   if (page.error) return mapDirectoryError(page.error)
   const ids: string[] = page.data?.ids ?? []
 
-  const [orgs, rows, visible] = await Promise.all([
+  const [orgs, rows, visible, root] = await Promise.all([
     admin.rpc('sa_directory_organizations', { p_actor: actorId }),
     ids.length ? admin.from('users').select(PERSON_SELECT).in('id', ids) : Promise.resolve({ data: [], error: null }),
     ids.length ? admin.rpc('sa_directory_visible_memberships', { p_actor: actorId, p_user_ids: ids }) : Promise.resolve({ data: [], error: null }),
+    // Root Access badge (active grants only). Display only; an unreadable status shows no badge.
+    loadRootAccess(admin, ids),
   ])
   if (orgs.error) return mapDirectoryError(orgs.error)
   if (rows.error) return fail(500, 'directory_failed', 'The directory could not be loaded.')
@@ -94,7 +97,7 @@ export async function loadDirectory(admin: any, actorId: string, query: Director
   // its own grant eligibility (viewing never implies the right to grant).
   const visibleById = new Map<string, any>((visible.data || []).map((v: any) => [v.membership_id, v]))
   const byId = new Map<string, any>((rows.data || []).map((u: any) => [u.id, u]))
-  const people = ids.map(id => byId.get(id)).filter(Boolean).map((u: any) => ({
+  const people = withRootAccess(ids.map(id => byId.get(id)).filter(Boolean), root.byUser).map((u: any) => ({
     ...u,
     membership: (u.membership || []).filter((m: any) => visibleById.has(m.id)).map((m: any) => {
       const v = visibleById.get(m.id)

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { actorAlsoHolds, requireSecurityActor } from '@/lib/security-access/admin-api'
 import { directoryQuerySchema, loadDirectory } from '@/lib/security-access/directory'
+import { rootAccessCapability } from '@/lib/security-access/root-access'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,8 +19,12 @@ export async function GET(request: NextRequest) {
   const result = await loadDirectory(actor.admin, actor.userId, parsed.data)
   if (!result.ok) return NextResponse.json({ error: result.error, code: result.code }, { status: result.status })
   // A link to User Management is offered only when it exists and this administrator may use it.
-  const canManageUsers = await actorAlsoHolds(actor, 'platform.user.manage').catch(() => false)
-  const res = NextResponse.json({ ok: true, ...result.value, viewerId: actor.userId, capabilities: { userManagement: canManageUsers } })
+  // Whether the Root Access option is offered (display only: the database decides every Root Access change).
+  const [canManageUsers, rootAccess] = await Promise.all([
+    actorAlsoHolds(actor, 'platform.user.manage').catch(() => false),
+    rootAccessCapability(actor.admin, actor.userId).catch(() => ({ available: false, viewerIsRoot: false, activeCount: null })),
+  ])
+  const res = NextResponse.json({ ok: true, ...result.value, viewerId: actor.userId, capabilities: { userManagement: canManageUsers, rootAccess } })
   res.headers.set('Cache-Control', 'no-store')
   return res
 }

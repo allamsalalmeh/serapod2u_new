@@ -13,6 +13,9 @@ const createAuthUser = vi.fn()
 const deleteAuthUser = vi.fn()
 const adminRpc = vi.fn()
 const adminFromTables: string[] = []
+// Active Root Access rows of the edited person (sa_root_access_grants); a read error when set.
+let rootGrantRows: any[] = []
+let rootGrantError: any = null
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 vi.mock('next/navigation', () => ({ redirect: vi.fn() }))
@@ -25,6 +28,9 @@ vi.mock('@/lib/supabase/admin', () => ({
     rpc: adminRpc,
     from: (table: string) => {
       adminFromTables.push(table)
+      if (table === 'sa_root_access_grants') {
+        return { select: () => ({ eq: () => ({ eq: async () => ({ data: rootGrantError ? null : rootGrantRows, error: rootGrantError }) }) }) }
+      }
       if (table !== 'users') throw new Error(`Unexpected table: ${table}`)
       return {
         update: usersUpdate,
@@ -45,12 +51,56 @@ function rpcRoutes(handlers: Record<string, (args: any) => any>) {
 beforeEach(() => {
   vi.clearAllMocks()
   adminFromTables.length = 0
+  rootGrantRows = []
+  rootGrantError = null
   usersUpdateEq.mockResolvedValue({ error: null })
   usersSelectRow.mockResolvedValue({ data: { role_code: 'USER', organization_id: 'org-a', is_active: true }, error: null })
   updateUserById.mockResolvedValue({ data: { user: {} }, error: null })
   createAuthUser.mockResolvedValue({ data: { user: { id: 'new-user' } }, error: null })
   deleteAuthUser.mockResolvedValue({ error: null })
   rpcRoutes({})
+})
+
+describe('updateUserWithAuth Root Access target protection', () => {
+  const asAdmin = () => {
+    authGetUser.mockResolvedValue({ data: { user: { id: 'admin' } }, error: null })
+    checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 1 } })
+  }
+
+  it('a non-root administrator (even level 1) cannot change a Root Administrator\'s login phone, status or profile', async () => {
+    asAdmin()
+    rootGrantRows = [{ effective_until: null }]
+    rpcRoutes({ sa_actor_is_root: () => ({ data: false }) })
+    const { updateUserWithAuth } = await import('./actions')
+    for (const change of [{ phone: '+60123456789' }, { is_active: false }, { full_name: 'Renamed' }, { role_code: 'USER' }]) {
+      const result = await updateUserWithAuth('root-target', change as any)
+      expect(result).toEqual({ success: false, error: 'This account holds Root Access. Only another Root Administrator can change it.' })
+    }
+    expect(updateUserById).not.toHaveBeenCalled()
+    expect(usersUpdate).not.toHaveBeenCalled()
+    expect(adminRpc).not.toHaveBeenCalledWith('identity_set_account_status', expect.anything())
+  })
+
+  it('another Root Administrator may change it; an expired Root Access no longer protects the account', async () => {
+    asAdmin()
+    rootGrantRows = [{ effective_until: null }]
+    rpcRoutes({ sa_actor_is_root: () => ({ data: true }) })
+    const { updateUserWithAuth } = await import('./actions')
+    expect(await updateUserWithAuth('root-target', { full_name: 'Ok' })).toEqual({ success: true })
+    rootGrantRows = [{ effective_until: '2000-01-01T00:00:00Z' }]
+    rpcRoutes({ sa_actor_is_root: () => ({ data: false }) })
+    expect(await updateUserWithAuth('former-root', { full_name: 'Ok' })).toEqual({ success: true })
+  })
+
+  it('fails closed when Root Access status cannot be read (but not when the feature is not installed)', async () => {
+    asAdmin()
+    rootGrantError = { code: '57014', message: 'timeout' }
+    const { updateUserWithAuth } = await import('./actions')
+    expect((await updateUserWithAuth('target', { full_name: 'Ok' })).success).toBe(false)
+    expect(usersUpdate).not.toHaveBeenCalled()
+    rootGrantError = { code: 'PGRST205', message: 'relation not found' }
+    expect(await updateUserWithAuth('target', { full_name: 'Ok' })).toEqual({ success: true })
+  })
 })
 
 describe('updateUserWithAuth Phase 0A authorization', () => {

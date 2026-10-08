@@ -100,10 +100,10 @@ describe('loadDirectory', () => {
     for (const banned of ['phone', 'password', 'bank', 'address', 'salary', 'signature', 'avatar', 'token']) expect(cols).not.toContain(banned)
   })
 
-  it('is read-only: it only calls the directory read functions and a users select', async () => {
+  it('is read-only: it only calls the directory read functions, a users select and the Root Access status select', async () => {
     const admin = fakeAdmin({ users: [manu] })
     await loadDirectory(admin, ACTOR, query)
-    expect(admin.calls.map(c => `${c.kind}:${c.name}`).sort()).toEqual(['from:users', 'rpc:sa_directory_organizations', 'rpc:sa_directory_page_v2', 'rpc:sa_directory_visible_memberships'])
+    expect(admin.calls.map(c => `${c.kind}:${c.name}`).sort()).toEqual(['from:sa_root_access_grants', 'from:users', 'rpc:sa_directory_organizations', 'rpc:sa_directory_page_v2', 'rpc:sa_directory_visible_memberships'])
   })
 
   it('does not fetch details for an empty page', async () => {

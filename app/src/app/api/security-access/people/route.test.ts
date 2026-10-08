@@ -36,10 +36,20 @@ describe('GET /api/security-access/people', () => {
   it('reports whether this administrator may open User Management (so a link is only offered when allowed)', async () => {
     loadDirectory.mockResolvedValue({ ok: true, value: { people: [], total: 0, counts: {}, organizations: [] } })
     actorAlsoHolds.mockResolvedValueOnce(false)
-    expect((await (await get()).json()).capabilities).toEqual({ userManagement: false })
+    expect((await (await get()).json()).capabilities).toMatchObject({ userManagement: false })
     actorAlsoHolds.mockResolvedValueOnce(true)
-    expect((await (await get()).json()).capabilities).toEqual({ userManagement: true })
+    expect((await (await get()).json()).capabilities).toMatchObject({ userManagement: true })
     expect(actorAlsoHolds).toHaveBeenLastCalledWith(actor, 'platform.user.manage')
+  })
+
+  it('reports the Root Access capability from the database, and "unavailable" when it cannot be read', async () => {
+    loadDirectory.mockResolvedValue({ ok: true, value: { people: [], total: 0, counts: {}, organizations: [] } })
+    // admin without rpc (or a missing migration): no Root option, never an error for the directory.
+    expect((await (await get()).json()).capabilities.rootAccess).toEqual({ available: false, viewerIsRoot: false, activeCount: null })
+    const rpc = vi.fn(async (fn: string, args: any) => ({ data: fn === 'sa_actor_is_root' ? args.p_actor === ACTOR : 3, error: null }))
+    actor = { userId: ACTOR, admin: { rpc } }
+    expect((await (await get()).json()).capabilities.rootAccess).toEqual({ available: true, viewerIsRoot: true, activeCount: 3 })
+    expect(rpc).toHaveBeenCalledWith('sa_actor_is_root', { p_actor: ACTOR })
   })
 
   it('rejects forged filter values before any query', async () => {

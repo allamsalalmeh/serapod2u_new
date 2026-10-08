@@ -545,6 +545,7 @@ export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
   "security-access/modes/bulk": { kind: 'ENTERPRISE', permissions: ["security.permission.manage"] },
   "security-access/profiles": { kind: 'ENTERPRISE', permissions: ["security.access.view", "security.role.manage"] },
   "security-access/people": { kind: 'ENTERPRISE', permissions: ["security.access.view"] },
+  "security-access/root-access": { kind: 'ENTERPRISE', permissions: ["security.access.view"] },
   "security-access/overview": { kind: 'ENTERPRISE', permissions: ["security.access.view"] },
   "security-access/pilot/transfer-shadow": { kind: 'ENTERPRISE', permissions: ["inventory.transfer.approve", "inventory.transfer.dispatch", "inventory.transfer.receive", "inventory.transfer.request"] },
   "security-access/reviews": { kind: 'ENTERPRISE', permissions: ["security.access_review.manage"] },
