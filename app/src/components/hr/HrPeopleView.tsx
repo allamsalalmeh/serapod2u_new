@@ -26,6 +26,8 @@ import {
 import { listDepartments } from '@/lib/actions/departments'
 import { fetchHrPositions, updateUserHr } from '@/lib/api/hr'
 import { compressAvatar } from '@/lib/utils/imageCompression'
+import EmployeeCommissionPanel from '@/components/hr/commission/EmployeeCommissionPanel'
+import { useCommissionAccess } from '@/lib/hr/commission/use-commission-access'
 
 interface HrPeopleViewProps {
     organizationId: string
@@ -183,6 +185,10 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     const [profileLoading, setProfileLoading] = useState(false)
     const [profileSaving, setProfileSaving] = useState(false)
     const [profileTab, setProfileTab] = useState('personal')
+    // Sales Commission is compensation data: the tab exists only for people granted commission access (decided by the
+    // database, re-checked by every commission API).
+    const commissionAccess = useCommissionAccess()
+    const showCommissionTab = commissionAccess.can('hr.commission.view')
     const [avatarUploading, setAvatarUploading] = useState(false)
     const avatarInputRef = useRef<HTMLInputElement>(null)
 
@@ -1194,11 +1200,12 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                     ) : (
                         <div className="mt-4 space-y-4">
                             <Tabs value={profileTab} onValueChange={setProfileTab}>
-                                <TabsList className="grid w-full grid-cols-4">
+                                <TabsList className={`grid w-full ${showCommissionTab ? 'grid-cols-5' : 'grid-cols-4'}`}>
                                     <TabsTrigger value="personal" className="text-xs">Personal</TabsTrigger>
                                     <TabsTrigger value="identity" className="text-xs">ID &amp; Tax</TabsTrigger>
                                     <TabsTrigger value="emergency" className="text-xs">Emergency</TabsTrigger>
                                     <TabsTrigger value="bank" className="text-xs">Bank</TabsTrigger>
+                                    {showCommissionTab && <TabsTrigger value="commission" className="text-xs">Commission</TabsTrigger>}
                                 </TabsList>
 
                                 {/* Personal */}
@@ -1387,9 +1394,17 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                         <Input className="h-9" value={profileData.bank_holder_name || ''} onChange={e => updateProfileField('bank_holder_name', e.target.value || null)} disabled={!canEdit} />
                                     </div>
                                 </TabsContent>
+
+                                {/* Sales Commission */}
+                                {showCommissionTab && profileUser && (
+                                    <TabsContent value="commission" className="mt-3">
+                                        {profileTab === 'commission' && <EmployeeCommissionPanel userId={profileUser.id} employeeName={profileUser.full_name || profileUser.email} />}
+                                    </TabsContent>
+                                )}
                             </Tabs>
 
-                            {/* Notes */}
+                            {/* Notes (profile tabs only; commission saves through its own workflow) */}
+                            {profileTab !== 'commission' && (<>
                             <div className="space-y-1 pt-2 border-t">
                                 <Label className="text-xs">HR Notes</Label>
                                 <Textarea value={profileData.notes || ''} onChange={e => updateProfileField('notes', e.target.value || null)} rows={2} placeholder="Internal notes..." disabled={!canEdit} />
@@ -1402,6 +1417,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     </Button>
                                 </div>
                             )}
+                            </>)}
                         </div>
                     )}
                 </SheetContent>

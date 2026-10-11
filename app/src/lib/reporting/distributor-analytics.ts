@@ -16,6 +16,7 @@
  * monthly reports, and a third copy is a third chance to drift.
  */
 
+import { APPROVED_SALES_STATUSES, PIPELINE_STATUSES } from './sales-kpi'
 import {
   formatReportDate,
   monthShortLabel,
@@ -92,11 +93,13 @@ export type OrderStatus = (typeof ORDER_STATUSES)[number]
 /**
  * Statuses treated as approved by the Approval Rate.
  *
- * Unchanged from the previous report, which counted `approved` and `closed`
- * against every order in the window. Completion Rate is reported separately
- * rather than folded into this one, so neither number changes meaning.
+ * Every status an order reaches after approval (approved, warehouse packed,
+ * shipped to distributor, closed) — the shared Approved Sales definition
+ * (sales-kpi.ts). The previous report counted only `approved` and `closed`, so
+ * packed and shipped orders wrongly lowered the rate. Completion Rate is
+ * reported separately.
  */
-export const APPROVED_STATUSES: string[] = ['approved', 'closed']
+export const APPROVED_STATUSES: string[] = [...APPROVED_SALES_STATUSES]
 /** Statuses treated as completed by the Completion Rate. */
 export const COMPLETED_STATUSES: string[] = ['closed']
 
@@ -449,6 +452,12 @@ export interface DistributorAnalyticsReport {
     completionRatePct: number | null
     cancelledOrders: number
     cancellationRatePct: number | null
+    /** Order Value of approved-stage orders (Approved Sales Value). */
+    approvedSalesValue: number
+    /** Submitted orders awaiting approval. */
+    pipelineOrders: number
+    pipelineValue: number
+    cancelledValue: number
   }
   recentOrders: OrderRecordTotals[]
   meta: {
@@ -925,6 +934,15 @@ export function buildDistributorAnalyticsReport(
     .filter((row) => row.status === 'cancelled')
     .reduce((sum, row) => sum + row.orders, 0)
   const approvalRatePct = safeShare(approvedOrders, totalOrders)
+  const valueOf = (statuses: readonly string[]) => round2(aggregate.statusBreakdown
+    .filter((row) => statuses.includes(row.status))
+    .reduce((sum, row) => sum + row.orderValue, 0))
+  const approvedSalesValue = valueOf(APPROVED_STATUSES)
+  const pipelineValue = valueOf(PIPELINE_STATUSES)
+  const pipelineOrders = aggregate.statusBreakdown
+    .filter((row) => (PIPELINE_STATUSES as readonly string[]).includes(row.status))
+    .reduce((sum, row) => sum + row.orders, 0)
+  const cancelledValue = valueOf(['cancelled'])
 
   // ── Leaderboard ─────────────────────────────────────────────────────────
   const leaderboard: LeaderboardRow[] = [...activeRows]
@@ -1140,6 +1158,10 @@ export function buildDistributorAnalyticsReport(
       completionRatePct: safeShare(completedOrders, totalOrders),
       cancelledOrders,
       cancellationRatePct: safeShare(cancelledOrders, totalOrders),
+      approvedSalesValue,
+      pipelineOrders,
+      pipelineValue,
+      cancelledValue,
     },
     recentOrders: aggregate.recentOrders.slice(0, RECENT_ORDERS_LIMIT),
     meta: {

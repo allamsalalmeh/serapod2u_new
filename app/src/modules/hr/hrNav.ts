@@ -30,6 +30,7 @@ import {
     Wrench,
     Landmark,
     type LucideIcon,
+    Percent,
 } from 'lucide-react'
 
 // ── Types ────────────────────────────────────────────────────────
@@ -116,6 +117,7 @@ export const hrNavGroups: HrNavGroup[] = [
             { id: 'hr/payroll/salary-structure', label: 'Salary Structure', icon: Wallet, href: toHref('hr/payroll/salary-structure') },
             { id: 'hr/payroll/allowances-deductions', label: 'Allowances / Deductions', icon: Plus, href: toHref('hr/payroll/allowances-deductions') },
             { id: 'hr/payroll/payslips', label: 'Payslips', icon: FileText, href: toHref('hr/payroll/payslips') },
+            { id: 'hr/payroll/commission-settings', label: 'Commission Settings', icon: Percent, href: toHref('hr/payroll/commission-settings') },
         ],
     },
     {

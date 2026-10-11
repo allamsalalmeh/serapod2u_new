@@ -483,6 +483,32 @@ describe('server-side aggregation folds orders into the report aggregate', () =>
     expect(report.orderProcessing.approvedOrders).toBe(1)
     expect(report.orderProcessing.approvalRatePct).toBe(50)
     expect(report.orderProcessing.cancelledOrders).toBe(1)
+    // Values: the cancelled order is never Approved Sales.
+    const approvedRow = report.orderProcessing.statuses.find((row) => row.status === 'approved')
+    const cancelledRow = report.orderProcessing.statuses.find((row) => row.status === 'cancelled')
+    expect(report.orderProcessing.approvedSalesValue).toBe(approvedRow?.orderValue ?? 0)
+    expect(report.orderProcessing.cancelledValue).toBe(cancelledRow?.orderValue ?? 0)
+    expect(report.orderProcessing.pipelineOrders).toBe(0)
+  })
+
+  it('counts packed and shipped orders as approved (an approved order does not stop being approved when it moves on)', () => {
+    const built = buildDistributorAnalyticsReport({
+      ...aggregate(),
+      statusBreakdown: [
+        { status: 'approved', orders: 1, orderValue: 100 },
+        { status: 'warehouse_packed', orders: 1, orderValue: 200 },
+        { status: 'shipped_distributor', orders: 1, orderValue: 300 },
+        { status: 'closed', orders: 1, orderValue: 400 },
+        { status: 'submitted', orders: 1, orderValue: 50 },
+        { status: 'draft', orders: 1, orderValue: 25 },
+        { status: 'cancelled', orders: 2, orderValue: 75 },
+      ],
+    } as any, NOW)
+    expect(built.orderProcessing.approvedOrders).toBe(4)
+    expect(built.orderProcessing.approvedSalesValue).toBe(1000)
+    expect(built.orderProcessing.pipelineOrders).toBe(1)
+    expect(built.orderProcessing.pipelineValue).toBe(50)
+    expect(built.orderProcessing.cancelledValue).toBe(75)
   })
 
   it('scopes the whole report to one distributor when one is selected', () => {
@@ -728,7 +754,8 @@ describe('documented order inclusion semantics', () => {
     // All Status includes every status, which is what makes Order Processing
     // Health measurable and is unchanged from the previous report.
     expect(report.meta.statuses).toEqual([...ORDER_STATUSES])
-    expect(report.meta.approvedStatuses).toEqual(['approved', 'closed'])
+    // Approved = every approved-stage status (shared Approved Sales definition, sales-kpi.ts).
+    expect(report.meta.approvedStatuses).toEqual(['approved', 'warehouse_packed', 'shipped_distributor', 'closed'])
   })
 
   it('narrows the published statuses when one is selected', () => {
