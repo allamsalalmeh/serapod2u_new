@@ -24,7 +24,7 @@ import { ensureWarm, touchLastRequest } from '@/lib/ai/warmup'
 import type { AiProvider } from '@/lib/ai/types'
 import { detectCGIntent, executeCGTool, CG_SUGGESTIONS } from '@/lib/server/module-assistant/tools-customer-growth'
 import { detectFinIntent, executeFinTool, FIN_SUGGESTIONS } from '@/lib/server/module-assistant/tools-finance'
-import { detectSCIntent, executeSCTool, SC_SUGGESTIONS } from '@/lib/server/module-assistant/tools-supply-chain'
+import { detectSCIntent, executeAuthorizedSCTool, SC_SUGGESTIONS } from '@/lib/server/module-assistant/tools-supply-chain'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -48,7 +48,7 @@ function getSuggestions(moduleId: ModuleId) {
 }
 
 /** Detect intent and execute tool for a module */
-async function tryToolExecution(moduleId: ModuleId, message: string, supabase: any, orgId: string) {
+async function tryToolExecution(moduleId: ModuleId, message: string, supabase: any, orgId: string, actor: { userId: string; organizationId: string }) {
   switch (moduleId) {
     case 'finance': {
       const { tool } = detectFinIntent(message)
@@ -57,7 +57,7 @@ async function tryToolExecution(moduleId: ModuleId, message: string, supabase: a
     }
     case 'supply-chain': {
       const { tool } = detectSCIntent(message)
-      if (tool) return { tool, result: await executeSCTool(tool, supabase, orgId) }
+      if (tool) return { tool, result: await executeAuthorizedSCTool(tool, supabase, orgId, actor) }
       return null
     }
     case 'customer-growth': {
@@ -192,7 +192,7 @@ export async function POST(request: NextRequest) {
     // Use admin client for tool queries to bypass RLS restrictions
     const adminForTools = createAdminClient()
     const resolvedOrgId = await resolveHqOrgId(adminForTools, orgId)
-    const toolExec = await tryToolExecution(moduleId, userMessage, adminForTools, resolvedOrgId)
+    const toolExec = await tryToolExecution(moduleId, userMessage, adminForTools, resolvedOrgId, { userId: user.id, organizationId: profile.organization_id })
     if (toolExec && toolExec.result.success) {
       const totalMs = Date.now() - startMs
       const reply = toolExec.result.summary

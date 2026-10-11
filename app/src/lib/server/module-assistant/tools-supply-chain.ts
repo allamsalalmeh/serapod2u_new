@@ -6,6 +6,8 @@
  */
 import 'server-only'
 import { type SupabaseClient } from '@supabase/supabase-js'
+import { userAllowed } from '@/lib/security-access/operation'
+import { INVENTORY_STOCK_READ_PERMISSIONS } from '@/lib/security-access/inventory-stock'
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -39,6 +41,57 @@ export interface SCToolResult {
 }
 
 const MAX_ROWS = 25
+
+// ─── Authorization ─────────────────────────────────────────────────
+
+const CATALOG = ['product.catalog.view', 'product.catalog.manage']
+const ORDERS = ['supply_chain.order.create', 'supply_chain.order.approve', 'supply_chain.order.cancel',
+  'supply_chain.document.acknowledge', 'supply_chain.document.manage']
+const QR = ['qr.batch.manage', 'manufacturing.production.manage']
+
+/**
+ * The Security & Access permissions each tool's data needs (any one, decided on the caller's organization). The tools
+ * read with the service client (RLS does not apply), so this map IS their authorization: stock figures need the same
+ * permissions the database stock rule reads balances with (inventory-stock.ts), movements the movement report's.
+ */
+export const SC_TOOL_PERMISSIONS: Record<SCToolName, readonly string[]> = {
+  productSummary: CATALOG,
+  totalProducts: CATALOG,
+  productSearch: CATALOG,
+  brandSummary: CATALOG,
+  categorySummary: CATALOG,
+  lowStockItems: INVENTORY_STOCK_READ_PERMISSIONS,
+  inventorySummary: INVENTORY_STOCK_READ_PERMISSIONS,
+  warehouseList: INVENTORY_STOCK_READ_PERMISSIONS,
+  stockMovements: ['inventory.report.view'],
+  recentOrders: ORDERS,
+  orderSummary: ORDERS,
+  ordersByStatus: ORDERS,
+  pendingOrders: ORDERS,
+  topSellingProducts: ORDERS,
+  distributorList: ORDERS,
+  qrBatchSummary: QR,
+  qrCodeStats: QR,
+}
+
+/**
+ * executeSCTool after the caller's own Security & Access decision for the tool's data. In a legacy migration mode the
+ * historical behaviour (no tool-level check) is kept; once a permission is S&A-authoritative only its holders get data.
+ * A refusal is a normal answer (success, no rows), so nothing falls through to the model with data.
+ */
+export async function executeAuthorizedSCTool(
+  toolName: SCToolName,
+  supabase: SupabaseClient,
+  orgId: string,
+  actor: { userId: string; organizationId: string },
+): Promise<SCToolResult> {
+  for (const permission of SC_TOOL_PERMISSIONS[toolName]) {
+    if (await userAllowed(actor.userId, permission, () => true, { organizationId: actor.organizationId })) {
+      return executeSCTool(toolName, supabase, orgId)
+    }
+  }
+  return { success: true, tool: toolName, summary: 'You do not have access to this Supply Chain information.' }
+}
 
 // ─── Intent Detection ──────────────────────────────────────────────
 
