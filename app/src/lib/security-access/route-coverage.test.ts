@@ -6,6 +6,7 @@ import { FINAL_WAVE_PERMISSION_KEYS } from './catalog'
 import { IDENTITY_PERMISSION_KEYS } from './identity-catalog'
 import { STAGE2D_PERMISSION_KEYS } from './stage2d-catalog'
 import { HR_DATA_PERMISSION_KEYS } from './hr-data-catalog'
+import { ORDER_VIEW_PERMISSION_KEYS } from './order-view'
 
 const src = resolve(process.cwd(), 'src')
 const apiRoot = resolve(src, 'app/api')
@@ -19,7 +20,7 @@ const WAVE1_KEYS = [
   'inventory.transfer.view', 'inventory.transfer.request', 'inventory.transfer.approve', 'inventory.transfer.dispatch',
   'inventory.transfer.receive', 'security.access.view', 'security.role.assign', 'security.permission.manage',
 ]
-const KNOWN = new Set([...FINAL_WAVE_PERMISSION_KEYS, ...WAVE1_KEYS, ...IDENTITY_PERMISSION_KEYS, ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS])
+const KNOWN = new Set([...FINAL_WAVE_PERMISSION_KEYS, ...WAVE1_KEYS, ...IDENTITY_PERMISSION_KEYS, ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS, ...ORDER_VIEW_PERMISSION_KEYS])
 
 describe('authorization coverage gate', () => {
   it('classifies every API route (no UNKNOWN, no stale entries)', () => {
@@ -58,7 +59,7 @@ describe('authorization coverage gate', () => {
     // Stage 2D); only the public Outdoor contact form keeps a documented
     // exception (its staff inbox uses the same S&A decision).
     expect(exceptions).toEqual([
-      'orders/[orderId]/access', 'orders/actors', 'outdoor/contact',
+      'orders/actors', 'outdoor/contact',
     ].sort())
   })
 

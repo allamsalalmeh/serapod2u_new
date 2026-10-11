@@ -4,6 +4,7 @@ import { FINAL_WAVE_CATALOG } from './catalog'
 import { IDENTITY_CATALOG } from './identity-catalog'
 import { STAGE2D_PERMISSION_KEYS } from './stage2d-catalog'
 import { HR_DATA_PERMISSION_KEYS } from './hr-data-catalog'
+import { ORDER_VIEW_PERMISSION_KEYS } from './order-view'
 import { ALL_ENFORCEMENT_READY_PERMISSIONS } from './readiness'
 import { ROUTE_COVERAGE } from './route-coverage'
 import { classifyPermission } from './modules'
@@ -61,6 +62,7 @@ export interface CoverageReport {
 export function coverageReport(): CoverageReport {
   const universe = new Set<string>([
     ...WAVE1_PERMISSIONS, ...FINAL_WAVE_CATALOG.map(e => e.key), ...IDENTITY_CATALOG.map(e => e.key), ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS,
+    ...ORDER_VIEW_PERMISSION_KEYS,
   ])
   const profiles = seededProfilePermissions()
   const inProfile = new Set([...profiles.values()].flatMap(s => [...s]))

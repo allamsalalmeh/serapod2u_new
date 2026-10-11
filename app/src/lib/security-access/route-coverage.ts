@@ -436,7 +436,7 @@ export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
   "notifications/sms-check": { kind: 'ENTERPRISE', permissions: ["platform.settings.manage"], via: ["app/api/settings/whatsapp/_utils.ts"] },
   "notifications/test": { kind: 'ENTERPRISE', permissions: ["platform.settings.manage"], via: ["app/api/settings/whatsapp/_utils.ts"] },
   "notifications/test-send": { kind: 'ENTERPRISE', permissions: ["platform.settings.manage"] },
-  "orders/[orderId]/access": { kind: 'EXCEPTION', reason: "Order visibility helper: relation-based (buyer/seller/HQ) read rule without mutation; orders RLS enforces tenancy" },
+  "orders/[orderId]/access": { kind: 'ENTERPRISE', permissions: ["supply_chain.order.view"] },
   "orders/[orderId]/ship-metrics": { kind: 'ENTERPRISE', permissions: ["inventory.report.view"] },
   "orders/actors": { kind: 'EXCEPTION', reason: "Order visibility helper: relation-based (buyer/seller/HQ) read rule without mutation; orders RLS enforces tenancy" },
   "orders/d2h/preflight": { kind: 'ENTERPRISE', permissions: ["supply_chain.order.create"] },
