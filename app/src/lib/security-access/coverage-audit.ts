@@ -4,7 +4,12 @@ import { FINAL_WAVE_CATALOG } from './catalog'
 import { IDENTITY_CATALOG } from './identity-catalog'
 import { STAGE2D_PERMISSION_KEYS } from './stage2d-catalog'
 import { HR_DATA_PERMISSION_KEYS } from './hr-data-catalog'
+import { USER_ADMIN_PERMISSION_KEYS } from './user-admin-catalog'
+import { SYSTEM_LOGS_PERMISSION_KEYS } from './system-logs-catalog'
 import { ORDER_VIEW_PERMISSION_KEYS } from './order-view'
+import { COMMISSION_PERMISSION_KEYS } from './commission'
+import { MSS_PERMISSION_KEYS } from './mss'
+import { COMPENSATION_VIEWER_PERMISSION_KEYS } from './compensation-viewer'
 import { ALL_ENFORCEMENT_READY_PERMISSIONS } from './readiness'
 import { ROUTE_COVERAGE } from './route-coverage'
 import { classifyPermission } from './modules'
@@ -41,6 +46,22 @@ export function seededProfilePermissions(): Map<string, Set<string>> {
   add('warehouse-manager', WAVE1_PERMISSIONS.filter(k => k.startsWith('inventory.')))
   // The QR Batch Operator profile (20261006100000) is a single explicit insert.
   if (readFileSync(resolve(MIGRATIONS, '20261006100000_sa_qr_batch_operator_profile.sql'), 'utf8').includes("'qr-batch-operator'")) add('qr-batch-operator', ['qr.batch.manage'])
+  // The Group Policies migration seeds the module Full Access policies as explicit arrays inside one VALUES list.
+  const gp = readFileSync(resolve(MIGRATIONS, '20261009100000_sa_group_policies_full_access.sql'), 'utf8')
+  for (const m of gp.matchAll(/\(\s*'([a-z0-9-]+-full-access)'\s*,[\s\S]*?array\[([^\]]*)\]\s*,\s*array\[([^\]]*)\]\s*\)/g)) add(m[1], [...m[3].matchAll(/'([a-z_.]+)'/g)].map(x => x[1]))
+  // The password-reset migration (20261016100000) seeds one narrow policy and extends Platform & Settings Full Access with the same key.
+  const reset = readFileSync(resolve(MIGRATIONS, '20261016100000_sa_user_password_reset_permission.sql'), 'utf8')
+  if (reset.includes("'user-password-administrator'")) add('user-password-administrator', [...USER_ADMIN_PERMISSION_KEYS])
+  if (reset.includes("sa_extend_standard_policy('platform-settings-full-access'")) add('platform-settings-full-access', [...USER_ADMIN_PERMISSION_KEYS])
+  // The System Logs migration (20261017110000) seeds one narrow policy and extends nothing.
+  const logs = readFileSync(resolve(MIGRATIONS, '20261017110000_sa_system_logs_view_permission.sql'), 'utf8')
+  if (logs.includes("'system-log-viewer'")) add('system-log-viewer', [...SYSTEM_LOGS_PERMISSION_KEYS])
+  // View Orders (20261101100000) is the supporting read of the order policies and is covered by Supply Chain Full Access.
+  const orderView = readFileSync(resolve(MIGRATIONS, '20261101100000_sa_order_view_policy_dependencies.sql'), 'utf8')
+  if (orderView.includes("b.role_key in ('order-approver', 'order-creator')")) {
+    for (const role of ['order-approver', 'order-creator']) add(role, [...ORDER_VIEW_PERMISSION_KEYS])
+  }
+  if (orderView.includes("sa_extend_standard_policy('supply-chain-full-access'")) add('supply-chain-full-access', [...ORDER_VIEW_PERMISSION_KEYS])
   return map
 }
 
@@ -61,8 +82,10 @@ export interface CoverageReport {
 
 export function coverageReport(): CoverageReport {
   const universe = new Set<string>([
-    ...WAVE1_PERMISSIONS, ...FINAL_WAVE_CATALOG.map(e => e.key), ...IDENTITY_CATALOG.map(e => e.key), ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS,
+    ...WAVE1_PERMISSIONS, ...FINAL_WAVE_CATALOG.map(e => e.key), ...IDENTITY_CATALOG.map(e => e.key), ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS, ...USER_ADMIN_PERMISSION_KEYS, ...SYSTEM_LOGS_PERMISSION_KEYS,
     ...ORDER_VIEW_PERMISSION_KEYS,
+    ...COMMISSION_PERMISSION_KEYS,
+    ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS,
   ])
   const profiles = seededProfilePermissions()
   const inProfile = new Set([...profiles.values()].flatMap(s => [...s]))

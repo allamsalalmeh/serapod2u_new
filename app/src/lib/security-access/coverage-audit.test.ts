@@ -18,23 +18,23 @@ describe('S&A coverage audit (read-only)', () => {
     expect(report.unclassified).toEqual([])
   })
 
-  it('qr.batch.manage is registered, enforcement-ready, runtime-referenced and now has exactly one narrow standard profile', () => {
+  it('qr.batch.manage is registered, enforcement-ready, runtime-referenced and has one narrow policy plus the module Full Access policy', () => {
     expect(report.universe).toContain('qr.batch.manage')
     expect(report.withoutProfile).not.toContain('qr.batch.manage')
-    const holders = [...seededProfilePermissions()].filter(([, keys]) => keys.has('qr.batch.manage')).map(([role]) => role)
-    expect(holders).toEqual(['qr-batch-operator'])
+    const holders = [...seededProfilePermissions()].filter(([, keys]) => keys.has('qr.batch.manage')).map(([role]) => role).sort()
+    expect(holders).toEqual(['qr-batch-operator', 'supply-chain-full-access'])
     expect([...seededProfilePermissions().get('qr-batch-operator')!]).toEqual(['qr.batch.manage'])   // nothing else rides along
   })
 
   it('permission counts and profile counts are different objects and are not forced to match', () => {
     // Informational: some operations legitimately have no standard profile (they are granted through custom
     // profiles or only through compatibility/automatic access). This must never be "fixed" by inventing profiles.
-    expect(report.withoutProfile.length).toBeGreaterThan(0)
+    expect(report.withoutProfile.length).toBeGreaterThan(0)   // reporting.analytics.view is not a module and has no Full Access policy
     expect(report.universe.length).not.toBe(seededProfilePermissions().size)
   })
 })
 
-describe('one taxonomy across Migration Modes, Catalogue, Access Profiles and the profile editor', () => {
+describe('one taxonomy across Migration Modes, Catalogue, Group Policies and the profile editor', () => {
   const rows = report.universe.map(key => ({ key, label: permissionLabel(key).label, mode: 'SHADOW', enforcementReady: false }))
   const rollout = buildRollout(rows)
   const picker = buildPermissionPicker(report.universe.map(permission_key => ({ permission_key })))
