@@ -17,7 +17,7 @@ export async function GET() {
   const ctx = await requireManagerActor()
   if (!ctx.ok) return ctx.response
 
-  const { actor, admin } = ctx
+  const { actor, supabase, admin } = ctx
   const orgId = actor.organizationId
 
   const [salaryView, allowanceView] = await Promise.all([
@@ -30,25 +30,25 @@ export async function GET() {
 
   try {
     const reports = await loadDirectReports(admin, orgId, actor.userId)
-    const reportIds = reports.map((r) => r.userId)
 
+    // Sensitive compensation reads go through the CALLER'S OWN session, so the row-level security policies on
+    // hr_employee_compensation / hr_employee_allowances decide the scope (permission + organization + the current,
+    // active direct-report relationship). No employee id is passed: the database restricts rows to the manager's own
+    // direct reports. Only the permitted columns are selected.
     const [comp, allowances] = await Promise.all([
-      salaryView && reportIds.length
-        ? admin
+      salaryView
+        ? supabase
             .from('hr_employee_compensation')
             .select('employee_id, basic_salary, effective_date, currency')
             .eq('organization_id', orgId)
-            .in('employee_id', reportIds)
             .eq('status', 'active')
         : null,
-      allowanceView && reportIds.length
-        ? admin
+      allowanceView
+        ? supabase
             .from('hr_employee_allowances')
-            .select('employee_id, amount, currency, allowance_type:allowance_type_id (code, name)')
+            .select('employee_id, amount, currency, allowance_type_id')
             .eq('organization_id', orgId)
-            .in('employee_id', reportIds)
             .eq('is_active', true)
-            .eq('allowance_type.is_recurring', true)
         : null,
     ])
 
@@ -73,7 +73,7 @@ export async function GET() {
       if (allowanceView) {
         entry.allowances = (allowances?.data ?? [])
           .filter((a: any) => a.employee_id === r.userId)
-          .map((a: any) => ({ code: a.allowance_type?.code ?? null, name: a.allowance_type?.name ?? null, amount: a.amount, currency: a.currency }))
+          .map((a: any) => ({ allowanceTypeId: a.allowance_type_id, amount: a.amount, currency: a.currency }))
       }
       return entry
     })

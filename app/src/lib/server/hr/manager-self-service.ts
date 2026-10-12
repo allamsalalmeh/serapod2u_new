@@ -8,7 +8,7 @@ import { hrCan } from '@/lib/server/hrAccess'
 export const noStore = { 'Cache-Control': 'no-store' }
 
 export type ManagerContext =
-  | { ok: true; actor: NavActor & { organizationId: string }; admin: any }
+  | { ok: true; actor: NavActor & { organizationId: string }; supabase: any; admin: any }
   | { ok: false; response: NextResponse }
 
 /**
@@ -35,7 +35,7 @@ export async function requireManagerActor(): Promise<ManagerContext> {
     return { ok: false, response: NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400, headers: noStore }) }
   }
 
-  return { ok: true, actor: actor as NavActor & { organizationId: string }, admin: createAdminClient() as any }
+  return { ok: true, actor: actor as NavActor & { organizationId: string }, supabase, admin: createAdminClient() as any }
 }
 
 export async function requireManagerPermission(permission: string): Promise<ManagerContext> {

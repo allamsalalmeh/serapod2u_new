@@ -15,7 +15,7 @@ interface DirectReport {
   employmentStatus?: string | null
   basicSalary?: number | null
   currency?: string | null
-  allowances?: Array<{ code: string | null; name: string | null; amount: number; currency: string | null }>
+  allowances?: Array<{ allowanceTypeId: string | null; amount: number; currency: string | null }>
 }
 
 type State =
@@ -103,7 +103,7 @@ export default function HrManagerWorkspaceView() {
                       </div>
                       {r.allowances && r.allowances.length > 0 && (
                         <div className="text-xs text-[var(--sera-muted)]">
-                          +{r.allowances.map((a) => `${a.name ?? a.code ?? 'allowance'} ${new Intl.NumberFormat('en-MY', { style: 'currency', currency: a.currency ?? 'MYR' }).format(a.amount)}`).join(', ')}
+                          +{r.allowances.map((a) => `${new Intl.NumberFormat('en-MY', { style: 'currency', currency: a.currency ?? 'MYR' }).format(a.amount)}`).join(', ')}
                         </div>
                       )}
                     </div>
