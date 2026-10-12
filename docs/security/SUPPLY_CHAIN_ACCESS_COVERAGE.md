@@ -79,7 +79,7 @@ Legend:
 | View Orders | `supply_chain.order.*`, `document.*` | S&A | S&A + legacy L40 for `view-order` | order routes guard create/approve | `orders_select` = buyer/seller/warehouse org (tenant), not permission | **Partial**: any member of a party org reads its orders via PostgREST |
 | Create Order | `supply_chain.order.create` | S&A | S&A | `/api/orders/save`, D2H routes (8) | `sa_orders_api_write_guard`; H2M via `sa_actor_may_create_h2m` | **Migration**: `20261028100000` unapplied; button wiring uncommitted |
 | Approve Order | `supply_chain.order.approve` | S&A | S&A | 1 route | `orders_approve` RPC guard + maker/checker SoD; status write-guard | **Full** (write path); reads as View Orders |
-| View Inventory | `inventory.stock.view` + stock workflow perms | S&A | S&A | no unguarded GET; movements/ship-metrics on `inventory.report.view` | `product_inventory` + 4 views filtered (this change) | **Full once 20261031100000 is applied**. `stock_movements` table SELECT is still legacy (`sa_actor_is_staff(40)`). |
+| View Inventory | `inventory.stock.view` + stock workflow perms | S&A | S&A | no unguarded GET; movements/ship-metrics on `inventory.report.view` | `product_inventory` + 4 views filtered (this change) | **Full** with 20261031100000 (applied on staging) + **20261107100000** (unapplied): `stock_movements` and both movement views on the same scope, cost/balance fields masked for partners. |
 | Add Stock | `inventory.adjustment.post` | S&A | S&A | RPC | `post_manual_stock_addition` guard; `product_inventory` write guard | **Full** |
 | Stock Adjustment (stock count) | `inventory.stock_count.*`, `adjustment.post` | S&A | S&A | 5 routes | count RPC guards / readiness | **Migration**: `20261019100000/110000` unapplied |
 | Stock Transfer | `inventory.transfer.*` | S&A | S&A | 1 route + RPCs | transfer RPC guards; writes workflow-only | **Partial / Legacy**: `stock_transfers_manage_hq` (FOR ALL) lets **any HQ account read all transfers**; `stock_transfers_view_all` uses legacy staff L40 |
@@ -94,8 +94,7 @@ Legend:
 
 1. **`stock_transfers_manage_hq` (FOR ALL)**: any HQ account reads every transfer. Split it like `inventory_org_manage`, and
    gate SELECT with `inventory.transfer.view` + scope.
-2. **`stock_movements` SELECT**: still `sa_actor_is_staff(40) OR partner`. Move it to the stock read rule
-   (`inventory.report.view` scope).
+2. ~~**`stock_movements` SELECT**~~ — done in `20261107100000_sa_stock_movement_access.sql` (section 6).
 3. **`orders_select`**: tenant only. Gate reads with order permissions plus the party rule (buyer/seller/warehouse).
 4. **`qr_batches` / `return_cases` SELECT**: legacy level/manager rules. Gate them with `qr.batch.manage` /
    `inventory.return.*`.
@@ -112,6 +111,14 @@ Legend:
 9. Compatibility roles are not refreshed for `inventory.stock.view`. Before enforcing it where legacy authorization is still
    writable, refresh them, or legacy-only holders lose the Inventory page.
 
+10. **`can_access_org()` / `is_hq_admin()` role-level shortcut (platform-wide)**: `is_hq_admin()` is `role_level <= 10`
+    with no organization check, and `can_access_org()` starts with it. On staging 5 `MANUFACTURER_USER` accounts and 1
+    `CONSUMER` hold the HQ role (level 10). Inventory no longer uses either function for reads (20261107100000); the
+    hundreds of other policies that do need their own review before the functions themselves change.
+11. **`product_variants.base_cost`** (HQ unit cost) is readable by every authenticated account through
+    `variants_read_active`. It is catalog data read by ~19 application files; protecting it needs a masked catalog view or a
+    server route, not a column revoke. The Stock Movement Report no longer requests it.
+
 ## 5. Tests
 
 * `supabase/tests/security/sa_inventory_stock_view/run.sh`: real S&A migrations on a throwaway PG17, real staging policies
@@ -119,5 +126,28 @@ Legend:
   RLS and the views (including revocation, expiry, Root, service role and legacy mode).
 * `app/src/modules/supply-chain/supply-chain-access.test.tsx`: navigation, landing and in-app guard (Scenarios 1–6).
 * `app/src/lib/security-access/inventory-stock.test.tsx`: TS ↔ SQL lock-step.
+* `supabase/tests/security/sa_stock_movement_access/run.sh`: staging schema + S&A configuration replica
+  (`build_replica.sh`), synthetic two-company fixtures, negative control reproducing the 403 and the leaks, 20261107100000
+  applied twice, S&A-mode and legacy-mode matrices (rows, masked fields, direct table reads, filters/pagination/totals,
+  workflow readers, service-role insert).
+* `app/src/lib/inventory/stock-movement-access.test.ts`: SQL lock-step + no app code selects a revoked column from the table.
 * `app/src/lib/server/module-assistant/tools-supply-chain.access.test.tsx`: assistant tool gate.
 * `app/src/components/layout/Sidebar.access.test.tsx`: sidebar entry.
+
+## 6. Stock movements (20261107100000, unapplied)
+
+Root cause of the Stock Movement Report 403: Phase 0B made `vw_stock_movements_ordered` server-only. The earlier draft fix
+(20261029100000, security_invoker + grant) is now a no-op because it kept the legacy movement rule and the cost exposure.
+
+| Path | Rows | unit_cost / total_cost | quantity_before / after |
+|---|---|---|---|
+| `stock_movements` (PostgREST) | `stock_movements_inventory_read`: from/to in `sa_stock_movement_scope()` | **column revoked** (42501) | **column revoked** (42501) |
+| `vw_stock_movements_ordered`, `v_stock_movements_display` (owner-run, security_barrier) | same rule | HQ-side callers only, else NULL | HQ-side, or every org on the row in scope; else NULL |
+| service role / no API request | unfiltered | yes | yes |
+
+`sa_stock_movement_scope()`: S&A mode = `sa_inventory_stock_scope()` (inventory.stock.view, inventory.report.view or a stock
+workflow permission; memberships + scopes, delegation, Root Access; HQ/WH organizations removed for partner accounts).
+Legacy mode = previous staff/partner gate on own organization + descendants. "HQ-side" = active `INTERNAL_EMPLOYEE` of an
+HQ or WH organization, or Root Access. `sa_inventory_stock_row_visible()` (product_inventory + 4 stock views) no longer
+uses `can_access_org()` / `is_hq_admin()`; the ordering exception uses `sa_inventory_tenant_visible(org, ancestors)`, which
+never gives a partner an HQ/WH row.
