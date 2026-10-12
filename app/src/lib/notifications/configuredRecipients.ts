@@ -93,7 +93,7 @@ export async function collectConfiguredRecipients(supabase: any, input: Configur
     const legacyUsers = setting?.recipient_users
     const userIds = configUsers?.length ? configUsers : legacyUsers?.length ? legacyUsers : []
     if (targets.users && userIds.length) {
-        const { data: users } = await supabase.from('users').select('id, full_name, phone, email').in('id', userIds)
+        const { data: users } = await supabase.from('users').select('id, full_name, phone, email').in('id', userIds).eq('is_active', true)
         if (users) list.add(users.map(contactOf), 'users', users.map((user: any) => ({ name: user.full_name, userId: user.id })))
     }
 
@@ -115,6 +115,7 @@ export async function collectConfiguredRecipients(supabase: any, input: Configur
             .select('id, full_name, phone, email')
             .eq('organization_id', orgId)
             .in('role_code', resolvedRoleCodes)
+            .eq('is_active', true)
         if (roleUsers) list.add(roleUsers.map(contactOf), 'roles', roleUsers.map((user: any) => ({ name: user.full_name, userId: user.id })))
     }
 
