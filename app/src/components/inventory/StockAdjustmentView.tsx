@@ -39,6 +39,7 @@ import {
 import { stockCountDraftSignature } from '@/lib/inventory/stock-count-snapshot'
 import InventoryOpeningCutoffSection from '@/components/inventory/InventoryOpeningCutoffSection'
 import StockCountQuantityInput from '@/components/inventory/StockCountQuantityInput'
+import { formatPiecesAsCases } from '@/lib/inventory/stock-count-units'
 import {
   buildOpeningBalanceScopeRows,
   buildStockCountCatalogRows,
@@ -811,7 +812,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
             product_variants!inner (
               id, variant_name, alternative_name, variant_code, product_code, manufacturer_sku, manual_sku, image_url, base_cost, is_active,
               products!inner (
-                id, product_name, is_active, category_id, group_id, brand_id,
+                id, product_name, is_active, category_id, group_id, brand_id, units_per_case,
                 product_categories!inner (id, category_name, is_active),
                 product_groups (id, group_name, group_description, stock_config_profile),
                 brands (id, brand_name, logo_url)
@@ -1553,7 +1554,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
             product_variants!inner (
               id, variant_name, alternative_name, variant_code, product_code, manufacturer_sku, manual_sku, image_url, base_cost, is_active,
               products!inner (
-                id, product_name, is_active, category_id, group_id, brand_id,
+                id, product_name, is_active, category_id, group_id, brand_id, units_per_case,
                 product_categories!inner (id, category_name, is_active),
                 product_groups (id, group_name, group_description, stock_config_profile),
                 brands (id, brand_name, logo_url)
@@ -2766,9 +2767,9 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
                         return (
                           <TableRow key={row.stockConfigId}>
                             <TableCell><div className="flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded bg-slate-100">{row.imageUrl ? <img src={getStorageUrl(row.imageUrl) || row.imageUrl} alt="" className="h-full w-full object-cover" /> : <Package className="h-5 w-5 text-slate-400" />}</div><div><p className="font-semibold text-slate-950">{row.variantName}</p><div className="mt-1 flex flex-wrap items-center gap-1.5">{showConfiguration && <Badge variant={row.configStatus === 'active' ? 'secondary' : 'outline'}>{withStockStrengthUnit(row.configLabel)}</Badge>}{!row.variantIsActive && <Badge variant="outline" className="border-amber-300 text-amber-700" title="Archived variant — historical snapshot item">Archived variant · historical</Badge>}{row.variantIsActive && (!row.productIsActive || row.configStatus !== 'active') && <Badge variant="outline" className="border-amber-300 text-amber-700" title="Inactive master data — historical snapshot item">Historical configuration</Badge>}{row.productCode && <span className="text-xs text-slate-500">{row.productCode}</span>}</div><p className="text-xs text-slate-500">{row.productName}</p></div></div></TableCell>
-                            <TableCell className="text-right font-medium tabular-nums">{formatNumber(row.systemQuantity)}</TableCell>
-                            <TableCell><StockCountQuantityInput countInputId={row.stockConfigId} value={row.physicalCount} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={value => handlePhysicalCountChange(row.stockConfigId, value)} onEnter={() => focusNextCountInput(row.stockConfigId)} /></TableCell>
-                            <TableCell className={`text-right font-bold tabular-nums ${variance === null || variance === 0 ? 'text-slate-600' : variance > 0 ? 'text-green-600' : 'text-red-600'}`}>{variance === null ? 'Not counted' : `${variance > 0 ? '+' : ''}${formatNumber(variance)}`}</TableCell>
+                            <TableCell className="text-right font-medium tabular-nums">{formatNumber(row.systemQuantity)}{row.piecesPerCase && <p className="text-xs font-normal text-slate-500">{formatPiecesAsCases(row.systemQuantity, row.piecesPerCase)}</p>}</TableCell>
+                            <TableCell><StockCountQuantityInput countInputId={row.stockConfigId} value={row.physicalCount} piecesPerCase={row.piecesPerCase} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={value => handlePhysicalCountChange(row.stockConfigId, value)} onEnter={() => focusNextCountInput(row.stockConfigId)} /></TableCell>
+                            <TableCell className={`text-right font-bold tabular-nums ${variance === null || variance === 0 ? 'text-slate-600' : variance > 0 ? 'text-green-600' : 'text-red-600'}`}>{variance === null ? 'Not counted' : `${variance > 0 ? '+' : ''}${formatNumber(variance)}`}{variance !== null && variance !== 0 && row.piecesPerCase && <p className="text-xs font-normal">{variance > 0 ? '+' : ''}{formatPiecesAsCases(variance, row.piecesPerCase)}</p>}</TableCell>
                             {visibleColumns.unitCost && <TableCell className="text-right tabular-nums">{row.unitCost === null ? '—' : formatMoney(row.unitCost)}</TableCell>}
                             {visibleColumns.adjustmentValue && <TableCell className={`text-right font-semibold tabular-nums ${!adjustmentValue ? 'text-slate-600' : adjustmentValue > 0 ? 'text-green-600' : 'text-red-600'}`}>{adjustmentValue === null ? '-' : formatMoney(adjustmentValue)}</TableCell>}
                             {visibleColumns.note && <TableCell><div className="flex items-center gap-2"><MessageSquare className="h-4 w-4 text-slate-400" /><Input value={row.note} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={event => updateRow(row.stockConfigId, { note: event.target.value })} placeholder={variance === null ? 'Not counted' : variance === 0 ? 'Matched' : 'Add note'} /></div></TableCell>}
@@ -2887,7 +2888,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
                           <TableCell><Badge variant="secondary">{withStockStrengthUnit(row.configLabel)}</Badge></TableCell>
                           <TableCell><Badge className="bg-[var(--sera-orange)]/[0.06] text-blue-700 hover:bg-[var(--sera-orange)]/[0.06]">Target Configuration</Badge></TableCell>
                           <TableCell className="text-right font-medium tabular-nums">{formatNumber(row.systemQuantity)}</TableCell>
-                          <TableCell><StockCountQuantityInput value={row.physicalCount} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={value => handlePhysicalCountChange(row.stockConfigId, value)} /></TableCell>
+                          <TableCell><StockCountQuantityInput value={row.physicalCount} piecesPerCase={row.piecesPerCase} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={value => handlePhysicalCountChange(row.stockConfigId, value)} /></TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

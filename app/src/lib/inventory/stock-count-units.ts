@@ -15,3 +15,20 @@ export function casesToPieces(cases: string, perCase: string): number | null {
   const pieces = Number(cases) * piecesPerCase
   return Number.isSafeInteger(pieces) ? pieces : null
 }
+
+/** Whole cases for a piece count, or null when it is blank or does not divide into whole cases. */
+export function piecesToWholeCases(pieces: string, piecesPerCase: number): number | null {
+  if (!/^\d+$/.test(pieces) || piecesPerCase < 1) return null
+  const value = Number(pieces)
+  return value % piecesPerCase === 0 ? value / piecesPerCase : null
+}
+
+/** "7,030 cases + 2 pcs" — a piece quantity restated in cases; negative values keep their sign. */
+export function formatPiecesAsCases(pieces: number, piecesPerCase: number): string {
+  const sign = pieces < 0 ? '-' : ''
+  const abs = Math.abs(Math.trunc(pieces))
+  const cases = Math.floor(abs / piecesPerCase)
+  const loose = abs % piecesPerCase
+  const casesText = `${cases.toLocaleString('en-US')} ${cases === 1 ? 'case' : 'cases'}`
+  return `${sign}${loose > 0 ? `${casesText} + ${loose.toLocaleString('en-US')} pcs` : casesText}`
+}
