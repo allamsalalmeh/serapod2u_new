@@ -13,8 +13,10 @@ H="$ROOT/supabase/tests/hr_mss_compensation"
 P=(psql -X -q -v ON_ERROR_STOP=1 "$URL")
 "${P[@]}" -c "do \$g\$ begin if current_database() !~ '^mss_test' then raise exception 'Refusing: not a disposable mss_test* database'; end if; end \$g\$;"
 for pass in 1 2; do
-  echo "-- pass $pass: 20261103100000_hr_mss_compensation_viewer"
-  "${P[@]}" -f "$M/20261103100000_hr_mss_compensation_viewer.sql" >/dev/null
+  for f in 20261103100000_hr_mss_compensation_viewer 20261104100000_hr_mss_compensation_rls 20261105100000_hr_compensation_column_grants; do
+    echo "-- pass $pass: $f"
+    "${P[@]}" -f "$M/$f.sql" >/dev/null
+  done
 done
 "${P[@]}" -f "$H/10_fixtures.sql" >/dev/null
 "${P[@]}" -f "$H/20_tests.sql"

@@ -245,7 +245,9 @@ z_*
 # ESS/MSS Manager Self-Service and Manager Compensation Viewer: security lock-step tests, SQL fixtures and docs
 !/app/src/lib/security-access/mss.test.ts
 !/app/src/lib/security-access/compensation-viewer.test.ts
+!/app/src/lib/server/hr/profile-edit.test.ts
 !/app/src/app/api/hr/mss/**/*.test.ts
+!/app/src/app/api/hr/self-service/**/*.test.ts
 !/supabase/tests/hr_mss_compensation/
 !/supabase/tests/hr_mss_compensation/**/*.sql
 !/supabase/tests/hr_mss_compensation/**/*.sh

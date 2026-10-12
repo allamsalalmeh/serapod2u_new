@@ -6,6 +6,7 @@ import { COMPENSATION_VIEWER_PERMISSION_KEYS, COMPENSATION_VIEWER_ROLE_KEY, COMP
 
 const migration = readFileSync(resolve(process.cwd(), '..', 'supabase', 'migrations', '20261103100000_hr_mss_compensation_viewer.sql'), 'utf8')
 const rls = readFileSync(resolve(process.cwd(), '..', 'supabase', 'migrations', '20261104100000_hr_mss_compensation_rls.sql'), 'utf8')
+const columns = readFileSync(resolve(process.cwd(), '..', 'supabase', 'migrations', '20261105100000_hr_compensation_column_grants.sql'), 'utf8')
 
 describe('Manager Compensation Viewer permissions ↔ migration lock-step', () => {
   it('seeds exactly these two permissions, all security-sensitive, no legacy audience', () => {
@@ -58,5 +59,23 @@ describe('Manager Compensation Viewer row-level security migration', () => {
   it('is ordered after the Commission migrations and the viewer migration', () => {
     expect('20261104100000_hr_mss_compensation_rls.sql' > '20261102120000_hr_commission_policies.sql').toBe(true)
     expect('20261104100000_hr_mss_compensation_rls.sql' > '20261103100000_hr_mss_compensation_viewer.sql').toBe(true)
+  })
+})
+
+describe('Manager Compensation Viewer column-level grants', () => {
+  it('revokes whole-table SELECT and grants only the permitted columns to authenticated', () => {
+    expect(columns).toMatch(/revoke select on public\.hr_employee_compensation from authenticated/)
+    expect(columns).toMatch(/revoke select on public\.hr_employee_allowances from authenticated/)
+    expect(columns).toMatch(/grant select \(id, organization_id, employee_id, basic_salary, currency, effective_date, end_date, status\)[\s\S]*?on public\.hr_employee_compensation to authenticated/)
+    expect(columns).toMatch(/grant select \(id, organization_id, employee_id, allowance_type_id, amount, currency, effective_date, end_date, is_active\)[\s\S]*?on public\.hr_employee_allowances to authenticated/)
+  })
+
+  it('post-conditions forbid hourly_rate, salary_band_id and notes for the API role', () => {
+    expect(columns).toMatch(/must not select hourly_rate \/ salary_band_id \/ notes/)
+    expect(columns).toMatch(/must not select notes on hr_employee_allowances/)
+  })
+
+  it('preserves the service role full read for the authorized payroll routes', () => {
+    expect(columns).toMatch(/service_role must keep full SELECT/)
   })
 })

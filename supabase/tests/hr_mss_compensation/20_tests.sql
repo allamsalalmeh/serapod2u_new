@@ -63,3 +63,18 @@ begin
   perform hmt.expect(not public.hr_mss_allowed('hr.mss.nope', hmt.o(1)), 'unknown key refused');
   raise notice 'PASS 6 allowed() key boundaries';
 end $t$;
+
+-- ── 7. Column-level field restrictions: direct PostgREST cannot read prohibited columns ──────
+do $t$
+begin
+  perform hmt.expect(not has_column_privilege('authenticated', 'public.hr_employee_compensation', 'hourly_rate', 'SELECT'), 'hourly_rate revoked from authenticated');
+  perform hmt.expect(not has_column_privilege('authenticated', 'public.hr_employee_compensation', 'salary_band_id', 'SELECT'), 'salary_band_id revoked');
+  perform hmt.expect(not has_column_privilege('authenticated', 'public.hr_employee_compensation', 'pay_type', 'SELECT'), 'pay_type revoked');
+  perform hmt.expect(not has_column_privilege('authenticated', 'public.hr_employee_compensation', 'ot_eligible', 'SELECT'), 'ot_eligible revoked');
+  perform hmt.expect(not has_column_privilege('authenticated', 'public.hr_employee_compensation', 'notes', 'SELECT'), 'compensation notes revoked');
+  perform hmt.expect(not has_column_privilege('authenticated', 'public.hr_employee_allowances', 'notes', 'SELECT'), 'allowance notes revoked');
+  perform hmt.expect(has_column_privilege('authenticated', 'public.hr_employee_compensation', 'basic_salary', 'SELECT'), 'basic_salary still readable');
+  perform hmt.expect(has_column_privilege('authenticated', 'public.hr_employee_allowances', 'amount', 'SELECT'), 'amount still readable');
+  perform hmt.expect(has_table_privilege('service_role', 'public.hr_employee_compensation', 'SELECT'), 'service_role keeps full SELECT');
+  raise notice 'PASS 7 column-level field restrictions';
+end $t$;

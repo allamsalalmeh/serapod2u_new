@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { canManageHr, getHrAuthContext, hrCan, hrSelfCan } from '@/lib/server/hrAccess'
+import { validSensitivePayload } from '@/lib/server/hr/profile-edit'
 
 export async function GET() {
     try {
@@ -10,16 +11,25 @@ export async function GET() {
             return NextResponse.json({ success: false, error: ctxResult.error }, { status: 401 })
         }
 
-        const { organizationId } = ctxResult.data
+        const ctx = ctxResult.data
+        const { organizationId } = ctx
         if (!organizationId) {
             return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
         }
 
-        const { data, error } = await supabase
+        // HR administrators see the organization's requests; an employee sees only their own (the verified account).
+        const isManager = await hrCan(ctx, 'hr.employee.manage')
+        if (!isManager && !(await hrSelfCan(ctx))) {
+            return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+        }
+
+        let query = supabase
             .from('hr_profile_change_requests')
             .select('*')
             .eq('organization_id', organizationId)
             .order('created_at', { ascending: false })
+        if (!isManager) query = query.eq('employee_user_id', ctx.userId)
+        const { data, error } = await query
 
         if (error) {
             return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -49,12 +59,18 @@ export async function POST(request: NextRequest) {
         }
 
         const body = await request.json()
-        const employeeUserId = String(body.employee_user_id || ctx.userId || '').trim()
+        // The subject is the authenticated account; only HR administrators may file on someone else's behalf.
+        const isManager = await hrCan(ctx, 'hr.employee.manage')
+        const employeeUserId = String((isManager && body.employee_user_id) || ctx.userId || '').trim()
         if (!employeeUserId || !body.change_payload) {
             return NextResponse.json({ success: false, error: 'Employee and change payload are required' }, { status: 400 })
         }
+        // Category B is sensitive-only: legal name, IC/passport, bank account. Basic fields are edited directly
+        // (Category A) and anything else is rejected before a request is created.
+        if (!validSensitivePayload(body.change_payload)) {
+            return NextResponse.json({ success: false, error: 'Only sensitive profile fields (legal name, IC/passport, bank account) may be requested.' }, { status: 400 })
+        }
 
-        const isManager = await hrCan(ctx, 'hr.employee.manage')
         const status = isManager && body.status ? body.status : 'pending'
 
         const { data, error } = await supabase
