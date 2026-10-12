@@ -61,12 +61,15 @@ export const MODULE_TAXONOMY: readonly ModuleGroup[] = [
   {
     id: 'hr_payroll', name: 'HR & Payroll', match: mod('hr'),
     areas: [
-      { id: 'payroll', name: 'Payroll & Compensation', match: res('hr', 'payroll', 'compensation', 'benefits') },
+      // Staff sales commission (hr.commission.*) is pay: it sits with payroll and compensation.
+      { id: 'payroll', name: 'Payroll & Compensation', match: res('hr', 'payroll', 'compensation', 'benefits', 'commission') },
       { id: 'employees', name: 'Employees & Contracts', match: res('hr', 'employee', 'contract', 'onboarding', 'recruitment') },
       { id: 'time_leave', name: 'Time, Leave & Expenses', match: res('hr', 'attendance', 'leave', 'leave_request', 'expense') },
       { id: 'performance', name: 'Performance & Learning', match: res('hr', 'performance', 'learning') },
       { id: 'self_service', name: 'Employee Self-Service', match: res('hr', 'self_service') },
-      { id: 'hr_admin', name: 'HR Administration', match: res('hr', 'module', 'settings', 'policy', 'analytics', 'ai') },
+      { id: 'manager_self_service', name: 'Manager Self-Service', match: res('hr', 'mss') },
+      // hr.data.reset is listed here; its migration mode (e.g. Legacy Retired) is stored per permission and unaffected.
+      { id: 'hr_admin', name: 'HR Administration', match: res('hr', 'module', 'settings', 'policy', 'analytics', 'ai', 'data') },
     ],
   },
   {
