@@ -38,6 +38,7 @@ import {
 } from '@/lib/inventory/stock-count-classification'
 import { stockCountDraftSignature } from '@/lib/inventory/stock-count-snapshot'
 import InventoryOpeningCutoffSection from '@/components/inventory/InventoryOpeningCutoffSection'
+import StockCountQuantityInput from '@/components/inventory/StockCountQuantityInput'
 import {
   buildOpeningBalanceScopeRows,
   buildStockCountCatalogRows,
@@ -2755,7 +2756,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
               {groupExpanded && (
                 <div className="overflow-x-auto border-t">
                   <Table>
-                    <TableHeader><TableRow><TableHead className="min-w-[320px]">{showConfiguration ? 'Variant / Stock Configuration' : 'Variant'}</TableHead><TableHead className="text-right">System Quantity</TableHead><TableHead className="min-w-[170px]">Physical Count</TableHead><TableHead className="text-right">Variance</TableHead>{visibleColumns.unitCost && <TableHead className="text-right">Unit Cost</TableHead>}{visibleColumns.adjustmentValue && <TableHead className="text-right">Adjustment Value</TableHead>}{visibleColumns.note && <TableHead className="min-w-[240px]">Note / Status</TableHead>}</TableRow></TableHeader>
+                    <TableHeader><TableRow><TableHead className="min-w-[320px]">{showConfiguration ? 'Variant / Stock Configuration' : 'Variant'}</TableHead><TableHead className="text-right">System Quantity</TableHead><TableHead className="min-w-[240px]">Physical Count</TableHead><TableHead className="text-right">Variance</TableHead>{visibleColumns.unitCost && <TableHead className="text-right">Unit Cost</TableHead>}{visibleColumns.adjustmentValue && <TableHead className="text-right">Adjustment Value</TableHead>}{visibleColumns.note && <TableHead className="min-w-[240px]">Note / Status</TableHead>}</TableRow></TableHeader>
                     <TableBody>
                       {loadingRows && <TableRow><TableCell colSpan={7} className="py-8 text-center text-slate-500">Loading inventory configurations...</TableCell></TableRow>}
                       {!loadingRows && selectedGroupRows.length === 0 && <TableRow><TableCell colSpan={7} className="py-8 text-center text-slate-500">No variants match this view.</TableCell></TableRow>}
@@ -2766,7 +2767,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
                           <TableRow key={row.stockConfigId}>
                             <TableCell><div className="flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded bg-slate-100">{row.imageUrl ? <img src={getStorageUrl(row.imageUrl) || row.imageUrl} alt="" className="h-full w-full object-cover" /> : <Package className="h-5 w-5 text-slate-400" />}</div><div><p className="font-semibold text-slate-950">{row.variantName}</p><div className="mt-1 flex flex-wrap items-center gap-1.5">{showConfiguration && <Badge variant={row.configStatus === 'active' ? 'secondary' : 'outline'}>{withStockStrengthUnit(row.configLabel)}</Badge>}{!row.variantIsActive && <Badge variant="outline" className="border-amber-300 text-amber-700" title="Archived variant — historical snapshot item">Archived variant · historical</Badge>}{row.variantIsActive && (!row.productIsActive || row.configStatus !== 'active') && <Badge variant="outline" className="border-amber-300 text-amber-700" title="Inactive master data — historical snapshot item">Historical configuration</Badge>}{row.productCode && <span className="text-xs text-slate-500">{row.productCode}</span>}</div><p className="text-xs text-slate-500">{row.productName}</p></div></div></TableCell>
                             <TableCell className="text-right font-medium tabular-nums">{formatNumber(row.systemQuantity)}</TableCell>
-                            <TableCell><Input data-count-input={row.stockConfigId} inputMode="numeric" min="0" value={row.physicalCount} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={event => handlePhysicalCountChange(row.stockConfigId, event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); focusNextCountInput(row.stockConfigId) } }} placeholder="Blank" className="w-36 font-semibold tabular-nums" /></TableCell>
+                            <TableCell><StockCountQuantityInput countInputId={row.stockConfigId} value={row.physicalCount} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={value => handlePhysicalCountChange(row.stockConfigId, value)} onEnter={() => focusNextCountInput(row.stockConfigId)} /></TableCell>
                             <TableCell className={`text-right font-bold tabular-nums ${variance === null || variance === 0 ? 'text-slate-600' : variance > 0 ? 'text-green-600' : 'text-red-600'}`}>{variance === null ? 'Not counted' : `${variance > 0 ? '+' : ''}${formatNumber(variance)}`}</TableCell>
                             {visibleColumns.unitCost && <TableCell className="text-right tabular-nums">{row.unitCost === null ? '—' : formatMoney(row.unitCost)}</TableCell>}
                             {visibleColumns.adjustmentValue && <TableCell className={`text-right font-semibold tabular-nums ${!adjustmentValue ? 'text-slate-600' : adjustmentValue > 0 ? 'text-green-600' : 'text-red-600'}`}>{adjustmentValue === null ? '-' : formatMoney(adjustmentValue)}</TableCell>}
@@ -2868,7 +2869,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
 
                 <div className="overflow-x-auto rounded-lg border">
                   <Table>
-                    <TableHeader><TableRow><TableHead className="min-w-[180px]">Configuration</TableHead><TableHead className="min-w-[170px]">Row Type</TableHead><TableHead className="text-right">System Quantity</TableHead><TableHead className="min-w-[170px]">Physical Count</TableHead></TableRow></TableHeader>
+                    <TableHeader><TableRow><TableHead className="min-w-[180px]">Configuration</TableHead><TableHead className="min-w-[170px]">Row Type</TableHead><TableHead className="text-right">System Quantity</TableHead><TableHead className="min-w-[240px]">Physical Count</TableHead></TableRow></TableHeader>
                     <TableBody>
                       <TableRow className="bg-slate-50">
                         <TableCell><Badge variant="outline">{withStockStrengthUnit(group.legacyRow.configLabel)}</Badge><p className="mt-1 text-xs text-slate-500">To be classified</p></TableCell>
@@ -2886,7 +2887,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
                           <TableCell><Badge variant="secondary">{withStockStrengthUnit(row.configLabel)}</Badge></TableCell>
                           <TableCell><Badge className="bg-[var(--sera-orange)]/[0.06] text-blue-700 hover:bg-[var(--sera-orange)]/[0.06]">Target Configuration</Badge></TableCell>
                           <TableCell className="text-right font-medium tabular-nums">{formatNumber(row.systemQuantity)}</TableCell>
-                          <TableCell><Input inputMode="numeric" min="0" value={row.physicalCount} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={event => handlePhysicalCountChange(row.stockConfigId, event.target.value)} placeholder="Blank" className="w-36 font-semibold tabular-nums" /></TableCell>
+                          <TableCell><StockCountQuantityInput value={row.physicalCount} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={value => handlePhysicalCountChange(row.stockConfigId, value)} /></TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
