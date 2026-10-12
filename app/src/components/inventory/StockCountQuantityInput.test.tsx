@@ -4,12 +4,13 @@ import { useState } from 'react'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { casesToPieces } from '@/lib/inventory/stock-count-units'
+import { casesToPieces, formatPiecesAsCases } from '@/lib/inventory/stock-count-units'
+import { resolveStockCountPiecesPerCase } from '@/lib/inventory/stock-count-catalog'
 import StockCountQuantityInput from './StockCountQuantityInput'
 
 let setExternal: (value: string) => void = () => {}
 
-function Harness({ initial = '', onEnter, disabled }: { initial?: string; onEnter?: () => void; disabled?: boolean }) {
+function Harness({ initial = '', onEnter, disabled, piecesPerCase }: { initial?: string; onEnter?: () => void; disabled?: boolean; piecesPerCase?: number }) {
   const [value, setValue] = useState(initial)
   setExternal = setValue
   return (
@@ -17,6 +18,7 @@ function Harness({ initial = '', onEnter, disabled }: { initial?: string; onEnte
       <StockCountQuantityInput
         countInputId="cfg-1"
         value={value}
+        piecesPerCase={piecesPerCase}
         disabled={disabled}
         onEnter={onEnter}
         onChange={next => { if (next === '' || /^\d+$/.test(next)) setValue(next) }}
@@ -39,6 +41,22 @@ describe('casesToPieces', () => {
     expect(casesToPieces('3', '')).toBeNull()
     expect(casesToPieces('3', '0')).toBeNull()
     expect(casesToPieces('1.5', '4')).toBeNull()
+  })
+})
+
+describe('case size and case display', () => {
+  it('uses the shared pack-size rule: Cellera Hero/Zero 4, devices and others in pieces', () => {
+    expect(resolveStockCountPiecesPerCase('Cellera Hero', 1)).toBe(4)
+    expect(resolveStockCountPiecesPerCase('Cellera Zero', null)).toBe(4)
+    expect(resolveStockCountPiecesPerCase('Serapod Device S.Box', 1)).toBeNull()
+    expect(resolveStockCountPiecesPerCase('Moonchair Camping Chair', 1)).toBeNull()
+    expect(resolveStockCountPiecesPerCase('Moonchair Camping Chair', 6)).toBe(6)
+  })
+
+  it('restates pieces as cases plus loose pieces', () => {
+    expect(formatPiecesAsCases(28122, 4)).toBe('7,030 cases + 2 pcs')
+    expect(formatPiecesAsCases(4, 4)).toBe('1 case')
+    expect(formatPiecesAsCases(-3014, 4)).toBe('-753 cases + 2 pcs')
   })
 })
 
@@ -110,6 +128,40 @@ describe('StockCountQuantityInput', () => {
     await userEvent.type(screen.getByLabelText('Pieces per case'), '6{Enter}')
     expect(onEnter).toHaveBeenCalledTimes(2)
     expect(stored()).toBe('12')
+  })
+
+  it('starts a Cellera row in Cases with 4 pcs per case already set', async () => {
+    render(<Harness piecesPerCase={4} />)
+    expect((screen.getByLabelText('Count unit') as HTMLSelectElement).value).toBe('case')
+    expect(screen.queryByLabelText('Pieces per case')).toBeNull()
+    expect(screen.getByText('4 pcs per case')).toBeTruthy()
+    await userEvent.type(screen.getByLabelText('Number of cases'), '10')
+    expect(stored()).toBe('40')
+    expect(screen.getByText('= 40 pcs')).toBeTruthy()
+  })
+
+  it('shows a saved count in cases, and in pieces when it is not whole cases', () => {
+    render(<Harness initial="7028" piecesPerCase={4} />)
+    expect((screen.getByLabelText('Number of cases') as HTMLInputElement).value).toBe('1757')
+    act(() => setExternal('25110'))
+    expect((screen.getByLabelText('Count unit') as HTMLSelectElement).value).toBe('pcs')
+    expect((screen.getByLabelText('Physical count in pieces') as HTMLInputElement).value).toBe('25110')
+    cleanup()
+
+    render(<Harness initial="25110" piecesPerCase={4} />)
+    expect((screen.getByLabelText('Count unit') as HTMLSelectElement).value).toBe('pcs')
+  })
+
+  it('restates an outside change in cases and Enter goes straight to the next row', async () => {
+    const onEnter = vi.fn()
+    render(<Harness piecesPerCase={4} onEnter={onEnter} />)
+    act(() => setExternal('80'))
+    expect((screen.getByLabelText('Number of cases') as HTMLInputElement).value).toBe('20')
+    act(() => setExternal(''))
+    expect((screen.getByLabelText('Number of cases') as HTMLInputElement).value).toBe('')
+    await userEvent.type(screen.getByLabelText('Number of cases'), '3{Enter}')
+    expect(stored()).toBe('12')
+    expect(onEnter).toHaveBeenCalledTimes(1)
   })
 
   it('locks every field on a posted count', () => {

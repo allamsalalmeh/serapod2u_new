@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Input } from '@/components/ui/input'
-import { casesToPieces, isWholeNumberEntry, type CountEntryUnit } from '@/lib/inventory/stock-count-units'
+import { casesToPieces, isWholeNumberEntry, piecesToWholeCases, type CountEntryUnit } from '@/lib/inventory/stock-count-units'
 
 interface StockCountQuantityInputProps {
   /** The count in pieces, as stored on the row ('' = not counted). */
@@ -10,20 +10,32 @@ interface StockCountQuantityInputProps {
   disabled?: boolean
   /** Receives the count in pieces. */
   onChange: (pieces: string) => void
+  /** Known pieces per case: the row starts in Cases and the case size is fixed. */
+  piecesPerCase?: number | null
   countInputId?: string
   onEnter?: () => void
 }
 
-export default function StockCountQuantityInput({ value, disabled, onChange, countInputId, onEnter }: StockCountQuantityInputProps) {
-  const [unit, setUnit] = useState<CountEntryUnit>('pcs')
-  const [cases, setCases] = useState('')
-  const [perCase, setPerCase] = useState('')
+export default function StockCountQuantityInput({ value, disabled, onChange, piecesPerCase, countInputId, onEnter }: StockCountQuantityInputProps) {
+  const fixedSize = piecesPerCase && piecesPerCase > 1 ? piecesPerCase : null
+  const casesFor = (pieces: string) => (fixedSize ? piecesToWholeCases(pieces, fixedSize) : null)
+  const [unit, setUnit] = useState<CountEntryUnit>(() => (fixedSize && (value === '' || casesFor(value) !== null) ? 'case' : 'pcs'))
+  const [cases, setCases] = useState(() => { const n = casesFor(value); return n === null ? '' : String(n) })
+  const [perCase, setPerCase] = useState(fixedSize ? String(fixedSize) : '')
   const emitted = useRef(value)
   const perCaseRef = useRef<HTMLInputElement>(null)
 
-  // A count replaced from outside (draft reload, Excel import, reset) is shown in pieces again.
+  // A count replaced from outside (draft reload, Excel import, reset) is restated in
+  // cases when it divides evenly by a known case size, otherwise shown in pieces.
   useEffect(() => {
-    if (unit === 'case' && value !== emitted.current) setUnit('pcs')
+    if (value === emitted.current) return
+    emitted.current = value
+    if (unit !== 'case') return
+    const n = casesFor(value)
+    if (value === '' && fixedSize) setCases('')
+    else if (n !== null) setCases(String(n))
+    else setUnit('pcs')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unit, value])
 
   const changeCases = (nextCases: string, nextPerCase: string) => {
@@ -39,7 +51,8 @@ export default function StockCountQuantityInput({ value, disabled, onChange, cou
   const changeUnit = (next: CountEntryUnit) => {
     if (next === 'case') {
       emitted.current = value
-      setCases('')
+      const n = casesFor(value)
+      setCases(n === null ? '' : String(n))
     }
     setUnit(next)
   }
@@ -61,8 +74,8 @@ export default function StockCountQuantityInput({ value, disabled, onChange, cou
           onChange={event => changeUnit(event.target.value as CountEntryUnit)}
           className="h-10 rounded-md border border-input bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <option value="pcs">Pieces</option>
           <option value="case">Cases</option>
+          <option value="pcs">Pieces</option>
         </select>
         <Input
           data-count-input={countInputId}
@@ -80,19 +93,25 @@ export default function StockCountQuantityInput({ value, disabled, onChange, cou
       {unit === 'case' && (
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
           <span>×</span>
-          <Input
-            ref={perCaseRef}
-            aria-label="Pieces per case"
-            inputMode="numeric"
-            min="1"
-            value={perCase}
-            disabled={disabled}
-            onChange={event => changeCases(cases, event.target.value)}
-            onKeyDown={event => enter(event, 'perCase')}
-            placeholder="pcs"
-            className="h-7 w-16 px-2 text-xs tabular-nums"
-          />
-          <span>pcs per case</span>
+          {fixedSize ? (
+            <span>{fixedSize} pcs per case</span>
+          ) : (
+            <>
+              <Input
+                ref={perCaseRef}
+                aria-label="Pieces per case"
+                inputMode="numeric"
+                min="1"
+                value={perCase}
+                disabled={disabled}
+                onChange={event => changeCases(cases, event.target.value)}
+                onKeyDown={event => enter(event, 'perCase')}
+                placeholder="pcs"
+                className="h-7 w-16 px-2 text-xs tabular-nums"
+              />
+              <span>pcs per case</span>
+            </>
+          )}
           <span className="font-semibold text-slate-700">= {value === '' ? '—' : Number(value).toLocaleString('en-US')} pcs</span>
         </div>
       )}

@@ -1,3 +1,4 @@
+import { classifyProductLine, getRowUnitsPerCase } from '@/lib/returns/format'
 import { normalizeBaseCost } from './stock-count-costing'
 import {
   evaluateStockConfigEligibility,
@@ -51,6 +52,8 @@ export interface StockCountCatalogRow {
   note: string
   unitCost: number | null
   warehouseLocation: string | null
+  /** Pieces in one case when the product is counted by the case (Cellera Hero/Zero = 4), otherwise null. */
+  piecesPerCase?: number | null
 }
 
 export interface StockCountLocation {
@@ -88,6 +91,12 @@ export function resolveStockCountDefaultWarehouseId(
     return currentOrganizationId
   }
   return ''
+}
+
+/** The shared pack-size rule (devices stay in pieces); null when a case is not more than one piece. */
+export function resolveStockCountPiecesPerCase(productName: string | null | undefined, masterUnitsPerCase?: number | null): number | null {
+  const pieces = getRowUnitsPerCase(classifyProductLine(productName), productName, masterUnitsPerCase)
+  return pieces > 1 ? pieces : null
 }
 
 function relation<T>(value: T | T[] | null | undefined): T | null {
@@ -180,6 +189,7 @@ export function buildStockCountCatalogRows(
       note: '',
       unitCost: normalizeBaseCost(variant.base_cost),
       warehouseLocation: balance?.warehouse_location || null,
+      piecesPerCase: resolveStockCountPiecesPerCase(product.product_name, product.units_per_case),
     }
   })
 
