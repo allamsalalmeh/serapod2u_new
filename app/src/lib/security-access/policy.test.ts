@@ -35,4 +35,12 @@ describe('new S&A policy', () => {
     const withoutWarehouse = { ...request(), resource: { type: 'stock_count', organizationId: 'org-a' } }
     expect(evaluateNewPolicy(withoutWarehouse, base()).reasonCode).toBe('MISSING_CONTEXT')
   })
+  it('a warehouse scope matches a resource of exactly that warehouse organization (sa_scope_matches, 20261109100000)', () => {
+    const atWarehouse = base({ memberships: [{ id: 'mem-a', organizationId: 'wh-a', status: 'active', effectiveFrom: null, effectiveUntil: null }] })
+    const warehouseOrg = { ...request(), resource: { type: 'stock_count', organizationId: 'wh-a' } }
+    expect(evaluateNewPolicy(warehouseOrg, atWarehouse).decision).toBe('ALLOW')
+    const sibling = { ...request(), resource: { type: 'stock_count', organizationId: 'wh-b' } }
+    const atSibling = base({ memberships: [{ id: 'mem-a', organizationId: 'wh-b', status: 'active', effectiveFrom: null, effectiveUntil: null }] })
+    expect(evaluateNewPolicy(sibling, atSibling).reasonCode).toBe('MISSING_CONTEXT')
+  })
 })

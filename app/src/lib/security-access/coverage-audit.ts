@@ -7,6 +7,7 @@ import { HR_DATA_PERMISSION_KEYS } from './hr-data-catalog'
 import { USER_ADMIN_PERMISSION_KEYS } from './user-admin-catalog'
 import { SYSTEM_LOGS_PERMISSION_KEYS } from './system-logs-catalog'
 import { ORDER_VIEW_PERMISSION_KEYS } from './order-view'
+import { INVENTORY_STOCK_VIEW_PERMISSION } from './inventory-stock'
 import { COMMISSION_PERMISSION_KEYS } from './commission'
 import { MSS_PERMISSION_KEYS } from './mss'
 import { COMPENSATION_VIEWER_PERMISSION_KEYS } from './compensation-viewer'
@@ -62,6 +63,14 @@ export function seededProfilePermissions(): Map<string, Set<string>> {
     for (const role of ['order-approver', 'order-creator']) add(role, [...ORDER_VIEW_PERMISSION_KEYS])
   }
   if (orderView.includes("sa_extend_standard_policy('supply-chain-full-access'")) add('supply-chain-full-access', [...ORDER_VIEW_PERMISSION_KEYS])
+  // View Inventory (20261031100000): the Inventory Viewer policy, and the Supply Chain Full Access extension.
+  const stockView = readFileSync(resolve(MIGRATIONS, '20261031100000_sa_inventory_stock_view.sql'), 'utf8')
+  if (stockView.includes("'inventory-viewer'")) add('inventory-viewer', [INVENTORY_STOCK_VIEW_PERMISSION])
+  if (stockView.includes("sa_extend_standard_policy('supply-chain-full-access', array['inventory.stock.view']")) add('supply-chain-full-access', [INVENTORY_STOCK_VIEW_PERMISSION])
+  // Warehouse Manager = Full Access to Products, Inventory and Quality & Returns (20261109100000): one explicit list.
+  const wm = readFileSync(resolve(MIGRATIONS, '20261109100000_sa_warehouse_manager_full_access.sql'), 'utf8')
+  const wmTarget = wm.match(/v_target constant text\[\] := array\[([^\]]*)\]/)
+  if (wmTarget && wm.includes("sa_extend_standard_policy('warehouse-manager'")) add('warehouse-manager', [...wmTarget[1].matchAll(/'([a-z_.]+)'/g)].map(x => x[1]))
   return map
 }
 
@@ -84,6 +93,7 @@ export function coverageReport(): CoverageReport {
   const universe = new Set<string>([
     ...WAVE1_PERMISSIONS, ...FINAL_WAVE_CATALOG.map(e => e.key), ...IDENTITY_CATALOG.map(e => e.key), ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS, ...USER_ADMIN_PERMISSION_KEYS, ...SYSTEM_LOGS_PERMISSION_KEYS,
     ...ORDER_VIEW_PERMISSION_KEYS,
+    INVENTORY_STOCK_VIEW_PERMISSION,
     ...COMMISSION_PERMISSION_KEYS,
     ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS,
   ])

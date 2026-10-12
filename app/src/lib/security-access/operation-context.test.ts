@@ -50,7 +50,9 @@ describe('guardUserOperation default resource context', () => {
     }
     const input = { actorActive: true, memberships: [{ id: 'm', organizationId: 'wh-1', status: 'active', effectiveFrom: null, effectiveUntil: null }], assignments: [assignment] }
     const request = (resource: any) => ({ actorId: 'u', permission: 'inventory.report.view', resource })
-    expect(evaluateNewPolicy(request({ type: 'inventory_report', organizationId: 'wh-1' }), input).reasonCode).toBe('MISSING_CONTEXT')
+    // 20261109100000: the warehouse organization alone now matches too (it IS the warehouse); the parent does not.
+    expect(evaluateNewPolicy(request({ type: 'inventory_report', organizationId: 'wh-1' }), input).decision).toBe('ALLOW')
     expect(evaluateNewPolicy(request({ type: 'inventory_report', organizationId: 'wh-1', warehouseId: 'wh-1' }), input).decision).toBe('ALLOW')
+    expect(evaluateNewPolicy(request({ type: 'inventory_report', organizationId: 'wh-1', warehouseId: 'wh-2' }), input).reasonCode).toBe('SCOPE_MISMATCH')
   })
 })

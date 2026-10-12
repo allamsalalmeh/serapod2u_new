@@ -75,4 +75,14 @@ describe('one taxonomy across Migration Modes, Catalogue, Group Policies and the
     const after = buildPermissionPicker([...report.universe, 'inventory.stock_count.brand_new'].map(permission_key => ({ permission_key }))).flatMap(m => m.areas.flatMap(a => a.permissions)).length
     expect(after).toBe(before + 1)   // a newly registered permission is listed, never auto-selected anywhere
   })
+
+  it('Warehouse Manager = Products, Inventory and Quality & Returns only (20261109100000)', () => {
+    const wm = [...seededProfilePermissions().get('warehouse-manager')!].sort()
+    expect(wm).toHaveLength(19)
+    expect(wm.every(k => k.startsWith('inventory.') || k.startsWith('product.'))).toBe(true)
+    for (const k of ['product.catalog.view', 'product.catalog.manage', 'inventory.stock.view', 'inventory.stock_config.manage',
+      'inventory.adjustment.post', 'inventory.report.view', 'inventory.transfer.cancel', 'inventory.return.request', 'inventory.return.manage']) {
+      expect(wm, k).toContain(k)
+    }
+  })
 })

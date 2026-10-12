@@ -80,10 +80,12 @@ describe('engine-level context cases', () => {
     expect((result as any).error.reasonCode).toBe('SCOPE_MISMATCH')
   })
 
-  it('missing warehouse for a warehouse-scoped actor is MISSING_CONTEXT and denied', async () => {
-    const result = await run('NEW_ENFORCED', USER.wh1, { type: 'stock_count', id: 'sc', organizationId: ORG.whA1 })
-    expect(result.allowed).toBe(false)
-    expect((result as any).error.reasonCode).toBe('MISSING_CONTEXT')
+  it('a warehouse-scoped actor on exactly its warehouse organization (no warehouse id) is allowed; a sibling is denied', async () => {
+    // 20261109100000: a warehouse is an organization, so a resource of exactly that organization is the warehouse's.
+    const own = await run('NEW_ENFORCED', USER.wh1, { type: 'stock_count', id: 'sc', organizationId: ORG.whA1 })
+    expect(own.allowed).toBe(true)
+    const sibling = await run('NEW_ENFORCED', USER.wh1, { type: 'stock_count', id: 'sc', organizationId: ORG.whA2 })
+    expect(sibling.allowed).toBe(false)
   })
 
   it('wrong organization supplied explicitly is denied for org-scoped HQ', async () => {
