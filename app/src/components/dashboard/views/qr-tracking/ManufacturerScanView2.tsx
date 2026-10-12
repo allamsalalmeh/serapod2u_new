@@ -334,6 +334,7 @@ export default function ManufacturerScanView2({ userProfile }: ManufacturerScanV
 
       // Poll for completion
       let isPacking = true
+      let idlePolls = 0
       while (isPacking) {
         await new Promise(resolve => setTimeout(resolve, 2000)) // Poll every 2s
 
@@ -350,6 +351,9 @@ export default function ManufacturerScanView2({ userProfile }: ManufacturerScanV
           isPacking = false
         } else if (checkBatch?.packing_status === 'failed') {
           throw new Error('Packing failed')
+        } else if (!checkBatch?.packing_status || checkBatch.packing_status === 'idle') {
+          idlePolls += 1
+          if (idlePolls >= 5) throw new Error('Packing did not start for this batch. Please try again or contact Serapod.')
         }
       }
 
