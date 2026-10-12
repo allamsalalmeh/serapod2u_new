@@ -29,6 +29,27 @@ export function fanoutChildPayload(payload: Record<string, any> | null | undefin
 }
 
 /**
+ * A child row was queued for one recipient. Re-resolving the configured list for it
+ * would hand it the list's first address, so every child would reach the same person.
+ */
+export function fanoutChildKeepsAddress(
+    payload: Record<string, any> | null | undefined,
+    channel: string,
+    toPhone?: string | null,
+    toEmail?: string | null,
+): boolean {
+    return isFanoutChild(payload) && Boolean(channel === 'email' ? toEmail : toPhone)
+}
+
+/** The rows that belong to one notification (an order, or one scheduled report run). */
+export function fanoutScope(payload: Record<string, any> | null | undefined): Record<string, string> | null {
+    const orderNo = String(payload?.order_no || '').trim()
+    if (orderNo) return { order_no: orderNo }
+    const reportKey = String(payload?.report_key || '').trim()
+    return reportKey ? { report_key: reportKey } : null
+}
+
+/**
  * Recipients that still need their own outbox row. The first recipient is handled by the
  * row being processed, so only the remainder are candidates.
  */
