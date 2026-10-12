@@ -2,6 +2,7 @@ import { guardUserOperation } from '@/lib/security-access/operation'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { queueNotificationEvent } from '@/lib/notifications/supplyChainEventQueue'
+import { loadProcessableBatch } from '@/lib/qr-batch-access-server'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -34,32 +35,11 @@ export async function POST(request: NextRequest) {
 
     console.log('🏭 Completing production for batch:', batch_id)
 
-    // Get batch details
-    const { data: batch, error: batchError } = await supabase
-      .from('qr_batches')
-      .select(`
-        id,
-        status,
-        total_master_codes,
-        order_id,
-        orders (
-          id,
-          order_no,
-          buyer_org_id,
-          warehouse_org_id
-        )
-      `)
-      .eq('id', batch_id)
-      .single()
+    const loaded = await loadProcessableBatch(supabase, user.id, batch_id, 'id, status, total_master_codes, order_id')
+    if (loaded.response) return loaded.response
+    const { admin, batch } = loaded
 
-    if (batchError || !batch) {
-      return NextResponse.json(
-        { error: 'Batch not found' },
-        { status: 404 }
-      )
-    }
-
-    const orderInfo = Array.isArray(batch.orders) ? batch.orders[0] : batch.orders
+    const orderInfo = Array.isArray(batch.order) ? batch.order[0] : batch.order
 
     // CRITICAL: Verify order has a destination warehouse assigned
     if (!orderInfo?.warehouse_org_id) {
@@ -87,7 +67,7 @@ export async function POST(request: NextRequest) {
 
     // Check if all master codes are packed
     // We use count: 'exact' to avoid 1000 row limit issues
-    const { count: totalMasters, error: totalError } = await supabase
+    const { count: totalMasters, error: totalError } = await admin
       .from('qr_master_codes')
       .select('*', { count: 'exact', head: true })
       .eq('batch_id', batch_id)
@@ -96,7 +76,7 @@ export async function POST(request: NextRequest) {
       throw totalError
     }
 
-    const { count: packedMasters, error: packedError } = await supabase
+    const { count: packedMasters, error: packedError } = await admin
       .from('qr_master_codes')
       .select('*', { count: 'exact', head: true })
       .eq('batch_id', batch_id)
@@ -133,7 +113,7 @@ export async function POST(request: NextRequest) {
 
     // Execute the critical UPDATE using database function to bypass RLS
     // This MUST succeed or warehouse receive will show empty forever
-    const { data: propagateResult, error: propagateError } = await supabase
+    const { data: propagateResult, error: propagateError } = await admin
       .rpc('propagate_warehouse_to_master_codes', {
         p_batch_id: batch_id
       })
@@ -174,7 +154,7 @@ export async function POST(request: NextRequest) {
 
     console.log('📝 Ensuring master codes status is ready_to_ship')
 
-    const { error: masterUpdateError, count: masterUpdatedCount } = await supabase
+    const { error: masterUpdateError, count: masterUpdatedCount } = await admin
       .from('qr_master_codes')
       .update({
         status: 'ready_to_ship',
@@ -198,7 +178,7 @@ export async function POST(request: NextRequest) {
 
     // Update using batch_id directly instead of fetching master IDs first
     // This avoids the 1000 row limit on fetching master IDs
-    const { error: uniqueUpdateError, count: uniqueUpdatedCount } = await supabase
+    const { error: uniqueUpdateError, count: uniqueUpdatedCount } = await admin
       .from('qr_codes')
       .update({
         status: 'ready_to_ship',
@@ -219,7 +199,7 @@ export async function POST(request: NextRequest) {
     // ============================================================================
 
     // Update batch status to completed
-    const { error: updateError } = await supabase
+    const { data: completedRows, error: updateError } = await admin
       .from('qr_batches')
       .update({
         status: 'completed',
@@ -228,10 +208,14 @@ export async function POST(request: NextRequest) {
         updated_at: new Date().toISOString()
       })
       .eq('id', batch_id)
+      .select('id')
 
     if (updateError) {
       console.error('❌ Failed to update batch status:', updateError)
       throw updateError
+    }
+    if (!completedRows || completedRows.length === 0) {
+      throw new Error('Batch could not be marked as completed')
     }
 
     console.log('✅ Batch marked as completed and ready for warehouse shipment')
@@ -243,7 +227,7 @@ export async function POST(request: NextRequest) {
 
     console.log('💰 Creating balance payment request for order:', orderInfo.id)
 
-    const { data: balancePaymentDoc, error: balanceError } = await supabase
+    const { data: balancePaymentDoc, error: balanceError } = await admin
       .rpc('fn_create_balance_payment_request', {
         p_order_id: orderInfo.id
       })
@@ -259,7 +243,7 @@ export async function POST(request: NextRequest) {
       console.log('✅ Balance payment request created:', balancePaymentDoc)
 
       // Fetch the created document to get its doc_no
-      const { data: docData } = await supabase
+      const { data: docData } = await admin
         .from('documents')
         .select('doc_no')
         .eq('id', balancePaymentDoc)
