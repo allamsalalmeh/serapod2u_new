@@ -4,14 +4,14 @@ import { noStore, requireManagerPermission, loadDirectReports } from '@/lib/serv
 export const dynamic = 'force-dynamic'
 
 /**
- * GET /api/hr/mss/attendance — the manager's direct reports' attendance entries (hr.mss.attendance.view).
+ * GET /api/hr/mss/attendance — the manager's direct reports' attendance entries (hr.mss.attendance_view).
  *
  * The manager is the authenticated account; only the current, active direct reports' attendance rows in the manager's own
  * organization are returned. The direct-report ids come from the server (never a client id); any user_id the client sends
  * is ignored.
  */
 export async function GET() {
-  const ctx = await requireManagerPermission('hr.mss.attendance.view')
+  const ctx = await requireManagerPermission('hr.mss.attendance_view')
   if (!ctx.ok) return ctx.response
 
   const { actor, admin } = ctx

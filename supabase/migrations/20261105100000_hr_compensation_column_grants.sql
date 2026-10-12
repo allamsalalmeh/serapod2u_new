@@ -7,7 +7,7 @@
 -- The viewer RLS policies restrict ROWS, but a direct PostgREST call could still read every COLUMN of a permitted row
 -- (hourly_rate, salary_band_id, pay_type, ot_eligible, notes). This migration restricts what the API role
 -- (`authenticated`) can SELECT at the column level, so a direct PostgREST request by a manager holding only
--- hr.compensation.salary.view / hr.compensation.allowance.view cannot read the prohibited columns either:
+-- hr.compensation.salary_view / hr.compensation.allowance_view cannot read the prohibited columns either:
 --
 --   hr_employee_compensation  authenticated may SELECT: id, organization_id, employee_id, basic_salary,
 --                             currency, effective_date, end_date, status

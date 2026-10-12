@@ -27,7 +27,7 @@ beforeEach(() => {
   tableResults = { users: { data: reports, error: null }, hr_employee_compensation: { data: [], error: null }, hr_employee_allowances: { data: [], error: null } }
   user = { id: 'mgr-1' }
   loadNavActor.mockResolvedValue({ userId: 'mgr-1', organizationId: 'org-hq', orgTypeCode: 'HQ', roleCode: 'GUEST', roleLevel: 50 })
-  hrCan.mockImplementation(async (_ctx: any, perm: string) => perm === 'hr.compensation.salary.view')
+  hrCan.mockImplementation(async (_ctx: any, perm: string) => perm === 'hr.compensation.salary_view')
 })
 
 describe('GET /api/hr/mss/compensation', () => {

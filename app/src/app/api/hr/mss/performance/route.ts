@@ -4,13 +4,13 @@ import { noStore, requireManagerPermission, loadDirectReports } from '@/lib/serv
 export const dynamic = 'force-dynamic'
 
 /**
- * GET /api/hr/mss/performance — the manager's direct reports' performance reviews (hr.mss.performance.view).
+ * GET /api/hr/mss/performance — the manager's direct reports' performance reviews (hr.mss.performance_view).
  *
  * The manager is the authenticated account; only the current, active direct reports' reviews in the manager's own
  * organization are returned. Direct-report ids come from the server, never a client id.
  */
 export async function GET() {
-  const ctx = await requireManagerPermission('hr.mss.performance.view')
+  const ctx = await requireManagerPermission('hr.mss.performance_view')
   if (!ctx.ok) return ctx.response
 
   const { actor, admin } = ctx

@@ -8,8 +8,8 @@
 -- database itself enforce the viewer's data scope on the two sensitive tables, so a direct PostgREST read is also
 -- restricted to the caller's CURRENT, active direct reports (never "any employee in the organization"):
 --
---   hr_employee_compensation   SELECT for a holder of hr.compensation.salary.view, direct reports only
---   hr_employee_allowances     SELECT for a holder of hr.compensation.allowance.view, direct reports only
+--   hr_employee_compensation   SELECT for a holder of hr.compensation.salary_view, direct reports only
+--   hr_employee_allowances     SELECT for a holder of hr.compensation.allowance_view, direct reports only
 --
 -- The predicates are SECURITY DEFINER (so they can call the service-role-only hr_manager_is_direct_report) but are
 -- granted to `authenticated` so RLS can evaluate them for an API call. They are read-only and leak nothing beyond the
@@ -35,7 +35,7 @@ end $pre$;
 create or replace function public.hr_mss_salary_viewer_can_read(p_employee_user_id uuid)
 returns boolean language sql stable security definer set search_path = pg_catalog, public, pg_temp as $$
   select auth.uid() is not null
-    and public.hr_compensation_viewer_allowed('hr.compensation.salary.view', public.hr_manager_actor_company())
+    and public.hr_compensation_viewer_allowed('hr.compensation.salary_view', public.hr_manager_actor_company())
     and public.hr_manager_is_direct_report(auth.uid(), p_employee_user_id)
 $$;
 revoke all on function public.hr_mss_salary_viewer_can_read(uuid) from public, anon;
@@ -45,7 +45,7 @@ grant execute on function public.hr_mss_salary_viewer_can_read(uuid) to authenti
 create or replace function public.hr_mss_allowance_viewer_can_read(p_employee_user_id uuid)
 returns boolean language sql stable security definer set search_path = pg_catalog, public, pg_temp as $$
   select auth.uid() is not null
-    and public.hr_compensation_viewer_allowed('hr.compensation.allowance.view', public.hr_manager_actor_company())
+    and public.hr_compensation_viewer_allowed('hr.compensation.allowance_view', public.hr_manager_actor_company())
     and public.hr_manager_is_direct_report(auth.uid(), p_employee_user_id)
 $$;
 revoke all on function public.hr_mss_allowance_viewer_can_read(uuid) from public, anon;

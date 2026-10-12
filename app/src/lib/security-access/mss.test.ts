@@ -8,29 +8,29 @@ const migration = readFileSync(resolve(process.cwd(), '..', 'supabase', 'migrati
 
 describe('Manager Self-Service permissions ↔ migration lock-step', () => {
   it('seeds exactly these six permissions, all security-sensitive, no legacy audience', () => {
-    const seeded = [...migration.matchAll(/^ \('(hr\.mss\.[a-z.]+)','hr','mss','[a-z.]+',.*,'new','security_sensitive'\)/gm)]
+    const seeded = [...migration.matchAll(/^ \('(hr\.mss\.[a-z_]+)','hr','mss','[a-z_]+',.*,'new','security_sensitive'\)/gm)]
     expect(seeded.map((m) => m[1]).sort()).toEqual([...MSS_PERMISSION_KEYS].sort())
     expect(seeded.every((m) => m[0].includes("'security_sensitive')"))).toBe(true)
     const keysFn = /hr_mss_permission_keys\(\)[\s\S]*?select array\[([^\]]+)\]/.exec(migration)?.[1] ?? ''
-    expect([...keysFn.matchAll(/'([a-z.]+)'/g)].map((m) => m[1])).toEqual([...MSS_PERMISSION_KEYS])
-    expect(migration).toMatch(/hr\.mss\.[a-z.]+'[\s\S]*?select k, null, '\{\}', '\{\}', false, 'Manager self-service/)
+    expect([...keysFn.matchAll(/'([a-z_.]+)'/g)].map((m) => m[1])).toEqual([...MSS_PERMISSION_KEYS])
+    expect(migration).toMatch(/hr\.mss\.[a-z_]+'[\s\S]*?select k, null, '\{\}', '\{\}', false, 'Manager self-service/)
   })
 
   it('seeds the manager-self-service policy with exactly these permissions and never assigns it', () => {
     const [key, perms] = Object.entries(MSS_STANDARD_POLICY)[0]
     const block = new RegExp(`'key', '${key}'[\\s\\S]*?'perms', jsonb_build_array\\(([^)]*)\\)`).exec(migration)?.[1] ?? ''
-    expect([...block.matchAll(/'([a-z.]+)'/g)].map((m) => m[1]).sort(), key).toEqual([...perms].sort())
-    expect(MSS_STANDARD_POLICY[key]).toContain('hr.mss.leave.approve')
+    expect([...block.matchAll(/'([a-z_.]+)'/g)].map((m) => m[1]).sort(), key).toEqual([...perms].sort())
+    expect(MSS_STANDARD_POLICY[key]).toContain('hr.mss.leave_approve')
     expect(migration).not.toMatch(/insert into public\.sa_role_assignments/i)
     // HR & Payroll Full Access is not extended: MSS is a separate, explicitly granted policy.
     expect(migration).not.toMatch(/sa_extend_standard_policy\('hr-payroll-full-access'/m)
     // MSS never includes compensation permissions.
-    expect(perms).not.toContain('hr.compensation.salary.view')
+    expect(perms).not.toContain('hr.compensation.salary_view')
   })
 
   it('classifies MSS under HR & Payroll', () => {
-    expect(classifyPermission('hr.mss.team.view').groupId).toBe('hr_payroll')
-    expect(classifyPermission('hr.mss.leave.approve').groupId).toBe('hr_payroll')
+    expect(classifyPermission('hr.mss.team_view').groupId).toBe('hr_payroll')
+    expect(classifyPermission('hr.mss.leave_approve').groupId).toBe('hr_payroll')
   })
 
   it('exposes the standard policy role key', () => {

@@ -19,14 +19,14 @@ own-record scope, `hr.self_service.use`) and is unchanged here.
 | `hr.ess.payslip.view` / `.download` | `hr.self_service.use` | Own record | Own published (approved/posted) payslips only. |
 | `hr.ess.documents.view` | `hr.self_service.use` | Own record | Own employment documents. |
 | `hr.ess.requests.view` | `hr.self_service.use` | Own record | Own HR requests and approvals. |
-| `hr.mss.team.view` | `hr.mss.team.view` | Direct reports | New. `GET /api/hr/mss/team`. |
-| `hr.mss.attendance.view` | `hr.mss.attendance.view` | Direct reports | New. |
-| `hr.mss.leave.view` | `hr.mss.leave.view` | Direct reports | New. |
-| `hr.mss.leave.approve` | `hr.mss.leave.approve` | Direct reports + workflow | New. Approval additionally needs a valid workflow assignment. |
-| `hr.mss.performance.view` | `hr.mss.performance.view` | Direct reports | New. |
-| `hr.mss.requests.view` | `hr.mss.requests.view` | Direct reports | New. |
-| `hr.compensation.salary.view` | `hr.compensation.salary.view` | Restricted direct reports | New, read-only. |
-| `hr.compensation.allowance.view` | `hr.compensation.allowance.view` | Restricted direct reports | New, read-only. |
+| `hr.mss.team_view` | `hr.mss.team_view` | Direct reports | New. `GET /api/hr/mss/team`. |
+| `hr.mss.attendance_view` | `hr.mss.attendance_view` | Direct reports | New. |
+| `hr.mss.leave_view` | `hr.mss.leave_view` | Direct reports | New. |
+| `hr.mss.leave_approve` | `hr.mss.leave_approve` | Direct reports + workflow | New. Approval additionally needs a valid workflow assignment. |
+| `hr.mss.performance_view` | `hr.mss.performance_view` | Direct reports | New. |
+| `hr.mss.requests_view` | `hr.mss.requests_view` | Direct reports | New. |
+| `hr.compensation.salary_view` | `hr.compensation.salary_view` | Restricted direct reports | New, read-only. |
+| `hr.compensation.allowance_view` | `hr.compensation.allowance_view` | Restricted direct reports | New, read-only. |
 
 ESS is a single own-record permission rather than many granular keys because that is the existing registry design
 (`hr.self_service.use`, `employeeBaseline: true`); the granular rows above describe what that one permission permits on
@@ -52,7 +52,7 @@ access.
 2. **Migration modes**: `NEW_ENFORCED` when the corresponding administrative permission is already S&A-authoritative
    (`hr.employee.view` for MSS, `hr.compensation.view` for the viewer), otherwise `SHADOW` (Super Admin of the company
    only) — the same rule as Commission.
-3. **Enforcement readiness**: `rls_gate` for `*.view`, `rpc_guard` for `hr.mss.leave.approve`.
+3. **Enforcement readiness**: `rls_gate` for `*.view`, `rpc_guard` for `hr.mss.leave_approve`.
 4. **Authorization helpers** (SECURITY DEFINER, not API-callable): `hr_mss_allowed/require`,
    `hr_compensation_viewer_allowed/require`, `hr_manager_is_direct_report`.
 5. **Standard policies** `manager-self-service` and `manager-compensation-viewer`, seeded and assigned to **no one**.
@@ -63,7 +63,7 @@ No `sa_role_assignments` rows are created. No `hr-payroll-full-access` extension
 
 ```sql
 select permission_key, audit_sensitivity from public.sa_permissions
-where permission_key like 'hr.mss.%' or permission_key in ('hr.compensation.salary.view','hr.compensation.allowance.view');
+where permission_key like 'hr.mss.%' or permission_key in ('hr.compensation.salary_view','hr.compensation.allowance_view');
 
 select role_key, source, status, applicable_account_types, applicable_org_types from public.sa_business_roles
 where role_key in ('manager-self-service','manager-compensation-viewer');
@@ -80,10 +80,10 @@ where role_key in ('manager-self-service','manager-compensation-viewer');
 delete from public.sa_standard_policy_coverage where role_key in ('manager-self-service','manager-compensation-viewer');
 delete from public.sa_business_role_permissions where role_id in (select id from public.sa_business_roles where role_key in ('manager-self-service','manager-compensation-viewer'));
 delete from public.sa_business_roles where role_key in ('manager-self-service','manager-compensation-viewer');
-delete from public.sa_enforcement_readiness where permission_key like 'hr.mss.%' or permission_key in ('hr.compensation.salary.view','hr.compensation.allowance.view');
-delete from public.sa_migration_modes where permission_key like 'hr.mss.%' or permission_key in ('hr.compensation.salary.view','hr.compensation.allowance.view');
-delete from public.sa_legacy_compat_rules where permission_key like 'hr.mss.%' or permission_key in ('hr.compensation.salary.view','hr.compensation.allowance.view');
-delete from public.sa_permissions where permission_key like 'hr.mss.%' or permission_key in ('hr.compensation.salary.view','hr.compensation.allowance.view');
+delete from public.sa_enforcement_readiness where permission_key like 'hr.mss.%' or permission_key in ('hr.compensation.salary_view','hr.compensation.allowance_view');
+delete from public.sa_migration_modes where permission_key like 'hr.mss.%' or permission_key in ('hr.compensation.salary_view','hr.compensation.allowance_view');
+delete from public.sa_legacy_compat_rules where permission_key like 'hr.mss.%' or permission_key in ('hr.compensation.salary_view','hr.compensation.allowance_view');
+delete from public.sa_permissions where permission_key like 'hr.mss.%' or permission_key in ('hr.compensation.salary_view','hr.compensation.allowance_view');
 ```
 
 ## Data scope (independent of the action permission)

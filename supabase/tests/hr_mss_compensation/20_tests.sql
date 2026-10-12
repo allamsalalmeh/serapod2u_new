@@ -6,10 +6,10 @@ do $t$
 declare a text[];
 begin
   select array_agg(permission_key order by permission_key) into a from public.sa_permissions
-    where permission_key like 'hr.mss.%' or permission_key in ('hr.compensation.salary.view','hr.compensation.allowance.view');
-  perform hmt.expect(a = array['hr.compensation.allowance.view','hr.compensation.salary.view','hr.mss.attendance.view','hr.mss.leave.approve','hr.mss.leave.view','hr.mss.performance.view','hr.mss.requests.view','hr.mss.team.view'], 'the 8 permissions are seeded: ' || coalesce(a::text, '{}'));
-  perform hmt.expect(not exists (select 1 from public.sa_permissions p where (p.permission_key like 'hr.mss.%' or p.permission_key in ('hr.compensation.salary.view','hr.compensation.allowance.view')) and p.audit_sensitivity <> 'security_sensitive'), 'all security-sensitive');
-  perform hmt.expect(not exists (select 1 from public.sa_legacy_compat_rules c where (c.permission_key like 'hr.mss.%' or c.permission_key in ('hr.compensation.salary.view','hr.compensation.allowance.view')) and (c.max_role_level is not null or c.role_codes <> '{}' or c.legacy_permissions <> '{}' or c.employee_baseline)), 'compat rule = nobody');
+    where permission_key like 'hr.mss.%' or permission_key in ('hr.compensation.salary_view','hr.compensation.allowance_view');
+  perform hmt.expect(a = array['hr.compensation.allowance_view','hr.compensation.salary_view','hr.mss.attendance_view','hr.mss.leave_approve','hr.mss.leave_view','hr.mss.performance_view','hr.mss.requests_view','hr.mss.team_view'], 'the 8 permissions are seeded: ' || coalesce(a::text, '{}'));
+  perform hmt.expect(not exists (select 1 from public.sa_permissions p where (p.permission_key like 'hr.mss.%' or p.permission_key in ('hr.compensation.salary_view','hr.compensation.allowance_view')) and p.audit_sensitivity <> 'security_sensitive'), 'all security-sensitive');
+  perform hmt.expect(not exists (select 1 from public.sa_legacy_compat_rules c where (c.permission_key like 'hr.mss.%' or c.permission_key in ('hr.compensation.salary_view','hr.compensation.allowance_view')) and (c.max_role_level is not null or c.role_codes <> '{}' or c.legacy_permissions <> '{}' or c.employee_baseline)), 'compat rule = nobody');
   raise notice 'PASS 1 permissions seeded, sensitive, no legacy audience';
 end $t$;
 
@@ -19,17 +19,17 @@ begin
   perform hmt.expect((select count(*) from public.sa_business_roles where role_key in ('manager-self-service','manager-compensation-viewer') and source = 'template' and status = 'active') = 2, 'two standard policies');
   perform hmt.expect((select count(*) from public.sa_role_assignments a join public.sa_business_roles b on b.id = a.role_id where b.role_key in ('manager-self-service','manager-compensation-viewer')) = 0, 'assigned to no one');
   perform hmt.expect((select permission_keys from public.sa_standard_policy_coverage where role_key = 'manager-self-service')
-                     = array['hr.mss.attendance.view','hr.mss.leave.approve','hr.mss.leave.view','hr.mss.performance.view','hr.mss.requests.view','hr.mss.team.view'], 'MSS coverage');
+                     = array['hr.mss.attendance_view','hr.mss.leave_approve','hr.mss.leave_view','hr.mss.performance_view','hr.mss.requests_view','hr.mss.team_view'], 'MSS coverage');
   perform hmt.expect((select permission_keys from public.sa_standard_policy_coverage where role_key = 'manager-compensation-viewer')
-                     = array['hr.compensation.allowance.view','hr.compensation.salary.view'], 'viewer coverage');
+                     = array['hr.compensation.allowance_view','hr.compensation.salary_view'], 'viewer coverage');
   raise notice 'PASS 2 standard policies seeded and unassigned';
 end $t$;
 
 -- ── 3. Permission-key helpers ────────────────────────────────────────────────────────────────
 do $t$
 begin
-  perform hmt.expect(public.hr_mss_permission_keys() = array['hr.mss.team.view','hr.mss.attendance.view','hr.mss.leave.view','hr.mss.leave.approve','hr.mss.performance.view','hr.mss.requests.view'], 'hr_mss_permission_keys');
-  perform hmt.expect(public.hr_compensation_viewer_permission_keys() = array['hr.compensation.salary.view','hr.compensation.allowance.view'], 'hr_compensation_viewer_permission_keys');
+  perform hmt.expect(public.hr_mss_permission_keys() = array['hr.mss.team_view','hr.mss.attendance_view','hr.mss.leave_view','hr.mss.leave_approve','hr.mss.performance_view','hr.mss.requests_view'], 'hr_mss_permission_keys');
+  perform hmt.expect(public.hr_compensation_viewer_permission_keys() = array['hr.compensation.salary_view','hr.compensation.allowance_view'], 'hr_compensation_viewer_permission_keys');
   raise notice 'PASS 3 permission-key helpers';
 end $t$;
 
@@ -58,8 +58,8 @@ end $t$;
 -- ── 6. Unknown permission keys are refused by the allowed() helpers ─────────────────────────
 do $t$
 begin
-  perform hmt.expect(not public.hr_mss_allowed('hr.compensation.salary.view', hmt.o(1)), 'an MSS helper refuses a compensation-viewer key');
-  perform hmt.expect(not public.hr_compensation_viewer_allowed('hr.mss.team.view', hmt.o(1)), 'a viewer helper refuses an MSS key');
+  perform hmt.expect(not public.hr_mss_allowed('hr.compensation.salary_view', hmt.o(1)), 'an MSS helper refuses a compensation-viewer key');
+  perform hmt.expect(not public.hr_compensation_viewer_allowed('hr.mss.team_view', hmt.o(1)), 'a viewer helper refuses an MSS key');
   perform hmt.expect(not public.hr_mss_allowed('hr.mss.nope', hmt.o(1)), 'unknown key refused');
   raise notice 'PASS 6 allowed() key boundaries';
 end $t$;

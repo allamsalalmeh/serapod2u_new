@@ -10,27 +10,27 @@ const columns = readFileSync(resolve(process.cwd(), '..', 'supabase', 'migration
 
 describe('Manager Compensation Viewer permissions ↔ migration lock-step', () => {
   it('seeds exactly these two permissions, all security-sensitive, no legacy audience', () => {
-    const seeded = [...migration.matchAll(/^ \('(hr\.compensation\.(?:salary|allowance)\.view)','hr','compensation','[a-z.]+',.*,'new','security_sensitive'\)/gm)]
+    const seeded = [...migration.matchAll(/^ \('(hr\.compensation\.(?:salary|allowance)_view)','hr','compensation','[a-z_]+',.*,'new','security_sensitive'\)/gm)]
     expect(seeded.map((m) => m[1]).sort()).toEqual([...COMPENSATION_VIEWER_PERMISSION_KEYS].sort())
     expect(seeded.every((m) => m[0].includes("'security_sensitive')"))).toBe(true)
     const keysFn = /hr_compensation_viewer_permission_keys\(\)[\s\S]*?select array\[([^\]]+)\]/.exec(migration)?.[1] ?? ''
-    expect([...keysFn.matchAll(/'([a-z.]+)'/g)].map((m) => m[1])).toEqual([...COMPENSATION_VIEWER_PERMISSION_KEYS])
-    expect(migration).toMatch(/hr\.compensation\.(?:salary|allowance)\.view'[\s\S]*?select k, null, '\{\}', '\{\}', false/)
+    expect([...keysFn.matchAll(/'([a-z_.]+)'/g)].map((m) => m[1])).toEqual([...COMPENSATION_VIEWER_PERMISSION_KEYS])
+    expect(migration).toMatch(/hr\.compensation\.(?:salary|allowance)_view'[\s\S]*?select k, null, '\{\}', '\{\}', false/)
   })
 
   it('seeds the manager-compensation-viewer policy with exactly these permissions and never assigns it', () => {
     const [key, perms] = Object.entries(COMPENSATION_VIEWER_STANDARD_POLICY)[0]
     const block = new RegExp(`'key', '${key}'[\\s\\S]*?'perms', jsonb_build_array\\(([^)]*)\\)`).exec(migration)?.[1] ?? ''
-    expect([...block.matchAll(/'([a-z.]+)'/g)].map((m) => m[1]).sort(), key).toEqual([...perms].sort())
+    expect([...block.matchAll(/'([a-z_.]+)'/g)].map((m) => m[1]).sort(), key).toEqual([...perms].sort())
     expect(migration).not.toMatch(/insert into public\.sa_role_assignments/i)
     expect(migration).not.toMatch(/sa_extend_standard_policy\('hr-payroll-full-access'/m)
-    // The viewer is read-only: only *.view permissions.
-    expect(perms.every((p) => p.endsWith('.view'))).toBe(true)
+    // The viewer is read-only: only *_view permissions.
+    expect(perms.every((p) => p.endsWith('_view'))).toBe(true)
   })
 
   it('classifies the viewer under HR & Payroll (Payroll & Compensation)', () => {
-    expect(classifyPermission('hr.compensation.salary.view').groupId).toBe('hr_payroll')
-    expect(classifyPermission('hr.compensation.salary.view').areaName).toBe('Payroll & Compensation')
+    expect(classifyPermission('hr.compensation.salary_view').groupId).toBe('hr_payroll')
+    expect(classifyPermission('hr.compensation.salary_view').areaName).toBe('Payroll & Compensation')
   })
 
   it('exposes the standard policy role key', () => {
@@ -45,8 +45,8 @@ describe('Manager Compensation Viewer row-level security migration', () => {
   })
 
   it('predicates require the matching permission, the company and the CURRENT direct-report relationship', () => {
-    expect(rls).toMatch(/hr_mss_salary_viewer_can_read[\s\S]*?hr_compensation_viewer_allowed\('hr\.compensation\.salary\.view'/)
-    expect(rls).toMatch(/hr_mss_allowance_viewer_can_read[\s\S]*?hr_compensation_viewer_allowed\('hr\.compensation\.allowance\.view'/)
+    expect(rls).toMatch(/hr_mss_salary_viewer_can_read[\s\S]*?hr_compensation_viewer_allowed\('hr\.compensation\.salary_view'/)
+    expect(rls).toMatch(/hr_mss_allowance_viewer_can_read[\s\S]*?hr_compensation_viewer_allowed\('hr\.compensation\.allowance_view'/)
     expect(rls).toMatch(/hr_manager_is_direct_report\(auth\.uid\(\), p_employee_user_id\)/)
   })
 

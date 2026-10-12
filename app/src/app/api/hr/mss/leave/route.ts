@@ -4,14 +4,14 @@ import { noStore, requireManagerPermission, loadDirectReports } from '@/lib/serv
 export const dynamic = 'force-dynamic'
 
 /**
- * GET /api/hr/mss/leave — the manager's direct reports' leave requests (hr.mss.leave.view).
+ * GET /api/hr/mss/leave — the manager's direct reports' leave requests (hr.mss.leave_view).
  *
  * The manager is the authenticated account; only the current, active direct reports' leave rows in the manager's own
  * organization are returned. Direct-report ids come from the server, never a client id. Approval is a separate,
- * workflow-gated action (hr.mss.leave.approve).
+ * workflow-gated action (hr.mss.leave_approve).
  */
 export async function GET() {
-  const ctx = await requireManagerPermission('hr.mss.leave.view')
+  const ctx = await requireManagerPermission('hr.mss.leave_view')
   if (!ctx.ok) return ctx.response
 
   const { actor, admin } = ctx

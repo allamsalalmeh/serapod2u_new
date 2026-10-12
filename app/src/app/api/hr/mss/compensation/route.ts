@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic'
  * GET /api/hr/mss/compensation — basic salary and authorized fixed allowances of the manager's own direct reports.
  *
  * Restricted and READ-ONLY (Manager Compensation Viewer). The manager is the authenticated account; the organization is
- * its own. Salary requires hr.compensation.salary.view, allowances require hr.compensation.allowance.view; each field is
+ * its own. Salary requires hr.compensation.salary_view, allowances require hr.compensation.allowance_view; each field is
  * returned only when its own permission is held. Data scope is the manager's current, active direct reports.
  *
  * Payslips, net salary, banking, EPF/SOCSO/PCB, deductions, payroll runs, salary history and export are NEVER returned.
@@ -21,8 +21,8 @@ export async function GET() {
   const orgId = actor.organizationId
 
   const [salaryView, allowanceView] = await Promise.all([
-    hrCan({ userId: actor.userId, organizationId: orgId, roleCode: actor.roleCode, roleLevel: actor.roleLevel }, 'hr.compensation.salary.view', () => false),
-    hrCan({ userId: actor.userId, organizationId: orgId, roleCode: actor.roleCode, roleLevel: actor.roleLevel }, 'hr.compensation.allowance.view', () => false),
+    hrCan({ userId: actor.userId, organizationId: orgId, roleCode: actor.roleCode, roleLevel: actor.roleLevel }, 'hr.compensation.salary_view', () => false),
+    hrCan({ userId: actor.userId, organizationId: orgId, roleCode: actor.roleCode, roleLevel: actor.roleLevel }, 'hr.compensation.allowance_view', () => false),
   ])
   if (!salaryView && !allowanceView) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403, headers: noStore })

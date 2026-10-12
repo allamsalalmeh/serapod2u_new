@@ -36,12 +36,12 @@ describe('GET /api/hr/mss/team', () => {
     expect(dbCalls).toHaveLength(0)
   })
 
-  it('decides hr.mss.team.view on the manager\'s own organization', async () => {
+  it('decides hr.mss.team_view on the manager\'s own organization', async () => {
     const { GET } = await import('./route')
     await GET()
     expect(hrCan).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'mgr-1', organizationId: 'org-hq' }),
-      'hr.mss.team.view',
+      'hr.mss.team_view',
       expect.any(Function),
     )
   })

@@ -29,7 +29,7 @@ beforeEach(() => {
 })
 
 describe('GET /api/hr/mss/attendance', () => {
-  it('requires hr.mss.attendance.view', async () => {
+  it('requires hr.mss.attendance_view', async () => {
     hrCan.mockResolvedValue(false)
     const { GET } = await import('./route')
     expect((await GET()).status).toBe(403)
@@ -39,7 +39,7 @@ describe('GET /api/hr/mss/attendance', () => {
   it('scopes attendance to the manager\'s own direct reports, never a client id', async () => {
     const { GET } = await import('./route')
     await GET()
-    expect(hrCan).toHaveBeenCalledWith(expect.objectContaining({ userId: 'mgr-1', organizationId: 'org-hq' }), 'hr.mss.attendance.view', expect.any(Function))
+    expect(hrCan).toHaveBeenCalledWith(expect.objectContaining({ userId: 'mgr-1', organizationId: 'org-hq' }), 'hr.mss.attendance_view', expect.any(Function))
     expect(dbCalls).toContainEqual(['hr_attendance_entries.eq', 'organization_id', 'org-hq'])
     expect(dbCalls).toContainEqual(['hr_attendance_entries.in', 'user_id', ['emp-1']])
     // No other employee id is ever read from the request.

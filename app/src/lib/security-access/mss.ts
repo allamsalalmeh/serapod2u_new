@@ -16,12 +16,12 @@
  */
 
 export const MSS_PERMISSIONS = {
-  teamView: 'hr.mss.team.view',
-  attendanceView: 'hr.mss.attendance.view',
-  leaveView: 'hr.mss.leave.view',
-  leaveApprove: 'hr.mss.leave.approve',
-  performanceView: 'hr.mss.performance.view',
-  requestsView: 'hr.mss.requests.view',
+  teamView: 'hr.mss.team_view',
+  attendanceView: 'hr.mss.attendance_view',
+  leaveView: 'hr.mss.leave_view',
+  leaveApprove: 'hr.mss.leave_approve',
+  performanceView: 'hr.mss.performance_view',
+  requestsView: 'hr.mss.requests_view',
 } as const
 
 export type MssPermission = (typeof MSS_PERMISSIONS)[keyof typeof MSS_PERMISSIONS]

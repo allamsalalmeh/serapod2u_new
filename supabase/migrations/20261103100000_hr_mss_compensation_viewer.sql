@@ -10,10 +10,10 @@
 -- nobody). They are granted only through the two standard policies below, Root Access, or a custom policy.
 --
 --   Manager Self-Service (manager-self-service) — explicit grant, authorized direct reports:
---     hr.mss.team.view, hr.mss.attendance.view, hr.mss.leave.view, hr.mss.leave.approve,
---     hr.mss.performance.view, hr.mss.requests.view
+--     hr.mss.team_view, hr.mss.attendance_view, hr.mss.leave_view, hr.mss.leave_approve,
+--     hr.mss.performance_view, hr.mss.requests_view
 --   Manager Compensation Viewer (manager-compensation-viewer) — restricted, HR/Security grant, authorized direct reports:
---     hr.compensation.salary.view, hr.compensation.allowance.view
+--     hr.compensation.salary_view, hr.compensation.allowance_view
 --
 -- MSS is NOT derived from a job title (Manager / Head / Supervisor): it must be granted through the existing S&A
 -- assignment framework, exactly like the Commission policies. Approving leave still requires BOTH the permission and a
@@ -50,20 +50,20 @@ end $pre$;
 -- 1. Permissions (lock-step with app/src/lib/security-access/mss.ts and compensation-viewer.ts)
 -- ---------------------------------------------------------------------------
 insert into public.sa_permissions(permission_key, module, resource, action, description, source, audit_sensitivity) values
- ('hr.mss.team.view','hr','mss','team.view','View the directory of the manager''s current, active direct reports','new','security_sensitive'),
- ('hr.mss.attendance.view','hr','mss','attendance.view','View attendance records of the manager''s authorized direct reports','new','security_sensitive'),
- ('hr.mss.leave.view','hr','mss','leave.view','View leave balance and history of the manager''s authorized direct reports','new','security_sensitive'),
- ('hr.mss.leave.approve','hr','mss','leave.approve','Approve or reject leave requests when assigned as the valid workflow approver','new','security_sensitive'),
- ('hr.mss.performance.view','hr','mss','performance.view','View performance and permitted appraisals of the manager''s authorized direct reports','new','security_sensitive'),
- ('hr.mss.requests.view','hr','mss','requests.view','View and manage team requests (attendance corrections, profile changes, documents) for authorized direct reports','new','security_sensitive'),
- ('hr.compensation.salary.view','hr','compensation','salary.view','View the basic salary of the manager''s authorized direct reports (read only)','new','security_sensitive'),
- ('hr.compensation.allowance.view','hr','compensation','allowance.view','View the authorized fixed allowances of the manager''s authorized direct reports (read only)','new','security_sensitive')
+ ('hr.mss.team_view','hr','mss','team_view','View the directory of the manager''s current, active direct reports','new','security_sensitive'),
+ ('hr.mss.attendance_view','hr','mss','attendance_view','View attendance records of the manager''s authorized direct reports','new','security_sensitive'),
+ ('hr.mss.leave_view','hr','mss','leave_view','View leave balance and history of the manager''s authorized direct reports','new','security_sensitive'),
+ ('hr.mss.leave_approve','hr','mss','leave_approve','Approve or reject leave requests when assigned as the valid workflow approver','new','security_sensitive'),
+ ('hr.mss.performance_view','hr','mss','performance_view','View performance and permitted appraisals of the manager''s authorized direct reports','new','security_sensitive'),
+ ('hr.mss.requests_view','hr','mss','requests_view','View and manage team requests (attendance corrections, profile changes, documents) for authorized direct reports','new','security_sensitive'),
+ ('hr.compensation.salary_view','hr','compensation','salary_view','View the basic salary of the manager''s authorized direct reports (read only)','new','security_sensitive'),
+ ('hr.compensation.allowance_view','hr','compensation','allowance_view','View the authorized fixed allowances of the manager''s authorized direct reports (read only)','new','security_sensitive')
 on conflict (permission_key) do nothing;
 
 
 insert into public.sa_legacy_compat_rules(permission_key, max_role_level, role_codes, legacy_permissions, employee_baseline, notes)
 select k, null, '{}', '{}', false, 'Manager self-service / compensation viewer: no legacy role reproduces this access; grant explicitly.'
-from unnest(array['hr.mss.team.view','hr.mss.attendance.view','hr.mss.leave.view','hr.mss.leave.approve','hr.mss.performance.view','hr.mss.requests.view','hr.compensation.salary.view','hr.compensation.allowance.view']) k
+from unnest(array['hr.mss.team_view','hr.mss.attendance_view','hr.mss.leave_view','hr.mss.leave_approve','hr.mss.performance_view','hr.mss.requests_view','hr.compensation.salary_view','hr.compensation.allowance_view']) k
 on conflict (permission_key) do nothing;
 
 insert into public.sa_migration_modes(permission_key, mode, legacy_permission_key, notes)
@@ -71,7 +71,7 @@ select k,
        case when public.sa_is_new_authoritative('hr.employee.view') then 'NEW_ENFORCED' else 'SHADOW' end,
        null,
        'Manager self-service: S&A decides wherever the employee directory is already S&A-authoritative; elsewhere Super Admin of the company only.'
-from unnest(array['hr.mss.team.view','hr.mss.attendance.view','hr.mss.leave.view','hr.mss.leave.approve','hr.mss.performance.view','hr.mss.requests.view']) k
+from unnest(array['hr.mss.team_view','hr.mss.attendance_view','hr.mss.leave_view','hr.mss.leave_approve','hr.mss.performance_view','hr.mss.requests_view']) k
 on conflict (permission_key) do nothing;
 
 insert into public.sa_migration_modes(permission_key, mode, legacy_permission_key, notes)
@@ -79,20 +79,20 @@ select k,
        case when public.sa_is_new_authoritative('hr.compensation.view') then 'NEW_ENFORCED' else 'SHADOW' end,
        null,
        'Manager Compensation Viewer: S&A decides wherever HR compensation is already S&A-authoritative; elsewhere Super Admin of the company only.'
-from unnest(array['hr.compensation.salary.view','hr.compensation.allowance.view']) k
+from unnest(array['hr.compensation.salary_view','hr.compensation.allowance_view']) k
 on conflict (permission_key) do nothing;
 
 insert into public.sa_enforcement_readiness(permission_key, route_wiring, database_backstop, intentional_tightening, notes)
 select k, true, case when k like '%.view' then 'rls_gate' else 'rpc_guard' end, null,
        'MSS routes authorize through S&A and restrict reads to the caller''s current, active direct reports; leave approval additionally requires the valid workflow assignment.'
-from unnest(array['hr.mss.team.view','hr.mss.attendance.view','hr.mss.leave.view','hr.mss.leave.approve','hr.mss.performance.view','hr.mss.requests.view']) k
+from unnest(array['hr.mss.team_view','hr.mss.attendance_view','hr.mss.leave_view','hr.mss.leave_approve','hr.mss.performance_view','hr.mss.requests_view']) k
 on conflict (permission_key) do update set route_wiring = excluded.route_wiring, database_backstop = excluded.database_backstop,
   notes = excluded.notes;
 
 insert into public.sa_enforcement_readiness(permission_key, route_wiring, database_backstop, intentional_tightening, notes)
 select k, true, 'rls_gate', null,
        'Manager Compensation Viewer is read-only and restricted to the caller''s direct reports: basic salary and authorized fixed allowances only; never payslips, net salary, banking, EPF/SOCSO/PCB, deductions, runs, history or export.'
-from unnest(array['hr.compensation.salary.view','hr.compensation.allowance.view']) k
+from unnest(array['hr.compensation.salary_view','hr.compensation.allowance_view']) k
 on conflict (permission_key) do update set route_wiring = excluded.route_wiring, database_backstop = excluded.database_backstop,
   notes = excluded.notes;
 
@@ -101,14 +101,14 @@ on conflict (permission_key) do update set route_wiring = excluded.route_wiring,
 -- ---------------------------------------------------------------------------
 create or replace function public.hr_mss_permission_keys()
 returns text[] language sql immutable set search_path = pg_catalog, pg_temp as $$
-  select array['hr.mss.team.view','hr.mss.attendance.view','hr.mss.leave.view','hr.mss.leave.approve','hr.mss.performance.view','hr.mss.requests.view']::text[]
+  select array['hr.mss.team_view','hr.mss.attendance_view','hr.mss.leave_view','hr.mss.leave_approve','hr.mss.performance_view','hr.mss.requests_view']::text[]
 $$;
 revoke all on function public.hr_mss_permission_keys() from public, anon;
 grant execute on function public.hr_mss_permission_keys() to authenticated, service_role;
 
 create or replace function public.hr_compensation_viewer_permission_keys()
 returns text[] language sql immutable set search_path = pg_catalog, pg_temp as $$
-  select array['hr.compensation.salary.view','hr.compensation.allowance.view']::text[]
+  select array['hr.compensation.salary_view','hr.compensation.allowance_view']::text[]
 $$;
 revoke all on function public.hr_compensation_viewer_permission_keys() from public, anon;
 grant execute on function public.hr_compensation_viewer_permission_keys() to authenticated, service_role;
@@ -224,10 +224,10 @@ do $seed$
 declare
   v_defs constant jsonb := jsonb_build_array(
     jsonb_build_object('key', 'manager-self-service', 'name', 'Manager Self-Service', 'module', 'hr_payroll', 'prefixes', jsonb_build_array('hr'),
-      'perms', jsonb_build_array('hr.mss.team.view', 'hr.mss.attendance.view', 'hr.mss.leave.view', 'hr.mss.leave.approve', 'hr.mss.performance.view', 'hr.mss.requests.view'),
+      'perms', jsonb_build_array('hr.mss.team_view', 'hr.mss.attendance_view', 'hr.mss.leave_view', 'hr.mss.leave_approve', 'hr.mss.performance_view', 'hr.mss.requests_view'),
       'description', 'View the directory, attendance, leave, performance and requests of the manager''s own, current, active direct reports, and approve or reject their leave when assigned as the valid workflow approver. Never grants access to other employees, payslips, bank details or payroll.'),
     jsonb_build_object('key', 'manager-compensation-viewer', 'name', 'Manager Compensation Viewer', 'module', 'hr_payroll', 'prefixes', jsonb_build_array('hr'),
-      'perms', jsonb_build_array('hr.compensation.salary.view', 'hr.compensation.allowance.view'),
+      'perms', jsonb_build_array('hr.compensation.salary_view', 'hr.compensation.allowance_view'),
       'description', 'Read the basic salary and authorized fixed allowances of the manager''s own, current, active direct reports. Restricted, read-only, granted by HR or Security administrators only; never payslips, net salary, banking, EPF/SOCSO/PCB, deductions, payroll runs, salary history or export.'));
   d jsonb;
   v_perms text[];

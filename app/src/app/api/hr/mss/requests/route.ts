@@ -4,13 +4,13 @@ import { noStore, requireManagerPermission, loadDirectReports } from '@/lib/serv
 export const dynamic = 'force-dynamic'
 
 /**
- * GET /api/hr/mss/requests — the manager's direct reports' pending team requests (hr.mss.requests.view).
+ * GET /api/hr/mss/requests — the manager's direct reports' pending team requests (hr.mss.requests_view).
  *
  * Aggregates the existing request tables (attendance corrections, document requests, profile change requests) for the
  * manager's current, active direct reports only. The direct-report ids come from the server, never a client id.
  */
 export async function GET() {
-  const ctx = await requireManagerPermission('hr.mss.requests.view')
+  const ctx = await requireManagerPermission('hr.mss.requests_view')
   if (!ctx.ok) return ctx.response
 
   const { actor, admin } = ctx

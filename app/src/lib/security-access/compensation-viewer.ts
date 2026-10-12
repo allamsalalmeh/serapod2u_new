@@ -15,8 +15,8 @@
  */
 
 export const COMPENSATION_VIEWER_PERMISSIONS = {
-  salaryView: 'hr.compensation.salary.view',
-  allowanceView: 'hr.compensation.allowance.view',
+  salaryView: 'hr.compensation.salary_view',
+  allowanceView: 'hr.compensation.allowance_view',
 } as const
 
 export type CompensationViewerPermission = (typeof COMPENSATION_VIEWER_PERMISSIONS)[keyof typeof COMPENSATION_VIEWER_PERMISSIONS]
