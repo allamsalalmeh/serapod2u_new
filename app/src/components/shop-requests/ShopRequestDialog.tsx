@@ -11,6 +11,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { toTitleCaseWords } from '@/lib/utils'
 
+/** Rows selected from `states` / `districts` below. */
+interface StateOption {
+    id: string
+    state_name: string
+}
+
+interface DistrictOption {
+    id: string
+    district_name: string
+    state_id: string
+}
+
 interface ShopRequestDialogProps {
     open: boolean
     onOpenChange: (open: boolean) => void
