@@ -311,12 +311,20 @@ export const FINANCE_DESTINATIONS: Record<string, NavRequirement> = {
   'finance/settings/permissions': financeChild(),
 }
 
+/** Cross-module analytics: the permission every /api/reporting route already decides with (Reporting Viewer policy). */
+export const REPORTING_PERMISSION = 'reporting.analytics.view'
+export const REPORTING_DESTINATION = 'reporting'
+export const REPORTING_DESTINATIONS: Record<string, NavRequirement> = {
+  [REPORTING_DESTINATION]: { org: [REPORTING_PERMISSION] },
+}
+
 export const NAV_DESTINATIONS: Record<string, NavRequirement> = {
   ...HR_DESTINATIONS,
   ...FINANCE_DESTINATIONS,
   ...SUPPLY_CHAIN_DESTINATIONS,
   ...CUSTOMER_GROWTH_DESTINATIONS,
   ...ROADTOUR_DESTINATIONS,
+  ...REPORTING_DESTINATIONS,
 }
 
 /** Every permission a destination may need, with the kind of resource it is evaluated on. */
@@ -431,6 +439,11 @@ export function financeModuleVisible(snapshot: NavAccessSnapshot | null | undefi
  * Supply Chain sidebar entry: the /supply-chain page guard's decision (any Supply Chain permission, or organization
  * administration). Unresolved answers show nothing, like the other S&A-driven entries.
  */
+/** Reporting entry: exactly the /reporting page guard (reporting.analytics.view in its current migration mode). */
+export function reportingVisible(snapshot: NavAccessSnapshot | null | undefined): boolean {
+  return snapshotAllows(snapshot, REPORTING_DESTINATION)
+}
+
 export function supplyChainModuleVisible(snapshot: NavAccessSnapshot | null | undefined): boolean {
   return snapshotAllows(snapshot, SUPPLY_CHAIN_MODULE_DESTINATION)
 }

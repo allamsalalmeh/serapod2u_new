@@ -49,8 +49,35 @@ export const fullAccessModuleIds = FULL_ACCESS_POLICIES.map(p => p.moduleId)
  *   hr.mss.* and hr.compensation.salary/allowance.view — Manager Self-Service and the Manager Compensation Viewer are
  *   separate, explicitly granted policies (20261103100000); being an HR administrator alone must not imply manager or
  *   compensation access (least privilege).
+ *   DESTRUCTIVE_PERMISSIONS — removed from Full Access by 20261110100000 (recorded as reviewed exclusions in
+ *   sa_standard_policy_coverage.excluded_keys); granted only through the break-glass policies below.
  */
-export const OUTSIDE_FULL_ACCESS: readonly string[] = ['platform.system_logs.view', ...COMMISSION_PERMISSION_KEYS, ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS]
+export const DESTRUCTIVE_PERMISSIONS: readonly string[] = ['hr.data.reset', 'finance.data.reset', 'platform.data.destructive', 'platform.identity.delete']
+export const OUTSIDE_FULL_ACCESS: readonly string[] = ['platform.system_logs.view', ...COMMISSION_PERMISSION_KEYS, ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS, ...DESTRUCTIVE_PERMISSIONS]
+
+/**
+ * Break-glass standard policies: the only standard policies holding a destructive operation (20261110100000; HR's
+ * predates it, 20261003100000). Grant for a planned operation, preferably with an end date.
+ */
+export const BREAK_GLASS_POLICIES: Readonly<Record<string, readonly string[]>> = {
+  'hr-data-reset-administrator': ['hr.data.reset'],
+  'finance-data-reset-administrator': ['finance.data.reset'],
+  'platform-data-maintenance-administrator': ['platform.data.destructive', 'platform.identity.delete'],
+}
+export const isBreakGlassPolicy = (roleKey?: string | null) => Boolean(roleKey && roleKey in BREAK_GLASS_POLICIES)
+export const BREAK_GLASS_POLICY_NAMES: Readonly<Record<string, string>> = {
+  'hr-data-reset-administrator': 'HR Data Reset Administrator',
+  'finance-data-reset-administrator': 'Finance Data Reset Administrator',
+  'platform-data-maintenance-administrator': 'Platform Data Maintenance Administrator',
+}
+
+/** Function-sized standard policies seeded by 20261110100000 (assigned to nobody). */
+export const FUNCTIONAL_STANDARD_POLICIES: Readonly<Record<string, readonly string[]>> = {
+  'warehouse-receiving-dispatch': ['inventory.stock.view', 'supply_chain.document.acknowledge', 'supply_chain.order.view', 'warehouse.receipt.post', 'warehouse.shipment.manage'],
+  'hr-leave-attendance-administrator': ['hr.attendance.manage', 'hr.employee.view', 'hr.expense.manage', 'hr.leave.approve', 'hr.module.view'],
+  'hr-records-officer': ['hr.contract.manage', 'hr.contract.view', 'hr.employee.manage', 'hr.employee.view', 'hr.module.view', 'hr.onboarding.manage', 'hr.recruitment.manage'],
+  'reporting-viewer': ['reporting.analytics.view'],
+}
 
 export const permissionsOfModule = (moduleId: string, keys: readonly string[]) =>
   keys.filter(k => classifyPermission(k).groupId === moduleId).slice().sort()
@@ -80,7 +107,7 @@ export const fullAccessBadge = (roleKey?: string | null) => {
  * offered only to an administrator who holds those permissions in the organization.
  */
 export const POST_CREATION_ASSIGNMENT_NOTE =
-  'Some Full Access policies hold security administration or reset permissions. They are offered here only when you hold those permissions in this organization (the same rule as Grant Policy); otherwise create the person first and ask an administrator who holds them to assign the policy in Security & Access → People & Access.'
+  'Some policies hold security administration or reset permissions (Security & Access Full Access and the break-glass reset policies). They are offered here only when you hold those permissions in this organization (the same rule as Grant Policy); otherwise create the person first and ask an administrator who holds them to assign the policy in Security & Access → People & Access.'
 
 /** Standard policy coverage drift as reported by sa_standard_policy_drift(). */
 export interface PolicyDrift { roleKey: string; recordedCount: number; liveCount: number; catalogueNotCovered: string[]; liveNotRecorded: string[]; recordedNotLive: string[] }

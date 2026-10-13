@@ -71,6 +71,17 @@ export function seededProfilePermissions(): Map<string, Set<string>> {
   const wm = readFileSync(resolve(MIGRATIONS, '20261109100000_sa_warehouse_manager_full_access.sql'), 'utf8')
   const wmTarget = wm.match(/v_target constant text\[\] := array\[([^\]]*)\]/)
   if (wmTarget && wm.includes("sa_extend_standard_policy('warehouse-manager'")) add('warehouse-manager', [...wmTarget[1].matchAll(/'([a-z_.]+)'/g)].map(x => x[1]))
+  // Policy hardening (20261110100000): six new policies in one VALUES list (role_key, name, module, prefixes, org types,
+  // description, perms), then destructive keys removed from Full Access through sa_narrow_standard_policy.
+  const ph = readFileSync(resolve(MIGRATIONS, '20261110100000_sa_policy_hardening_and_new_standard_policies.sql'), 'utf8')
+  const seed = ph.slice(ph.indexOf('do $seed$'), ph.indexOf('end $seed$'))
+  for (const m of seed.matchAll(/\(\s*'([a-z0-9-]+)',\s*'[^']*',\s*'[a-z_]+',\s*array\[[^\]]*\],\s*array\[[^\]]*\],\s*'(?:[^']|'')*',\s*array\[([^\]]*)\]\s*\)/g)) {
+    add(m[1], [...m[2].matchAll(/'([a-z_.]+)'/g)].map(x => x[1]))
+  }
+  for (const m of ph.matchAll(/select public\.sa_narrow_standard_policy\('([a-z0-9-]+)',\s*array\[([^\]]*)\]/g)) {
+    const set = map.get(m[1])
+    for (const k of [...m[2].matchAll(/'([a-z_.]+)'/g)].map(x => x[1])) set?.delete(k)
+  }
   return map
 }
 
