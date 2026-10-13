@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { authorize, type LegacyEvaluator } from './authorization'
 import type { AuthorizationDecision, AuthorizationResource } from './types'
+import type { Trace } from './diagnostics'
 
 export interface OperationRequest {
   actorId: string
@@ -11,6 +12,10 @@ export interface OperationRequest {
   /** The module's existing check; decides in LEGACY_ENFORCED/SHADOW. */
   legacy?: LegacyEvaluator
   correlationId?: string | null
+  /** Decide and explain without writing an audit row (UI preflight; nothing is being authorized). */
+  explainOnly?: boolean
+  /** Request diagnostics (phase timings, failure classification). */
+  trace?: Trace
 }
 
 /**
@@ -25,9 +30,9 @@ export async function authorizeOperation(request: OperationRequest): Promise<Aut
       actorId: request.actorId,
       permission: request.permission,
       resource: request.resource,
-      context: { correlationId: request.correlationId ?? null },
+      context: { correlationId: request.correlationId ?? null, ...(request.explainOnly ? { explainOnly: true } : {}) },
     },
-    { legacy: request.legacy },
+    { legacy: request.legacy, trace: request.trace },
   )
 }
 
@@ -45,6 +50,10 @@ export async function guardOperation(request: OperationRequest): Promise<NextRes
     return NextResponse.json({ success: false, error: 'Authorization service unavailable' }, { status: 503 })
   }
   if (decision.decision === 'ALLOW') return null
+  // Fail closed, but an infrastructure failure is not a confirmed denial.
+  if (decision.unavailable) {
+    return NextResponse.json({ success: false, error: 'Authorization service unavailable', code: 'sa_unavailable', decisionId: decision.decisionId }, { status: 503 })
+  }
   return NextResponse.json(
     { success: false, error: 'Forbidden', code: 'sa_forbidden', permission: request.permission, decisionId: decision.decisionId, reason: decision.reasonCode },
     { status: 403 },

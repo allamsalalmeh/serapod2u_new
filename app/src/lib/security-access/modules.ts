@@ -83,16 +83,28 @@ export const MODULE_TAXONOMY: readonly ModuleGroup[] = [
       { id: 'finance_admin', name: 'Finance Administration', match: res('finance', 'module', 'settings', 'data', 'payroll_integration') },
     ],
   },
+  // Security & Access is its own module: everything under security.* (administering who may do what).
+  // Unrelated platform settings, identity and organization permissions stay in Platform & Settings.
   {
-    id: 'platform_security', name: 'Platform & Security', match: mod('platform', 'security'),
+    id: 'security_access', name: 'Security & Access', match: mod('security'),
+    areas: [
+      { id: 'access_admin', name: 'Access Administration', match: res('security', 'access', 'role', 'scope') },
+      { id: 'migration_modes', name: 'Migration Modes', match: res('security', 'permission') },
+      { id: 'security_governance', name: 'Security Governance', match: res('security', 'policy', 'delegation', 'access_request', 'emergency_access') },
+      { id: 'review_audit', name: 'Review & Audit', match: res('security', 'audit', 'access_review') },
+      { id: 'technical_access', name: 'Technical Access', match: res('security', 'service_identity') },
+    ],
+  },
+  {
+    id: 'platform_settings', name: 'Platform & Settings', match: mod('platform'),
     areas: [
       { id: 'identity', name: 'Identity', match: res('platform', 'identity', 'identity_access') },
       { id: 'user_admin', name: 'User Administration', match: res('platform', 'user') },
       { id: 'notifications', name: 'Notifications', match: res('platform', 'notification_monitor') },
+      { id: 'system', name: 'System', match: res('platform', 'system_logs') },
       { id: 'integrations', name: 'Integrations & Settings', match: res('platform', 'settings') },
       { id: 'organizations', name: 'Organizations & Data', match: res('platform', 'organization', 'data') },
       { id: 'platform', name: 'Platform', match: mod('platform') },
-      { id: 'security_governance', name: 'Security Governance', match: mod('security') },
     ],
   },
   // Shared, cross-module analytics only. Module-specific reports (customer,
@@ -141,7 +153,7 @@ export const GENERAL_AREA = { id: '_general', name: 'General' }
 
 /**
  * THE module → functional area → operation grouping used by Migration Modes,
- * the Permission Catalogue, Access Profiles (details and editor) and People &
+ * the Permission Catalogue, Group Policies (details and editor) and People &
  * Access. Ids, names and ordering come only from MODULE_TAXONOMY. It is a
  * navigation aid: it never grants or inherits anything.
  */
@@ -236,8 +248,8 @@ const SERVICE_TEAMS: Record<string, { groupId: string; areaName: string | null }
   ecommerce: { groupId: 'customer_growth', areaName: 'E-Commerce' },
   hrpayroll: { groupId: 'hr_payroll', areaName: null },
   finance: { groupId: 'finance', areaName: null },
-  platform: { groupId: 'platform_security', areaName: 'Platform' },
-  security: { groupId: 'platform_security', areaName: 'Security Governance' },
+  platform: { groupId: 'platform_settings', areaName: 'Platform' },
+  security: { groupId: 'security_access', areaName: 'Security Governance' },
   reporting: { groupId: 'reporting', areaName: null },
 }
 export const teamKey = (team?: string | null) => (team ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')

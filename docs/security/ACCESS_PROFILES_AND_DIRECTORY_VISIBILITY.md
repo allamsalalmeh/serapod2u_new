@@ -1,5 +1,7 @@
 # Access Profiles and cross-organization directory
 
+> **Renamed:** "Access Profile" is now **Group Policy** in every user-facing place (internals and API names are unchanged). Module-wide Full Access policies and delegated administration: see `GROUP_POLICIES_AND_DELEGATED_ADMINISTRATION.md`.
+
 Branch: `issues-fixing-oct2`. Migrations (left unapplied, run in this order, after the existing S&A migrations):
 
 1. `supabase/migrations/20261005100000_sa_directory_visibility.sql`

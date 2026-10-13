@@ -1,22 +1,17 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, ClipboardCheck, GitBranch, KeyRound, Lock, Send, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, KeyRound, Lock, Plus, Send, X, XCircle } from 'lucide-react'
 import SearchableSelect from './SearchableSelect'
 import { callApi, formatDate, toIso } from './client-api'
-import { Collapsible, DisclosurePanel, EmptyState, FilterChips, FOCUS, LIST_TEXT, ModuleFilterSelect, SearchInput, SectionTabs, ShowMore, ToggleButton, useLimit } from './ui'
+import { Collapsible, DisclosurePanel, EmptyState, FilterChips, FOCUS, InfoPopover, LIST_TEXT, ModuleFilterSelect, SearchInput, ShowMore, ToggleButton, useLimit } from './ui'
+import type { GovernanceSection } from './advanced-nav'
 import { OTHER_MODULE, classifyPermission, classifyRole, moduleGroupName, permissionModuleLabel } from '@/lib/security-access/modules'
 import { OUTCOMES, RULE_KINDS, enforcementOf, groupSodRules, humanize, outcomeOf, ruleKindLabel, type SodMitigation, type SodRule, type SodViolation } from '@/lib/security-access/sod'
 import { permissionLabel } from '@/lib/security-access/labels'
+import { SCOPE_HELP, choiceAllowedForPolicy, warehousePartialNote, warehouseSupportFor, warehouseUnsupportedMessage } from '@/lib/security-access/scope-eligibility'
+import { rolePermissionKeys } from '@/lib/security-access/modules'
 
-type Section = 'requests' | 'delegations' | 'reviews' | 'sod' | 'emergency'
-const SECTIONS: Array<{ id: Section; label: string }> = [
-  { id: 'requests', label: 'Access Requests' },
-  { id: 'delegations', label: 'Delegations' },
-  { id: 'reviews', label: 'Access Reviews' },
-  { id: 'sod', label: 'Segregation of Duties' },
-  { id: 'emergency', label: 'Emergency Access' },
-]
 
 const STATUS_TONE: Record<string, string> = {
   requested: 'bg-blue-50 text-blue-700', approved: 'bg-emerald-50 text-emerald-700', denied: 'bg-red-50 text-red-700',
@@ -28,6 +23,8 @@ const STATUS_TONE: Record<string, string> = {
 const Pill = ({ value }: { value: string }) => <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_TONE[value] || 'bg-gray-100 text-gray-600'}`}>{value.replace(/_/g, ' ')}</span>
 
 interface Props {
+  /** Which Governance destination to show; chosen by the single Advanced navigator. */
+  section: GovernanceSection
   data: any
   governance: any | null
 }
@@ -37,8 +34,7 @@ interface Props {
  * approved), scoped non-transitive delegations, access review campaigns (no
  * self-certification), segregation of duties, and emergency access status.
  */
-export default function GovernancePanel({ data, governance }: Props) {
-  const [section, setSection] = useState<Section>('requests')
+export default function GovernancePanel({ section, data, governance }: Props) {
   const people: any[] = data.people || []
   const nameOf = useMemo(() => {
     const map = new Map<string, string>()
@@ -49,7 +45,6 @@ export default function GovernancePanel({ data, governance }: Props) {
   const roleName = useMemo(() => new Map((data.roles || []).map((r: any) => [r.id, r.name])), [data.roles])
 
   return <div className="space-y-4">
-    <SectionTabs label="Governance sections" value={section} onChange={setSection} items={SECTIONS} />
     {section === 'requests' && <AccessRequests data={data} nameOf={nameOf} orgName={orgName} roleName={roleName} />}
     {section === 'delegations' && <Delegations data={data} nameOf={nameOf} orgName={orgName} />}
     {section === 'reviews' && <Reviews data={data} nameOf={nameOf} orgName={orgName} roleName={roleName} />}
@@ -87,11 +82,32 @@ function AccessRequests({ data, nameOf, orgName, roleName }: any) {
   const allRequests: any[] = state?.requests || []
   const requests = allRequests.filter((r: any) => (status === 'all' || (status === 'pending') === (r.status === 'requested'))
     && (moduleFilter === 'all' || requestModules(r).includes(moduleFilter)))
+  // Previous (decided) requests exist under the current module filter, so "All" would show something.
+  const hasPrevious = allRequests.some((r: any) => r.status !== 'requested' && (moduleFilter === 'all' || requestModules(r).includes(moduleFilter)))
   const roles = (data.roles || []).filter((r: any) => r.source !== 'legacy' && r.status === 'active')
   const target = (data.people || []).find((p: any) => p.id === (form.targetUserId || data.viewerId))
   const memberships = (target?.membership || []).filter((m: any) => m.status === 'active')
-  const scopeOptions = (data.scopeDefinitions || []).filter((s: any) => s.organization_id === form.organizationId && s.scope_type !== 'own_record')
-    .map((s: any) => ({ value: s.id, label: s.display_name, description: s.scope_type.replace(/_/g, ' ') }))
+  // Canonical scope choices from the server (shared eligibility; an HQ offers itself and its own warehouses only). A request names a
+  // scope but grants nothing; the approver decides, and POST /access-requests re-validates the same rules.
+  const [choiceState, setChoiceState] = useState<{ org: string; status: 'loading' | 'ready' | 'failed'; choices: any[] }>({ org: '', status: 'ready', choices: [] })
+  useEffect(() => {
+    const org = form.organizationId
+    if (!org) { setChoiceState({ org: '', status: 'ready', choices: [] }); return }
+    let cancelled = false
+    setChoiceState({ org, status: 'loading', choices: [] })
+    callApi(`/api/security-access/scope-choices?${new URLSearchParams({ organizationId: org, purpose: 'request' })}`).then(res => {
+      if (cancelled) return
+      setChoiceState(res.ok && Array.isArray(res.data?.choices) ? { org, status: 'ready', choices: res.data.choices } : { org, status: 'failed', choices: [] })
+    })
+    return () => { cancelled = true }
+  }, [form.organizationId])
+  const pickedRole = roles.find((r: any) => r.id === form.roleId)
+  const warehouseSupport = pickedRole ? warehouseSupportFor(rolePermissionKeys(pickedRole)) : null
+  const choicesReady = !!form.organizationId && choiceState.org === form.organizationId && choiceState.status === 'ready'
+  const allChoices = choicesReady ? choiceState.choices : []
+  const offered = allChoices.filter((s: any) => choiceAllowedForPolicy({ kind: s.kind }, warehouseSupport))
+  const scopeOptions = offered.map((s: any) => ({ value: s.id, label: s.label ?? s.display_name, description: s.coverage }))
+  const scopeValid = offered.some((s: any) => s.id === form.scopeId)
 
   async function submit() {
     const result = await callApi('/api/security-access/access-requests', { body: {
@@ -109,34 +125,54 @@ function AccessRequests({ data, nameOf, orgName, roleName }: any) {
 
   return <div className="space-y-4">
     <Feedback message={message} />
-    <DisclosurePanel title="Request access" open={formOpen} onToggle={() => setFormOpen(!formOpen)} actionLabel="New request"
-      description="Request a business role for yourself or a colleague. Temporary requests must end; the requester and the person receiving access cannot approve.">
+    <section className="rounded-xl border border-gray-200 bg-white shadow-sm" aria-label="Access Requests">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <h3 className="font-semibold text-gray-950">Access Requests</h3>
+          <InfoPopover label="About access requests">
+            <p>Request a Group Policy for yourself or a colleague. Nothing is granted until an approver decides.</p>
+            <p>Temporary requests must end on the date you set. The requester and the person receiving access cannot approve the request.</p>
+            <p>{state?.canApprove ? 'You are seeing all access requests.' : 'You are seeing your own access requests.'}</p>
+          </InfoPopover>
+        </div>
+        <button type="button" onClick={() => setFormOpen(!formOpen)} aria-expanded={formOpen}
+          className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${formOpen ? 'border border-gray-200 text-gray-700 hover:bg-gray-50' : 'bg-orange-500 text-white hover:bg-orange-600'} ${FOCUS}`}>
+          {formOpen ? <X className="h-4 w-4" aria-hidden /> : <Plus className="h-4 w-4" aria-hidden />}{formOpen ? 'Close' : 'New request'}
+        </button>
+      </div>
+      {formOpen && <div className="border-t border-gray-100">
       <div className="grid gap-4 p-4 md:grid-cols-3">
         <SearchableSelect label="For" value={form.targetUserId} onChange={v => setForm({ ...form, targetUserId: v, organizationId: '', scopeId: '' })}
           options={(data.people || []).map((p: any) => ({ value: p.id, label: p.id === data.viewerId ? `${p.full_name || p.email} (me)` : p.full_name || p.email }))} placeholder="Myself" allowClear />
-        <SearchableSelect label="Business role" value={form.roleId} onChange={v => setForm({ ...form, roleId: v })} options={roles.map((r: any) => ({ value: r.id, label: r.name, description: r.description || undefined, group: moduleGroupName(classifyRole(r).groupId) }))} />
+        <SearchableSelect label="Group Policy" value={form.roleId} onChange={v => setForm({ ...form, roleId: v })} options={roles.map((r: any) => ({ value: r.id, label: r.name, description: r.description || undefined, group: moduleGroupName(classifyRole(r).groupId) }))} />
         <SearchableSelect label="Membership organization" value={form.organizationId} onChange={v => setForm({ ...form, organizationId: v, scopeId: '' })}
           options={memberships.map((m: any) => ({ value: m.organization_id, label: String(orgName.get(m.organization_id) || 'Organization') }))} />
-        <SearchableSelect label="Scope" value={form.scopeId} onChange={v => setForm({ ...form, scopeId: v })} options={scopeOptions} disabled={!form.organizationId} />
+        <SearchableSelect label="Scope" value={scopeValid ? form.scopeId : ''} onChange={v => setForm({ ...form, scopeId: v })} options={scopeOptions} disabled={!form.organizationId || !choicesReady} />
+        <div className="space-y-1 md:col-span-3" aria-live="polite">
+          {choiceState.status === 'failed' && !!form.organizationId && <p role="alert" className="text-xs text-red-600">The scopes for this organization could not be loaded. Nothing can be requested until they load.</p>}
+          {scopeValid && <p role="note" className="text-xs text-gray-700"><span className="font-medium">Coverage:</span> {offered.find((s: any) => s.id === form.scopeId)?.coverage}</p>}
+          {allChoices.length > offered.length && <p role="note" className="text-xs text-gray-600">{warehouseUnsupportedMessage}</p>}
+          {warehouseSupport?.level === 'partial' && offered.some((s: any) => s.kind === 'warehouse') && <p role="note" className="text-xs text-gray-600">{warehousePartialNote(warehouseSupport)}</p>}
+          {!!form.organizationId && <div className="flex items-center gap-1 text-xs text-gray-500">About scopes<InfoPopover label="About scopes">{SCOPE_HELP.map(t => <p key={t}>{t}</p>)}</InfoPopover></div>}
+        </div>
         <label className="text-sm"><span className="text-gray-600">Ends (temporary access)</span>
           <input type="datetime-local" value={form.until} onChange={e => setForm({ ...form, until: e.target.value })} className="mt-1 w-full rounded-lg border px-3 py-2" /></label>
         <label className="text-sm"><span className="text-gray-600">Business justification</span>
           <input value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} className="mt-1 w-full rounded-lg border px-3 py-2" /></label>
       </div>
-      <div className="border-t p-4"><button onClick={submit} disabled={!form.roleId || !form.organizationId || !form.scopeId || form.reason.trim().length < 10}
+      <div className="border-t p-4"><button onClick={submit} disabled={!form.roleId || !form.organizationId || !scopeValid || form.reason.trim().length < 10}
         className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"><Send className="h-4 w-4" />Submit request</button></div>
-    </DisclosurePanel>
-    <section className="rounded-xl border border-gray-200 bg-white">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4"><h3 className="font-semibold">{state?.canApprove ? 'All access requests' : 'My access requests'}</h3>
-        <div className="flex flex-wrap items-center gap-2">
-        <ModuleFilterSelect value={moduleFilter} onChange={setModuleFilter} available={allRequests.flatMap(requestModules)} />
+      </div>}
+      <div className="flex flex-wrap items-center gap-2 border-t border-gray-100 px-4 py-3">
         <FilterChips label="Request status" value={status} onChange={setStatus} items={[
-          { id: 'pending', label: 'Waiting for a decision', count: allRequests.filter((r: any) => r.status === 'requested').length },
+          { id: 'pending', label: 'Pending', count: allRequests.filter((r: any) => r.status === 'requested').length },
           { id: 'decided', label: 'Decided', count: allRequests.filter((r: any) => r.status !== 'requested').length },
           { id: 'all', label: 'All', count: allRequests.length },
-        ]} /></div></div>
-      {error && <div className="p-4 text-sm text-red-700">{error}</div>}
-      <div className="divide-y">{requests.map((r: any) => <div key={r.id} className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm">
+        ]} />
+        <div className="ml-auto"><ModuleFilterSelect value={moduleFilter} onChange={setModuleFilter} available={allRequests.flatMap(requestModules)} /></div>
+      </div>
+      {error && <div role="alert" className="border-t border-gray-100 p-4 text-sm text-red-700">{error}</div>}
+      <div className="divide-y border-t border-gray-100">{requests.map((r: any) => <div key={r.id} className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm">
         <div>
           <div className="font-medium">{roleName.get(r.role_id) || 'Role'} for {nameOf(r.target_user_id)}</div>
           <div className="text-xs text-gray-500">{orgName.get(r.organization_id) || 'Organization'} · requested by {nameOf(r.requester_id)} · {formatDate(r.created_at)}{r.effective_until ? ` · until ${formatDate(r.effective_until)}` : ''}</div>
@@ -150,7 +186,10 @@ function AccessRequests({ data, nameOf, orgName, roleName }: any) {
           {r.status === 'requested' && r.requester_id === data.viewerId && <button onClick={() => act({ action: 'cancel', requestId: r.id }, 'Request cancelled.')} className="rounded-md border px-2 py-1 text-xs">Cancel</button>}
         </div>
       </div>)}
-        {state && !requests.length && <EmptyState>{moduleFilter !== 'all' ? 'No requests in this module.' : status === 'pending' ? 'Nothing is waiting for a decision.' : 'No access requests.'}</EmptyState>}</div>
+        {state && !requests.length && <EmptyState>
+          {status === 'pending' ? (moduleFilter !== 'all' ? 'No pending access requests in this module.' : 'No pending access requests.') : status === 'decided' ? (moduleFilter !== 'all' ? 'No decided access requests in this module.' : 'No decided access requests.') : moduleFilter !== 'all' ? 'No requests in this module.' : 'No access requests.'}
+          {status === 'pending' && hasPrevious && <> <button type="button" onClick={() => setStatus('all')} className={`rounded font-medium text-orange-600 hover:text-orange-700 ${FOCUS}`}>Switch to All to view previous requests</button></>}
+        </EmptyState>}</div>
     </section>
   </div>
 }
@@ -182,7 +221,7 @@ function Delegations({ data, nameOf, orgName }: any) {
   return <div className="space-y-4">
     <Feedback message={message} />
     <DisclosurePanel title="Delegate one of your permissions" open={formOpen} onToggle={() => setFormOpen(!formOpen)} actionLabel="New delegation"
-      description="Scoped and time-boxed. A delegate can never exceed what you currently hold, and cannot delegate onward.">
+      info={<p>Scoped and time-boxed. A delegate can never exceed what you currently hold, and cannot delegate onward.</p>}>
       <div className="grid gap-4 p-4 md:grid-cols-3">
         <SearchableSelect label="Delegate" value={form.delegateId} onChange={v => setForm({ ...form, delegateId: v })}
           options={(data.people || [])
@@ -237,7 +276,7 @@ function Reviews({ data, nameOf, orgName, roleName }: any) {
   return <div className="space-y-4">
     <Feedback message={message} />
     {state?.canManage && <DisclosurePanel title="Start an access review" open={formOpen} onToggle={() => setFormOpen(!formOpen)} actionLabel="New review"
-      description="Snapshots current assignments for certification. Reviewers retain, revoke or shorten access; nobody certifies their own access.">
+      info={<p>Snapshots current assignments for certification. Reviewers retain, revoke or shorten access; nobody certifies their own access.</p>}>
       <div className="grid gap-4 p-4 md:grid-cols-3">
         <label className="text-sm"><span className="text-gray-600">Name</span><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="mt-1 w-full rounded-lg border px-3 py-2" /></label>
         <SearchableSelect label="Organization (optional)" value={form.organizationId} onChange={v => setForm({ ...form, organizationId: v })} options={(data.organizations || []).map((o: any) => ({ value: o.id, label: o.org_name }))} allowClear />

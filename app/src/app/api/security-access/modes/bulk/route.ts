@@ -13,7 +13,9 @@ const schema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('apply'), groupId, mode,
     selection: z.enum(['all', 'eligible_only']),
-    reason: z.string().trim().min(10).max(500),
+    // Required (>= 10 characters) only for an actual change back to Legacy enforced / Monitoring; the server decides
+    // that from the current modes. Otherwise an optional note.
+    reason: z.string().max(500).nullish(),
     previewHash: z.string().regex(/^[0-9a-f]{64}$/),
     idempotencyKey: z.string().uuid(),
   }).strict(),

@@ -29,9 +29,9 @@ describe('MyAccessRequests (self-service access requests)', () => {
   it('offers only roles the person does not hold and submits a scoped, reasoned request', async () => {
     const calls = stubApi(OPTIONS)
     render(<MyAccessRequests />)
-    const role = await screen.findByRole('combobox', { name: 'Business role' }) as HTMLSelectElement
+    const role = await screen.findByRole('combobox', { name: 'Group Policy' }) as HTMLSelectElement
     await waitFor(() => expect((screen.getByRole('combobox', { name: 'Organization' }) as HTMLSelectElement).value).toBe('org-hq'))
-    expect(Array.from(role.options).map(o => o.text)).toEqual(['Choose a role', 'Warehouse Operator'])
+    expect(Array.from(role.options).map(o => o.text)).toEqual(['Choose a policy', 'Warehouse Operator'])
     const submit = screen.getByRole('button', { name: 'Submit request' })
     await userEvent.selectOptions(role, 'r-wh')
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Scope' }), 's-hq')

@@ -1,19 +1,21 @@
 'use client'
 
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { BarChart3, Briefcase, HeartHandshake, HelpCircle, Landmark, ShieldCheck, Truck } from 'lucide-react'
+import { BarChart3, Briefcase, HeartHandshake, HelpCircle, Landmark, Settings, ShieldCheck, Truck } from 'lucide-react'
 import { filterRollout, rolloutMode, type Rollout, type RolloutNode, type RolloutPermission } from '@/lib/security-access/rollout'
-import { FOCUS, ModeStatus, SearchInput, ToggleButton } from './ui'
+import { FOCUS, InfoPopover, ModeStatus, SearchInput, ToggleButton } from './ui'
 
 const GROUP_ICONS: Record<string, any> = {
   supply_chain: Truck, customer_growth: HeartHandshake, hr_payroll: Briefcase,
-  finance: Landmark, platform_security: ShieldCheck, reporting: BarChart3,
+  finance: Landmark, security_access: ShieldCheck, platform_settings: Settings, reporting: BarChart3,
 }
 
 interface Props {
   rollout: Rollout
   title: string
   description?: string
+  /** Short explanation shown behind the small ⓘ next to the title. */
+  info?: React.ReactNode
   /** Show a count column per authorization mode (and the mode legend). */
   showModes?: boolean
   /** Extra facts / actions shown on a permission row (no separate column). */
@@ -34,7 +36,7 @@ interface Props {
  * rendered, so nothing hidden can receive focus.
  */
 export default function PermissionTree({
-  rollout, title, description, showModes = true, renderDetails, renderSubtitle, renderGroupActions, initialQuery = '',
+  rollout, title, description, info, showModes = true, renderDetails, renderSubtitle, renderGroupActions, initialQuery = '',
   searchPlaceholder = 'Search modules', emptyText = 'No permissions are registered in this environment yet.',
 }: Props) {
   const [query, setQuery] = useState(initialQuery)
@@ -87,7 +89,8 @@ export default function PermissionTree({
     <section className="rounded-xl border border-gray-200 bg-white shadow-sm" aria-label={title}>
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 p-4">
         <div className="min-w-0">
-          <h2 className="font-semibold text-gray-950">{title}</h2>
+          <div className="flex items-center gap-2"><h2 className="font-semibold text-gray-950">{title}</h2>
+            {info && <InfoPopover label={`About ${title}`}>{info}</InfoPopover>}</div>
           {description && <p className="text-sm text-gray-500">{description}</p>}
         </div>
         <div className="flex w-full items-center gap-2 sm:w-auto">

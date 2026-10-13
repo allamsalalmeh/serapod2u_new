@@ -1,6 +1,8 @@
 import { STAGE2D_PERMISSION_KEYS } from './stage2d-catalog'
-import { IDENTITY_ENFORCEMENT_READY } from './identity-catalog'
+import { IDENTITY_ARCHIVE_ENFORCEMENT_READY, IDENTITY_ENFORCEMENT_READY } from './identity-catalog'
 import { HR_DATA_PERMISSION_KEYS } from './hr-data-catalog'
+import { USER_ADMIN_ENFORCEMENT_READY } from './user-admin-catalog'
+import { SYSTEM_LOGS_ENFORCEMENT_READY } from './system-logs-catalog'
 
 /**
  * Operations whose every reachable path enforces the S&A decision: the
@@ -110,8 +112,15 @@ export const ENFORCEMENT_READY_PERMISSIONS: readonly string[] = [
   'inventory.transfer.view',
 ]
 
-/** Final Wave registrations (20260928130000), Identity Foundation (20260929110000), Stage 2D (20260930100000) and HR Data Management (20261003100000). */
-export const ALL_ENFORCEMENT_READY_PERMISSIONS: readonly string[] = [...ENFORCEMENT_READY_PERMISSIONS, ...IDENTITY_ENFORCEMENT_READY, ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS]
+/**
+ * Stock Count draft creation and posting (20261019100000_sa_stock_count_create_post_enforcement.sql): API-role write
+ * guard + discard guard for create; verification routes, stock_count_user_can_post and the code-consumption backstop
+ * for post.
+ */
+export const STOCK_COUNT_ENFORCEMENT_READY: readonly string[] = ['inventory.stock_count.create', 'inventory.stock_count.post']
+
+/** Final Wave registrations (20260928130000), Identity Foundation (20260929110000), Stage 2D (20260930100000) and HR Data Management (20261003100000) and User Administration password reset (20261016100000) and System Logs (20261017110000) and Stock Count create/post (20261019100000) and Archive Identities (20261023100000). */
+export const ALL_ENFORCEMENT_READY_PERMISSIONS: readonly string[] = [...ENFORCEMENT_READY_PERMISSIONS, ...IDENTITY_ENFORCEMENT_READY, ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS, ...USER_ADMIN_ENFORCEMENT_READY, ...SYSTEM_LOGS_ENFORCEMENT_READY, ...STOCK_COUNT_ENFORCEMENT_READY, ...IDENTITY_ARCHIVE_ENFORCEMENT_READY]
 
 export function isEnforcementReady(permissionKey: string): boolean {
   return ALL_ENFORCEMENT_READY_PERMISSIONS.includes(permissionKey)

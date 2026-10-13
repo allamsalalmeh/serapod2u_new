@@ -38,9 +38,9 @@ describe('Roles & Policies', () => {
 
   it('shows one section at a time, with counts', async () => {
     render(<RolesPoliciesPanel data={data} governance={governance} onChanged={vi.fn()} />)
-    expect(screen.getByRole('tab', { name: /^Migration modes\s*2$/ }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('tab', { name: /^Migration Modes\s*2$/ }).getAttribute('aria-selected')).toBe('true')
     expect(screen.getByRole('button', { name: /^Finance, 1 permission, expand/ })).toBeTruthy()
-    await userEvent.click(screen.getByRole('tab', { name: /^Access Profiles\s*2$/ }))
+    await userEvent.click(screen.getByRole('tab', { name: /^Group Policies\s*2$/ }))
     expect(screen.queryByRole('button', { name: /^Finance, 1 permission/ })).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: /^Finance, 1 role, expand/ }))
     expect(screen.getByRole('button', { name: /^Finance Viewer, 1 permission/ })).toBeTruthy()
@@ -49,29 +49,65 @@ describe('Roles & Policies', () => {
   it('opens the tree at a permission when arriving from the Overview, and guards enforcement by readiness', async () => {
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}) }))
     vi.stubGlobal('fetch', fetchMock)
-    vi.stubGlobal('prompt', () => 'Parity reviewed for a week')
     const onChanged = vi.fn()
     render(<RolesPoliciesPanel data={data} governance={governance} onChanged={onChanged} initialQuery="inventory.stock_count.create" />)
     const select = screen.getByRole('combobox', { name: /Change mode for Create Stock Count/ }) as HTMLSelectElement
     const enforce = Array.from(select.options).find(o => o.value === 'NEW_ENFORCED')!
     expect(enforce.disabled).toBe(true)
     expect(screen.getByText('Not ready for enforcement')).toBeTruthy()
+    // Moving back to Legacy enforced: a reason is required (no browser prompt).
     await userEvent.selectOptions(select, 'LEGACY_ENFORCED')
+    const dialog = within(screen.getByRole('dialog', { name: /Change mode: Create Stock Count/ }))
+    expect(dialog.getByText(/Monitoring \/ Shadow →/)).toBeTruthy()
+    const submit = dialog.getByRole('button', { name: 'Change to Legacy enforced' }) as HTMLButtonElement
+    await userEvent.type(dialog.getByLabelText(/^Reason \(required/), 'too short')
+    expect(submit.disabled).toBe(true)
+    await userEvent.type(dialog.getByLabelText(/^Reason \(required/), ' for parity')
+    expect(submit.disabled).toBe(false)
+    await userEvent.click(submit)
     expect(fetchMock).toHaveBeenCalledWith('/api/security-access/modes', expect.objectContaining({
-      body: JSON.stringify({ permissionKey: 'inventory.stock_count.create', mode: 'LEGACY_ENFORCED', reason: 'Parity reviewed for a week' }),
+      body: JSON.stringify({ permissionKey: 'inventory.stock_count.create', mode: 'LEGACY_ENFORCED', reason: 'too short for parity' }),
     }))
-    expect(onChanged).toHaveBeenCalled()
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('moving forward takes an optional note collapsed under “Add note”', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const onChanged = vi.fn()
+    render(<RolesPoliciesPanel data={data} governance={governance} onChanged={onChanged} initialQuery="finance.ledger.view" />)
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^Change mode for/ }), 'LEGACY_RETIRED')
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.queryByRole('textbox')).toBeNull()
+    expect(dialog.getByText(/recorded automatically/)).toBeTruthy()
+    const submit = dialog.getByRole('button', { name: 'Change to Legacy Retired' }) as HTMLButtonElement
+    expect(submit.disabled).toBe(false)
+    await userEvent.click(submit)
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/security-access/modes', expect.objectContaining({
+      body: JSON.stringify({ permissionKey: 'finance.ledger.view', mode: 'LEGACY_RETIRED' }),
+    }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    // With a note.
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^Change mode for/ }), 'LEGACY_RETIRED')
+    const again = within(screen.getByRole('dialog'))
+    await userEvent.click(again.getByRole('button', { name: 'Add note' }))
+    await userEvent.type(again.getByLabelText(/^Note \(optional\)/), 'Week of clean parity')
+    await userEvent.click(again.getByRole('button', { name: 'Change to Legacy Retired' }))
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/security-access/modes', expect.objectContaining({
+      body: JSON.stringify({ permissionKey: 'finance.ledger.view', mode: 'LEGACY_RETIRED', reason: 'Week of clean parity' }),
+    }))
   })
 
   it('separates business roles from compatibility roles and folds their permissions', async () => {
     render(<RolesPoliciesPanel data={data} governance={governance} onChanged={vi.fn()} />)
-    await userEvent.click(screen.getByRole('tab', { name: /Access Profiles/ }))
+    await userEvent.click(screen.getByRole('tab', { name: /Group Policies/ }))
     expect(screen.queryByText('Legacy HQ')).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: /^Compatibility\s*1$/ }))
     // A role with no mapped permissions stays visible under Other / Unmapped.
     await userEvent.click(screen.getByRole('button', { name: /^Other \/ Unmapped, 1 role/ }))
     expect(screen.getByText('Legacy HQ')).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: /^Business roles\s*1$/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^Group Policies\s*1$/ }))
     await userEvent.click(screen.getByRole('button', { name: /^Finance, 1 role/ }))
     expect(screen.queryByText('View Ledger')).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: /^Finance Viewer/ }))
@@ -83,7 +119,7 @@ describe('Roles & Policies', () => {
     const roles = [...data.roles, { id: 'r3', name: 'Payroll Finance Approver', role_key: 'pfa', source: 'template', status: 'active',
       permissions: [{ permission: { permission_key: 'hr.payroll.approve' } }, { permission: { permission_key: 'finance.payment.approve' } }] }]
     render(<RolesPoliciesPanel data={{ ...data, roles }} governance={governance} onChanged={vi.fn()} />)
-    await userEvent.click(screen.getByRole('tab', { name: /Access Profiles/ }))
+    await userEvent.click(screen.getByRole('tab', { name: /Group Policies/ }))
     expect(screen.getByRole('button', { name: /^Shared \/ Cross-module, 1 role/ })).toBeTruthy()
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Module' }), 'hr_payroll')
     expect(screen.getByText('Payroll Finance Approver')).toBeTruthy()
@@ -94,13 +130,19 @@ describe('Roles & Policies', () => {
     expect(screen.getByText(/Showing 2 of 2 roles/)).toBeTruthy()
   })
 
-  it('groups scopes by type and lists the catalogue with descriptions', async () => {
+  it('orders the tabs as approved — Policies, Group Policies, then Migration Modes last and default — and explains Policies', async () => {
     render(<RolesPoliciesPanel data={data} governance={governance} onChanged={vi.fn()} />)
-    await userEvent.click(screen.getByRole('tab', { name: /Scopes/ }))
-    expect(screen.queryByText('Main WH')).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: /^warehouse scopes, 1/ }))
-    expect(screen.getByText('Main WH')).toBeTruthy()
-    await userEvent.click(screen.getByRole('tab', { name: /Permission catalogue/ }))
+    expect(screen.getAllByRole('tab').map(t => (t.textContent || '').replace(/\d+$/, '').trim())).toEqual(['Policies', 'Group Policies', 'Migration Modes'])
+    expect(screen.getByRole('tab', { name: /^Migration Modes/ }).getAttribute('aria-selected')).toBe('true')
+    await userEvent.click(screen.getByRole('tab', { name: /^Policies\s*\d+$/ }))
+    expect(screen.getByRole('heading', { name: 'Policies' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'About Policies' }))
+    expect(screen.getByText('Individual access permissions included in a Group Policy.')).toBeTruthy()
+  })
+
+  it('lists the permission catalogue grouped with descriptions', async () => {
+    render(<RolesPoliciesPanel data={data} governance={governance} onChanged={vi.fn()} />)
+    await userEvent.click(screen.getByRole('tab', { name: /^Policies\s*\d+$/ }))
     await userEvent.click(screen.getByRole('button', { name: /^Supply Chain,/ }))
     await userEvent.click(screen.getByRole('button', { name: /^Supply Chain: Stock Count/ }))
     expect(screen.getByText('Start a stock count')).toBeTruthy()
@@ -152,7 +194,7 @@ describe('Roles & Policies', () => {
       expect(screen.getByRole('dialog').textContent).toMatch(/all 3 permissions/)
     })
 
-    it('previews blockers, disables "all", offers eligible-only, requires a reason, applies once and reports totals', async () => {
+    it('previews blockers, disables "all", offers eligible-only, takes an optional note, applies once and reports totals', async () => {
       const fetchMock = respond((_url, body) => body.action === 'preview'
         ? { preview: preview() }
         : { ok: true, result: { batchId: 'batch-1', changed: 2, unchanged: 0, skipped: 1, replayed: false, items: [] } })
@@ -170,19 +212,58 @@ describe('Roles & Policies', () => {
       expect(dialog.getByText('Monitoring / Shadow → Legacy Retired')).toBeTruthy()
       const applyBtn = dialog.getByRole('button', { name: /^Apply to 2 permissions$/ }) as HTMLButtonElement
       expect((dialog.getByRole('radio', { name: /^All permissions/ }) as HTMLInputElement).checked).toBe(true)
-      await userEvent.type(dialog.getByLabelText(/^Reason/), 'too short')
+      expect(dialog.queryByLabelText(/^Reason/)).toBeNull()       // moving forward: no reason demanded
       expect(applyBtn.disabled).toBe(true)                       // all-selected + blocked: nothing can change
       await userEvent.click(dialog.getByRole('radio', { name: /Eligible permissions only/ }))
-      expect(applyBtn.disabled).toBe(true)                       // reason is still under 10 trimmed characters
-      await userEvent.type(dialog.getByLabelText(/^Reason/), ' now ok')
+      expect(applyBtn.disabled).toBe(false)                      // the note is optional
+      await userEvent.click(dialog.getByRole('button', { name: 'Add note' }))
+      await userEvent.type(dialog.getByLabelText(/^Note \(optional\)/), 'ok')
       expect(applyBtn.disabled).toBe(false)
       await userEvent.dblClick(applyBtn)
       expect(await dialog.findByText('2 changed · 0 unchanged · 1 skipped')).toBeTruthy()
       const applies = fetchMock.mock.calls.map(c => JSON.parse(c[1].body)).filter(b => b.action === 'apply')
       expect(applies).toHaveLength(1)
-      expect(applies[0]).toEqual({ action: 'apply', groupId: 'supply_chain', mode: 'LEGACY_RETIRED', selection: 'eligible_only', reason: 'too short now ok', previewHash: 'a'.repeat(64), idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) })
+      expect(applies[0]).toEqual({ action: 'apply', groupId: 'supply_chain', mode: 'LEGACY_RETIRED', selection: 'eligible_only', reason: 'ok', previewHash: 'a'.repeat(64), idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) })
       expect(applies[0]).not.toHaveProperty('permissions')
       expect(onChanged).toHaveBeenCalledTimes(1)
+    })
+
+    it('requires a reason for a move back to Monitoring / Shadow', async () => {
+      const fetchMock = respond((_url, body) => body.action === 'preview'
+        ? { preview: preview({ targetMode: 'SHADOW', reasonRequired: true, canApplyAll: true, counts: { change: 2, unchanged: 1, blocked: 0 },
+          rows: [row('inventory.stock_count.create', 'NEW_ENFORCED', 'SHADOW', 'change'), row('inventory.stock_count.view', 'NEW_ENFORCED', 'SHADOW', 'change'), row('inventory.stock_count.verify', 'SHADOW', 'SHADOW', 'unchanged')] }) }
+        : { ok: true, result: { batchId: 'b', changed: 2, unchanged: 1, skipped: 0, replayed: false, items: [] } })
+      vi.stubGlobal('fetch', fetchMock)
+      render(<RolesPoliciesPanel data={bulkData} governance={governance} onChanged={vi.fn()} />)
+      await userEvent.click(screen.getByRole('button', { name: /^Change group mode for Supply Chain, 3 permissions$/ }))
+      await userEvent.click(screen.getByRole('radio', { name: /Monitoring \/ Shadow/ }))
+      const dialog = within(await screen.findByRole('dialog'))
+      const applyBtn = await dialog.findByRole('button', { name: /^Apply to 2 permissions$/ }) as HTMLButtonElement
+      expect(dialog.queryByRole('button', { name: 'Add note' })).toBeNull()
+      expect(applyBtn.disabled).toBe(true)
+      await userEvent.type(dialog.getByLabelText(/^Reason \(required/), 'short')
+      expect(applyBtn.disabled).toBe(true)
+      await userEvent.type(dialog.getByLabelText(/^Reason \(required/), ' — parity regression')
+      expect(applyBtn.disabled).toBe(false)
+      await userEvent.click(applyBtn)
+      expect(await dialog.findByText('2 changed · 1 unchanged · 0 skipped')).toBeTruthy()
+      expect(fetchMock.mock.calls.map(c => JSON.parse(c[1].body)).find(b => b.action === 'apply').reason).toBe('short — parity regression')
+    })
+
+    it('shows Legacy Retired permissions as kept when the group moves to New Access Active', async () => {
+      vi.stubGlobal('fetch', respond((_url, body) => body.action === 'preview'
+        ? { preview: preview({ targetMode: 'NEW_ENFORCED', canApplyAll: true, canApplyEligibleOnly: false, counts: { change: 1, unchanged: 1, blocked: 0, keptRetired: 1 },
+          rows: [row('inventory.stock_count.create', 'SHADOW', 'NEW_ENFORCED', 'change'), row('inventory.stock_count.view', 'LEGACY_RETIRED', 'NEW_ENFORCED', 'kept_retired'), row('inventory.stock_count.verify', 'NEW_ENFORCED', 'NEW_ENFORCED', 'unchanged')] }) }
+        : { ok: true, result: { batchId: 'b', changed: 1, unchanged: 1, skipped: 0, keptRetired: 1, replayed: false, items: [] } }))
+      render(<RolesPoliciesPanel data={bulkData} governance={governance} onChanged={vi.fn()} />)
+      await userEvent.click(screen.getByRole('button', { name: /^Change group mode for Supply Chain, 3 permissions$/ }))
+      await userEvent.click(screen.getByRole('radio', { name: /New Access Active/ }))
+      const dialog = within(await screen.findByRole('dialog'))
+      expect(await dialog.findByText('1 already using new access — kept retired')).toBeTruthy()
+      expect(dialog.getByText('Already using new access — kept retired')).toBeTruthy()
+      expect(dialog.getByText('Legacy Retired (kept)')).toBeTruthy()
+      await userEvent.click(dialog.getByRole('button', { name: /^Apply to 1 permission$/ }))
+      expect(await dialog.findByText('1 changed · 1 unchanged · 1 kept retired · 0 skipped')).toBeTruthy()
     })
 
     it('keeps Apply disabled when no change remains', async () => {
@@ -192,8 +273,7 @@ describe('Roles & Policies', () => {
       await userEvent.click(screen.getByRole('button', { name: /^Change group mode for Supply Chain, 3 permissions$/ }))
       await userEvent.click(screen.getByRole('radio', { name: /Legacy Retired/ }))
       const dialog = within(await screen.findByRole('dialog'))
-      await userEvent.type(await dialog.findByLabelText(/^Reason/), 'a perfectly good reason')
-      expect((dialog.getByRole('button', { name: /^Apply to 0 permissions$/ }) as HTMLButtonElement).disabled).toBe(true)
+      expect((await dialog.findByRole('button', { name: /^Apply to 0 permissions$/ }) as HTMLButtonElement).disabled).toBe(true)
       expect(dialog.getByText(/No changes remain/)).toBeTruthy()
     })
 
@@ -206,8 +286,7 @@ describe('Roles & Policies', () => {
       await userEvent.click(screen.getByRole('button', { name: /^Change group mode for Supply Chain, 3 permissions$/ }))
       await userEvent.click(screen.getByRole('radio', { name: /Legacy Retired/ }))
       const dialog = within(await screen.findByRole('dialog'))
-      await userEvent.type(await dialog.findByLabelText(/^Reason/), 'a perfectly good reason')
-      await userEvent.click(dialog.getByRole('button', { name: /^Apply to 3 permissions$/ }))
+      await userEvent.click(await dialog.findByRole('button', { name: /^Apply to 3 permissions$/ }))
       expect(await dialog.findByText(/The group changed since this preview/)).toBeTruthy()
       expect(dialog.getByRole('button', { name: 'Refresh preview' })).toBeTruthy()
       mode = 'missing'

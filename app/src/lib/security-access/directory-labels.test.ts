@@ -39,7 +39,7 @@ describe('grantBlock', () => {
     expect(grantBlock({ id: 'a', is_active: false, membership: [active()] }, 'v')).toBe('account_inactive')
   })
   it('uses short neutral wording (no warning language, no HR enrolment, no access claim)', () => {
-    expect(GRANT_BLOCK_TEXT.no_membership).toBe('An active business membership is required to assign an Access Profile.')
+    expect(GRANT_BLOCK_TEXT.no_membership).toBe('An active business membership is required to assign an Group Policy.')
     for (const text of Object.values(GRANT_BLOCK_TEXT)) {
       expect(text).not.toMatch(/cannot grant:|nothing can be granted|HR employee|enrol|No additional S&A access/i)
     }

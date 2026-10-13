@@ -39,9 +39,9 @@ export type GrantBlock = 'no_membership' | 'membership_inactive' | 'account_inac
 
 /** Neutral, accurate explanations of why Grant is unavailable (never an error and never an account-health claim). */
 export const GRANT_BLOCK_TEXT: Record<GrantBlock, string> = {
-  no_membership: 'An active business membership is required to assign an Access Profile.',
-  membership_inactive: 'This membership is not active. An active business membership is required to assign an Access Profile.',
-  account_inactive: 'This account is inactive, so an Access Profile cannot be assigned.',
+  no_membership: 'An active business membership is required to assign an Group Policy.',
+  membership_inactive: 'This membership is not active. An active business membership is required to assign an Group Policy.',
+  account_inactive: 'This account is inactive, so an Group Policy cannot be assigned.',
   self: 'You cannot grant access to yourself.',
   not_authorized: 'You can view this person, but you are not authorized to grant access in their organization.',
 }

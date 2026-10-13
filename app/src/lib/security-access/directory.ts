@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { HUMAN_PRINCIPAL_TYPES } from '@/lib/identity/resolution'
 import { loadRootAccess, withRootAccess } from './root-access'
+import { withRestoreStatus } from './policy-restore'
 
 /**
  * People & Access directory: server-side search, filter and pagination across
@@ -62,6 +63,8 @@ const PERSON_SELECT = [
 
 export interface DirectoryResult {
   people: any[]
+  /** False when the restore status of revoked grants could not be read (migration not applied): no Restore is offered. */
+  restoreAvailable: boolean
   total: number
   counts: { all: number; granted: number; temporary: number; inactive: number; none: number }
   organizations: Array<{ id: string; org_name: string; org_type_code: string; parent_org_id: string | null; people_count: number }>
@@ -97,19 +100,53 @@ export async function loadDirectory(admin: any, actorId: string, query: Director
   // its own grant eligibility (viewing never implies the right to grant).
   const visibleById = new Map<string, any>((visible.data || []).map((v: any) => [v.membership_id, v]))
   const byId = new Map<string, any>((rows.data || []).map((u: any) => [u.id, u]))
-  const people = withRootAccess(ids.map(id => byId.get(id)).filter(Boolean), root.byUser).map((u: any) => ({
+  const visiblePeople = withRootAccess(ids.map(id => byId.get(id)).filter(Boolean), root.byUser).map((u: any) => ({
     ...u,
     membership: (u.membership || []).filter((m: any) => visibleById.has(m.id)).map((m: any) => {
       const v = visibleById.get(m.id)
       return { ...m, grantable: Boolean(v.grantable), grant_blocked_reason: v.blocked_reason ?? null }
     }),
   }))
+  // Restore status of revoked administrator grants (Access history). Display only; the restore re-checks everything.
+  const { people, available: restoreAvailable } = await withRestoreStatus(admin, visiblePeople)
   return {
     ok: true,
     value: {
-      people, total: Number(page.data?.total ?? 0),
+      people, restoreAvailable, total: Number(page.data?.total ?? 0),
       counts: { all: 0, granted: 0, temporary: 0, inactive: 0, none: 0, ...(page.data?.counts ?? {}) },
       organizations: orgs.data || [], query,
     },
   }
+}
+
+// ── One person (Edit User → Group Policies) ──────────────────────────────
+
+/** Same read model as the directory plus the membership source (derived memberships follow the person's organization). */
+const PERSON_ACCESS_SELECT = PERSON_SELECT.replace('membership_type,organization_id', 'membership_type,source,organization_id')
+
+/**
+ * One person's memberships and assignments, limited to the memberships in organizations this administrator may see
+ * (sa_directory_visible_memberships, the directory's own rule) with each membership's grant eligibility. Read-only;
+ * viewing never implies the right to grant.
+ */
+export async function loadPersonAccess(admin: any, actorId: string, userId: string): Promise<{ ok: true; value: { person: any } } | DirectoryFailure> {
+  const [row, visible, root] = await Promise.all([
+    admin.from('users').select(PERSON_ACCESS_SELECT).eq('id', userId).maybeSingle(),
+    admin.rpc('sa_directory_visible_memberships', { p_actor: actorId, p_user_ids: [userId] }),
+    loadRootAccess(admin, [userId]),
+  ])
+  if (visible.error) return mapDirectoryError(visible.error)
+  if (row.error) return fail(500, 'directory_failed', 'The person could not be loaded.')
+  if (!row.data) return fail(404, 'not_found', 'Person not found.')
+  const visibleById = new Map<string, any>((visible.data || []).map((v: any) => [v.membership_id, v]))
+  const visiblePerson = {
+    ...row.data,
+    root_access: root.byUser.get(userId) ?? null,
+    membership: (row.data.membership || []).filter((m: any) => visibleById.has(m.id)).map((m: any) => {
+      const v = visibleById.get(m.id)
+      return { ...m, grantable: Boolean(v.grantable), grant_blocked_reason: v.blocked_reason ?? null }
+    }),
+  }
+  const { people: [person] } = await withRestoreStatus(admin, [visiblePerson])
+  return { ok: true, value: { person } }
 }

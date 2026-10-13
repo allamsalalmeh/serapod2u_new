@@ -113,7 +113,7 @@ export default function AccessSimulator({ userProfile, people, actors, permissio
           </div>
           <dl className="grid gap-x-6 gap-y-3 p-4 text-sm sm:grid-cols-2">
             <Row term="User" value={actor ? `${actor.name || actor.email} · ${actor.role ?? '—'}${actor.orgName ? ` · ${actor.orgName}` : ''}` : '—'} />
-            <Row term="Business role" value={(result.matchedAssignments || []).map((a: any) => a.roleName).filter(Boolean).join(', ') || 'No matching role'} />
+            <Row term="Group Policy" value={(result.matchedAssignments || []).map((a: any) => a.roleName).filter(Boolean).join(', ') || 'No matching role'} />
             <Row term="Permission" value={permissionLabel(result.permission).label} secondary={result.permission} />
             <Row term="Resource" value={resourceTypeLabel(submitted?.resource?.type ?? '')} />
             <Row term="Organization" value={submitted?.resource?.organizationId ? scopeName(submitted.resource.organizationId) : 'Not specified'} />

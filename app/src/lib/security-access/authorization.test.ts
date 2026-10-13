@@ -10,7 +10,7 @@ vi.mock('@/lib/server/permissions', () => ({
   checkPermissionForUser: async (userId: string, key: string) => legacyPermission(userId, key),
 }))
 
-const { authorize, requireAuthorization, isAuthorizationDenied } = await import('./authorization')
+const { authorize, requireAuthorization, isAuthorizationDenied, explainMany } = await import('./authorization')
 const { resolveWarehouseResourceContext } = await import('./resource-context')
 
 const VERIFY = 'inventory.stock_count.verify'
@@ -167,5 +167,120 @@ describe('audit classification at write time', () => {
   it('explain-only evaluation never writes a decision', async () => {
     await authorize({ actorId: USER.sa, permission: VERIFY, resource: await stockCount(USER.sa, ORG.whA1), context: { explainOnly: true } }, { log: false })
     expect(world.decisions).toHaveLength(0)
+  })
+})
+
+describe('explainMany (navigation snapshot batch)', () => {
+  it('reaches the same decision as authorize() for every actor, context and mode, and records nothing', async () => {
+    for (const mode of MODES) {
+      world.modes[VERIFY] = mode
+      for (const [label, actor, warehouse] of matrix) {
+        const resource = await stockCount(actor, warehouse)
+        const single = await authorize({ actorId: actor, permission: VERIFY, resource, context: { explainOnly: true } })
+        const [batch] = await explainMany(actor, [{ permission: VERIFY, resource }])
+        expect(batch, `${label} · ${mode}`).toBe(single.decision)
+      }
+    }
+    expect(world.decisions).toHaveLength(0)
+  })
+
+  it('reads the migration modes once for the whole batch and consults only the authoritative side', async () => {
+    world.modes['a.legacy.only'] = 'SHADOW'
+    world.modes['b.new.only'] = 'NEW_ENFORCED'
+    const legacyShadow = vi.fn(() => true)
+    const legacyNew = vi.fn(() => true)
+    const resource = { type: 'x', organizationId: ORG.hqA }
+    const out = await explainMany(USER.hq, [
+      { permission: 'a.legacy.only', resource, legacy: legacyShadow },
+      { permission: 'b.new.only', resource, legacy: legacyNew },
+    ])
+    expect(out).toEqual(['ALLOW', 'DENY']) // b.new.only is not granted by any assignment
+    expect(legacyShadow).toHaveBeenCalledTimes(1)
+    expect(legacyNew).not.toHaveBeenCalled() // diagnostic only once the new engine decides; nothing is recorded
+    expect(world.rpcCalls.map(c => (c.args as any).p_permission)).toEqual(['b.new.only'])
+  })
+
+  it('denies everything for an inactive account', async () => {
+    world.modes[VERIFY] = 'LEGACY_ENFORCED'
+    expect(await explainMany(USER.inactive, [{ permission: VERIFY, resource: { type: 'x', organizationId: ORG.hqA }, legacy: () => true }])).toEqual(['DENY'])
+  })
+
+  it('throws (unavailable) instead of denying when a shared read, the evaluator or a legacy rule fails', async () => {
+    const resource = { type: 'x', organizationId: ORG.hqA }
+    world.failModeLookup = true
+    await expect(explainMany(USER.hq, [{ permission: VERIFY, resource }])).rejects.toThrow()
+    world.failModeLookup = false
+
+    world.modes[VERIFY] = 'NEW_ENFORCED'
+    world.rpc.sa_evaluate_permission = () => ({ data: null, error: { code: '57014', message: 'timeout' } })
+    await expect(explainMany(USER.hq, [{ permission: VERIFY, resource }])).rejects.toThrow()
+
+    world.modes[VERIFY] = 'SHADOW'
+    await expect(explainMany(USER.hq, [{ permission: VERIFY, resource, legacy: () => { throw new Error('down') } }])).rejects.toThrow()
+  })
+})
+
+describe('infrastructure failures fail closed as "unavailable", never as a confirmed denial', () => {
+  it('an enforced ALLOW whose audit write times out is DENY + unavailable (audit guarantee kept)', async () => {
+    world.failDecisionInsert = true
+    // supabase-js reports the admin client's 10s abort with an empty code.
+    world.decisionInsertError = { code: '', message: 'AbortError: The operation was aborted due to timeout' }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    world.modes[VERIFY] = 'LEGACY_RETIRED'
+    const decision = await authorize({ actorId: USER.sa, permission: VERIFY, resource: await stockCount(USER.sa, ORG.whA1) })
+    expect(decision).toMatchObject({ decision: 'DENY', reasonCode: 'POLICY_ERROR', unavailable: 'audit_write_failed' })
+    expect(spy.mock.calls[0][1]).toMatchObject({ classification: 'timeout', code: null })
+    spy.mockRestore()
+  })
+
+  it('an audit-write failure never turns a denial into anything else and never invents one in SHADOW', async () => {
+    world.failDecisionInsert = true
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    world.modes[VERIFY] = 'NEW_ENFORCED'
+    const denied = await authorize({ actorId: USER.hqB, permission: VERIFY, resource: await stockCount(USER.hqB, ORG.whA1) })
+    expect(denied.decision).toBe('DENY')
+    expect(denied.unavailable).toBeUndefined()
+    world.modes[VERIFY] = 'SHADOW'
+    const shadow = await authorize({ actorId: USER.sa, permission: VERIFY, resource: await stockCount(USER.sa, ORG.whA1) })
+    expect(shadow.decision).toBe('ALLOW')
+    expect(shadow.unavailable).toBeUndefined()
+  })
+
+  it('a genuine new-engine denial stays a plain DENY', async () => {
+    world.modes[VERIFY] = 'LEGACY_RETIRED'
+    const decision = await authorize({ actorId: USER.user, permission: VERIFY, resource: await stockCount(USER.user, ORG.whA1) })
+    expect(decision).toMatchObject({ decision: 'DENY', reasonCode: 'MISSING_PERMISSION' })
+    expect(decision.unavailable).toBeUndefined()
+  })
+
+  it('an evaluator failure in an authoritative mode is unavailable; in SHADOW legacy still decides', async () => {
+    world.failPolicyData = true
+    world.modes[VERIFY] = 'LEGACY_RETIRED'
+    const enforced = await authorize({ actorId: USER.sa, permission: VERIFY, resource: await stockCount(USER.sa, ORG.whA1) })
+    expect(enforced).toMatchObject({ decision: 'DENY', unavailable: 'policy_evaluation_failed' })
+    world.modes[VERIFY] = 'SHADOW'
+    const shadow = await authorize({ actorId: USER.sa, permission: VERIFY, resource: await stockCount(USER.sa, ORG.whA1) })
+    expect(shadow.decision).toBe('ALLOW')
+    expect(shadow.unavailable).toBeUndefined()
+  })
+
+  it('an account-state read failure is unavailable, not ACCOUNT_INACTIVE; a real inactive account is still denied', async () => {
+    world.modes[VERIFY] = 'LEGACY_RETIRED'
+    const resource = await stockCount(USER.sa, ORG.whA1)
+    world.failAccountLookup = true
+    const failed = await authorize({ actorId: USER.sa, permission: VERIFY, resource })
+    expect(failed).toMatchObject({ decision: 'DENY', reasonCode: 'POLICY_ERROR', unavailable: 'account_state_unavailable' })
+    world.failAccountLookup = false
+    const inactive = await authorize({ actorId: USER.inactive, permission: VERIFY, resource: await stockCount(USER.inactive, ORG.whA1) })
+    expect(inactive).toMatchObject({ decision: 'DENY', reasonCode: 'ACCOUNT_INACTIVE' })
+    expect(inactive.unavailable).toBeUndefined()
+  })
+
+  it('the same authorized actor gets the same outcome on repeated calls', async () => {
+    world.modes[VERIFY] = 'LEGACY_RETIRED'
+    const resource = await stockCount(USER.sa, ORG.whA1)
+    const outcomes = await Promise.all(Array.from({ length: 5 }, () => authorize({ actorId: USER.sa, permission: VERIFY, resource })))
+    expect(new Set(outcomes.map(o => `${o.decision}:${o.reasonCode}`))).toEqual(new Set(['ALLOW:ALLOWED_BY_ASSIGNMENT']))
+    expect(new Set(outcomes.map(o => o.decisionId)).size).toBe(5)
   })
 })

@@ -44,7 +44,7 @@ describe('POST /api/security-access/modes/bulk', () => {
     for (const body of [
       { action: 'preview', groupId: 'finance', mode: 'SHADOW', permissions: ['finance.ledger.view'] },
       { ...apply, permissionKeys: ['finance.ledger.view'] },
-      { ...apply, mode: 'ROOT' }, { ...apply, reason: ' short ' }, { ...apply, selection: 'everything' },
+      { ...apply, mode: 'ROOT' }, { ...apply, reason: 'x'.repeat(501) }, { ...apply, reason: 42 }, { ...apply, selection: 'everything' },
       { ...apply, groupId: '../x' }, { ...apply, idempotencyKey: 'not-a-uuid' }, { ...apply, previewHash: 'xyz' },
       { action: 'delete', groupId: 'finance', mode: 'SHADOW' }, null,
     ]) expect((await post(body)).status).toBe(400)
@@ -60,6 +60,13 @@ describe('POST /api/security-access/modes/bulk', () => {
     const res = await post(apply)
     expect((await res.json()).result.changed).toBe(26)
     expect(applyBulkModeChange).toHaveBeenCalledWith(actor.admin, 'admin-1', expect.objectContaining({ selection: 'eligible_only', reason: 'Parity reviewed for a week' }))
+  })
+
+  it('an apply without a note reaches the server-side rule (which knows the current modes)', async () => {
+    applyBulkModeChange.mockResolvedValue({ ok: true, value: { changed: 3 } })
+    const { reason: _omit, ...noNote } = apply
+    expect((await post({ ...noNote, mode: 'NEW_ENFORCED' })).status).toBe(200)
+    expect(applyBulkModeChange).toHaveBeenCalledWith(actor.admin, 'admin-1', expect.objectContaining({ targetMode: 'NEW_ENFORCED', reason: undefined }))
   })
 
   it('returns the typed failure (e.g. stale preview) with its status', async () => {

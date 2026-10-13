@@ -47,7 +47,7 @@ export default function ProfilePublishDialog({ profile, onClose, onPublished }: 
   return <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4" role="presentation">
     <div role="dialog" aria-modal="true" aria-labelledby="publish-title" className="my-8 w-full max-w-3xl space-y-4 rounded-xl bg-white p-4 shadow-xl">
       <div><h2 id="publish-title" className="font-semibold text-gray-950">Publish: {profile.name}</h2>
-        <p className="text-sm text-gray-500">Publishing replaces the live permissions of this profile. Until you publish, nobody’s access changes.</p></div>
+        <p className="text-sm text-gray-500">Publishing replaces the live permissions of this policy. Until you publish, nobody’s access changes.</p></div>
       {!preview && !error && <p role="status" className="text-sm text-gray-500">Calculating the impact…</p>}
       {error && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error.text}
         {error.code === 'stale_preview' && <button type="button" onClick={load} className={`ml-2 rounded font-medium underline ${FOCUS}`}>Refresh preview</button>}</div>}
@@ -60,7 +60,7 @@ export default function ProfilePublishDialog({ profile, onClose, onPublished }: 
         </div>
         <div>
           <h3 className="text-sm font-semibold text-gray-900">Affected people ({holders})</h3>
-          {holders === 0 ? <p className="text-xs text-gray-500">Nobody holds this profile yet.</p> : <ul className="mt-1 max-h-48 divide-y divide-gray-100 overflow-auto rounded-md border border-gray-200 text-xs">
+          {holders === 0 ? <p className="text-xs text-gray-500">Nobody holds this policy yet.</p> : <ul className="mt-1 max-h-48 divide-y divide-gray-100 overflow-auto rounded-md border border-gray-200 text-xs">
             {preview.holders.map((h: any) => <li key={h.assignmentId} className="flex flex-wrap justify-between gap-2 px-2 py-1">
               <span><span className="font-medium text-gray-900">{h.name}</span> <span className="text-gray-500">{h.email}</span></span>
               <span className="text-gray-600">{h.organization} ({orgTypeLabel(h.organizationType)}) · Scope: {(h.scopes || []).join(', ') || '—'}</span></li>)}</ul>}

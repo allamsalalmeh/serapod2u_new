@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // S&A in legacy mode: this suite tests the Phase 0A rules themselves.
 vi.mock('@/lib/security-access/operation', async () => (await import('@/test-support/sa-legacy-mode')).operationModule)
+vi.mock('@/lib/security-access/scope', async () => (await import('@/test-support/sa-legacy-mode')).scopeModule)
 
 const authGetUser = vi.fn()
 const checkPermissionForUser = vi.fn()
@@ -43,7 +44,8 @@ vi.mock('@/lib/server/permissions', () => ({ checkPermissionForUser }))
 
 function rpcRoutes(handlers: Record<string, (args: any) => any>) {
   adminRpc.mockImplementation(async (name: string, args: any) => {
-    const h = handlers[name]
+    // The database support for creating accounts without a legacy level (installed by the pending migration) is present unless a test says otherwise.
+    const h = handlers[name] ?? (name === 'identity_provision_capabilities' ? () => ({ data: { no_legacy_access: true } }) : undefined)
     return h ? { data: null, error: null, ...h(args) } : { data: null, error: null }
   })
 }
@@ -260,7 +262,6 @@ describe('createUserWithAuth canonical provisioning', () => {
       email: 'new@example.com',
       password: 'temporary-password',
       full_name: 'New User',
-      role_code: 'USER',
     })
 
     expect(result.success).toBe(false)
@@ -277,11 +278,12 @@ describe('createUserWithAuth canonical provisioning', () => {
     const { createUserWithAuth } = await import('./actions')
 
     const result = await createUserWithAuth({
-      email: 'Existing@Example.com', password: 'whatever-123', full_name: 'Existing', role_code: 'USER', organization_id: 'org-a',
+      email: 'Existing@Example.com', password: 'whatever-123', full_name: 'Existing', organization_id: 'org-a',
       bank_account_number: '123',
     })
 
-    expect(result).toMatchObject({ success: true, user_id: 'existing', reused: true })
+    // Add User never reuses an account silently: without an explicit employee link the request stops (no duplicate, no change).
+    expect(result).toMatchObject({ success: false, code: 'IDENTITY_ALREADY_EXISTS' })
     expect(createAuthUser).not.toHaveBeenCalled()
     // The existing identity's profile (e.g. banking) is not overwritten.
     expect(usersUpdate).not.toHaveBeenCalled()
@@ -293,7 +295,7 @@ describe('createUserWithAuth canonical provisioning', () => {
     rpcRoutes({ identity_resolve: () => ({ data: { outcome: 'IDENTITY_CONFLICT', matched_user_ids: ['a', 'b'] } }) })
     const { createUserWithAuth } = await import('./actions')
 
-    const result = await createUserWithAuth({ email: 'a@example.com', password: 'p-123456', full_name: 'A', role_code: 'USER', phone: '0123456789' })
+    const result = await createUserWithAuth({ email: 'a@example.com', password: 'p-123456', full_name: 'A', phone: '0123456789' })
 
     expect(result).toMatchObject({ success: false, code: 'IDENTITY_CONFLICT' })
     expect(createAuthUser).not.toHaveBeenCalled()
@@ -325,7 +327,6 @@ describe('setUserAccountStatus', () => {
     expect((await setUserAccountStatus('target', 'DISABLED', 'nope')).success).toBe(false)
     expect(adminRpc).not.toHaveBeenCalledWith('identity_set_account_status', expect.anything())
   })
-
   it('a non-root administrator cannot suspend or disable a Root Administrator (Root would end in effect)', async () => {
     authGetUser.mockResolvedValue({ data: { user: { id: 'admin' } }, error: null })
     checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 1 } })
@@ -353,9 +354,18 @@ describe('setUserAccountStatus', () => {
 })
 
 describe('deleteUserWithAuth history protection', () => {
+  // targetUserOrganization, then the Archive Identities decision (lib/identity/removal-authorization.ts): actor row, target row.
+  const removalRows = (actorLevel: number, targetLevel: number) => {
+    usersSelectRow
+      .mockResolvedValueOnce({ data: { organization_id: 'org-a' }, error: null })
+      .mockResolvedValueOnce({ data: { organization_id: 'org-hq', roles: { role_level: actorLevel } }, error: null })
+      .mockResolvedValueOnce({ data: { id: 'target', organization_id: 'org-a', account_status: 'ACTIVE', roles: { role_level: targetLevel } }, error: null })
+  }
+
   it('refuses to hard-delete an identity with business or audit history, before any cleanup', async () => {
     authGetUser.mockResolvedValue({ data: { user: { id: 'admin' } }, error: null })
     checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 1 } })
+    removalRows(1, 40)
     rpcRoutes({ identity_history_references: () => ({ data: ['stock_movements.created_by'] }) })
     const { deleteUserWithAuth } = await import('./actions')
 
@@ -369,6 +379,7 @@ describe('deleteUserWithAuth history protection', () => {
   it('fails closed when history cannot be verified', async () => {
     authGetUser.mockResolvedValue({ data: { user: { id: 'admin' } }, error: null })
     checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 1 } })
+    removalRows(1, 40)
     rpcRoutes({ identity_history_references: () => ({ error: { message: 'unavailable' } }) })
     const { deleteUserWithAuth } = await import('./actions')
 
@@ -376,5 +387,33 @@ describe('deleteUserWithAuth history protection', () => {
 
     expect(result.success).toBe(false)
     expect(deleteAuthUser).not.toHaveBeenCalled()
+  })
+
+  it('managing users alone does not authorize removal: Archive Identities and target protection decide first', async () => {
+    authGetUser.mockResolvedValue({ data: { user: { id: 'admin' } }, error: null })
+    checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 20 } })
+    removalRows(20, 40) // legacy Archive Identities rule: HQ Admin / Super Admin (<= 10)
+    const { deleteUserWithAuth } = await import('./actions')
+    expect((await deleteUserWithAuth('target')).success).toBe(false)
+
+    removalRows(10, 1) // a Super Admin account needs a Super Admin
+    expect((await deleteUserWithAuth('target')).success).toBe(false)
+
+    expect(adminFromTables.filter(t => t !== 'users')).toEqual([])
+    expect(adminRpc).not.toHaveBeenCalledWith('identity_history_references', expect.anything())
+    expect(deleteAuthUser).not.toHaveBeenCalled()
+  })
+})
+
+describe('setUserAccountStatus cannot archive', () => {
+  it('refuses ARCHIVED (or any other value) sent directly to the server action; nothing reaches the database', async () => {
+    authGetUser.mockResolvedValue({ data: { user: { id: 'admin' } }, error: null })
+    checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 1 } })
+    const { setUserAccountStatus } = await import('./actions')
+    for (const status of ['ARCHIVED', 'archived', 'DELETED']) {
+      expect(await setUserAccountStatus('target', status as any, 'direct call')).toEqual({ success: false, error: 'Invalid account status' })
+    }
+    expect(adminRpc).not.toHaveBeenCalledWith('identity_set_account_status', expect.anything())
+    expect(updateUserById).not.toHaveBeenCalled()
   })
 })

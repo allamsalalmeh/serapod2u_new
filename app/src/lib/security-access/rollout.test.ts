@@ -3,6 +3,7 @@ import { aggregateRollout, classifyPermission, filterRollout, rolloutMode, summa
 import { FINAL_WAVE_PERMISSION_KEYS } from './catalog'
 import { IDENTITY_PERMISSION_KEYS } from './identity-catalog'
 import { STAGE2D_PERMISSION_KEYS } from './stage2d-catalog'
+import { USER_ADMIN_PERMISSION_KEYS } from './user-admin-catalog'
 
 const WAVE1_KEYS = [
   'inventory.stock_count.view', 'inventory.stock_count.create', 'inventory.stock_count.verify', 'inventory.stock_count.post',
@@ -10,7 +11,7 @@ const WAVE1_KEYS = [
   'inventory.transfer.receive', 'inventory.transfer.cancel', 'security.access.view', 'security.role.assign', 'security.permission.manage',
 ]
 const MODES = ['NEW_ENFORCED', 'SHADOW', 'LEGACY_RETIRED']
-const catalog = Array.from(new Set([...FINAL_WAVE_PERMISSION_KEYS, ...WAVE1_KEYS, ...IDENTITY_PERMISSION_KEYS, ...STAGE2D_PERMISSION_KEYS]))
+const catalog = Array.from(new Set([...FINAL_WAVE_PERMISSION_KEYS, ...WAVE1_KEYS, ...IDENTITY_PERMISSION_KEYS, ...STAGE2D_PERMISSION_KEYS, ...USER_ADMIN_PERMISSION_KEYS]))
 const catalogModes = catalog.map((permission_key, i) => ({ permission_key, mode: MODES[i % MODES.length] }))
 
 const leafKeys = (r: Rollout) => r.groups.flatMap(g => [...g.permissions, ...g.children.flatMap(c => c.permissions)]).map(p => p.key)
@@ -26,9 +27,9 @@ describe('Overview hierarchy (Main group → Subgroup → Permission)', () => {
     expect(rollout.groups.find(g => g.id === 'other')).toBeUndefined()
   })
 
-  it('shows the six main groups in order', () => {
+  it('shows the seven main groups in order', () => {
     expect(rollout.groups.map(g => g.name)).toEqual(
-      ['Supply Chain', 'Customer & Growth', 'HR & Payroll', 'Finance', 'Platform & Security', 'Reporting'])
+      ['Supply Chain', 'Customer & Growth', 'HR & Payroll', 'Finance', 'Security & Access', 'Platform & Settings', 'Reporting'])
   })
 
   it('uses the shared taxonomy areas; Reporting expands straight to permissions', () => {
@@ -37,7 +38,8 @@ describe('Overview hierarchy (Main group → Subgroup → Permission)', () => {
     expect(sub('customer_growth')).toEqual(['CRM & Customers', 'Loyalty & Rewards', 'Messaging & Support', 'RoadTour', 'Marketing & Campaigns', 'Outdoor Store', 'E-Commerce'])
     expect(sub('hr_payroll')).toEqual(['Payroll & Compensation', 'Employees & Contracts', 'Time, Leave & Expenses', 'Performance & Learning', 'Employee Self-Service', 'HR Administration'])
     expect(sub('finance')).toEqual(['General Ledger', 'Payables & Payments', 'Receivables', 'Cash & Bank', 'Financial Reports', 'Finance Administration'])
-    expect(sub('platform_security')).toEqual(['Identity', 'User Administration', 'Notifications', 'Integrations & Settings', 'Organizations & Data', 'Security Governance'])
+    expect(sub('security_access')).toEqual(['Access Administration', 'Migration Modes', 'Security Governance', 'Review & Audit', 'Technical Access'])
+    expect(sub('platform_settings')).toEqual(['Identity', 'User Administration', 'Notifications', 'Integrations & Settings', 'Organizations & Data'])
     const reporting = rollout.groups.find(x => x.id === 'reporting')!
     expect(reporting.children).toEqual([])
     expect(reporting.permissions.length).toBe(reporting.total)
@@ -61,8 +63,8 @@ describe('Overview hierarchy (Main group → Subgroup → Permission)', () => {
     expect(classifyPermission('supply_chain.document.acknowledge')).toEqual({ groupId: 'supply_chain', subgroupId: 'orders' })
     expect(classifyPermission('inventory.stock_count.post')).toEqual({ groupId: 'supply_chain', subgroupId: 'stock_count' })
     expect(classifyPermission('inventory.opening_balance.manage')).toEqual({ groupId: 'supply_chain', subgroupId: 'inventory' })
-    expect(classifyPermission('platform.user.profile_edit')).toEqual({ groupId: 'platform_security', subgroupId: 'user_admin' })
-    expect(classifyPermission('platform.data.destructive')).toEqual({ groupId: 'platform_security', subgroupId: 'organizations' })
+    expect(classifyPermission('platform.user.profile_edit')).toEqual({ groupId: 'platform_settings', subgroupId: 'user_admin' })
+    expect(classifyPermission('platform.data.destructive')).toEqual({ groupId: 'platform_settings', subgroupId: 'organizations' })
     expect(classifyPermission('hr.payroll.approve')).toEqual({ groupId: 'hr_payroll', subgroupId: 'payroll' })
     expect(classifyPermission('ecommerce.outdoor.operate')).toEqual({ groupId: 'customer_growth', subgroupId: 'outdoor' })
     expect(classifyPermission('reporting.analytics.view')).toEqual({ groupId: 'reporting', subgroupId: null })
@@ -110,9 +112,9 @@ describe('filterRollout', () => {
   })
 
   it('a main-group name match shows all its descendants', () => {
-    const { rollout: f } = filterRollout(rollout, 'platform & security')
-    expect(f.groups.map(g => g.id)).toEqual(['platform_security'])
-    expect(f.groups[0].total).toBe(rollout.groups.find(g => g.id === 'platform_security')!.total)
+    const { rollout: f } = filterRollout(rollout, 'platform & settings')
+    expect(f.groups.map(g => g.id)).toEqual(['platform_settings'])
+    expect(f.groups[0].total).toBe(rollout.groups.find(g => g.id === 'platform_settings')!.total)
   })
 
   it('recomputes counts for the filtered tree and supports no results', () => {

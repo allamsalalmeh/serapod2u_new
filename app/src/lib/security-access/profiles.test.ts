@@ -110,7 +110,9 @@ describe('permission picker', () => {
   it('mirrors the database partner and sensitive rules', () => {
     for (const k of ['hr.employee.view', 'security.access.view', 'platform.user.manage', 'platform.data.destructive', 'finance.data.reset']) expect(isForbiddenForPartner(k)).toBe(true)
     for (const k of ['inventory.stock_count.view', 'supply_chain.order.create', 'finance.ledger.view']) expect(isForbiddenForPartner(k)).toBe(false)
-    for (const k of ['security.role.assign', 'hr.data.reset', 'platform.data.destructive', 'finance.data.reset']) expect(isSensitivePermission(k)).toBe(true)
+    for (const k of ['security.role.assign', 'hr.data.reset', 'platform.data.destructive', 'finance.data.reset', 'platform.user.password_reset']) expect(isSensitivePermission(k)).toBe(true)
+    // Editing profiles is not credential control.
+    for (const k of ['platform.user.manage', 'platform.user.profile_edit']) expect(isSensitivePermission(k)).toBe(false)
     expect(isSensitivePermission('hr.employee.view')).toBe(false)
   })
 })

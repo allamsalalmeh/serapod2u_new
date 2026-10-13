@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { MODULE_TAXONOMY } from './modules'
-import { applyBulkModeChange, previewBulkModeChange, previewHashOf, resolveGroup } from './bulk-modes'
+import { KEPT_RETIRED_TEXT, applyBulkModeChange, previewBulkModeChange, previewHashOf, resolveGroup } from './bulk-modes'
 
 const ACTOR = 'actor-1'
 const KEY = '11111111-1111-4111-8111-111111111111'
@@ -14,7 +14,7 @@ const REGISTERED: Array<[string, string]> = [
 const ready = new Set(['inventory.stock_count.view', 'inventory.stock_count.create', 'inventory.stock_count.verify', 'inventory.transfer.request', 'supply_chain.order.create'])
 
 /** In-memory stand-in for the admin client: same evaluation rules as sa_bulk_mode_evaluate. */
-function fakeAdmin(opts: { missingFunction?: boolean; batches?: any[]; applyError?: any } = {}) {
+function fakeAdmin(opts: { missingFunction?: boolean; batches?: any[]; applyError?: any; legacyEvaluate?: boolean } = {}) {
   const modes = new Map(REGISTERED)
   const calls: Array<{ fn: string; args: any }> = []
   const batches = opts.batches ?? []
@@ -25,7 +25,8 @@ function fakeAdmin(opts: { missingFunction?: boolean; batches?: any[]; applyErro
       current && ['NEW_ENFORCED', 'LEGACY_RETIRED'].includes(target) && !ready.has(key) ? 'sa_not_enforcement_ready' : null,
       current && target === 'LEGACY_RETIRED' && !['NEW_ENFORCED', 'LEGACY_RETIRED'].includes(current) ? 'sa_retire_requires_new_enforced' : null,
     ].filter(Boolean)
-    return { permission_key: key, current_mode: current ?? null, status: blockers.length ? 'blocked' : current === target ? 'unchanged' : 'change', blockers }
+    const keptRetired = !opts.legacyEvaluate && target === 'NEW_ENFORCED' && current === 'LEGACY_RETIRED'
+    return { permission_key: key, current_mode: current ?? null, status: blockers.length ? 'blocked' : current === target ? 'unchanged' : keptRetired ? 'kept_retired' : 'change', blockers }
   })
   const admin = {
     modes,
@@ -86,7 +87,8 @@ describe('previewBulkModeChange', () => {
     if (!out.ok) return
     const p = out.value
     expect(p.group).toMatchObject({ name: 'Supply Chain · Stock Count', total: 3 })
-    expect(p.counts).toEqual({ change: 2, unchanged: 0, blocked: 1 })
+    expect(p.counts).toEqual({ change: 2, unchanged: 0, blocked: 1, keptRetired: 0 })
+    expect(p.reasonRequired).toBe(false)
     expect(p.canApplyAll).toBe(false)
     expect(p.canApplyEligibleOnly).toBe(true)
     const blocked = p.rows.find(r => r.status === 'blocked')!
@@ -116,6 +118,70 @@ describe('previewBulkModeChange', () => {
     const b = await previewBulkModeChange(admin, ACTOR, { groupId: 'supply_chain/stock_count', targetMode: 'LEGACY_RETIRED' })
     expect(a.ok && b.ok && a.value.previewHash !== b.value.previewHash).toBe(true)
     expect(previewHashOf('g', 'SHADOW', [])).toMatch(/^[0-9a-f]{64}$/)
+  })
+})
+
+describe('Legacy Retired permissions in a move to New Access Active', () => {
+  const retiredWorld = (opts: any = {}) => {
+    const admin = fakeAdmin(opts)
+    admin.modes.set('inventory.stock_count.view', 'LEGACY_RETIRED')
+    admin.modes.set('inventory.stock_count.create', 'SHADOW')
+    return admin
+  }
+  it('are kept retired, labelled, never counted as a change or a blocker', async () => {
+    const out = await previewBulkModeChange(retiredWorld(), ACTOR, { groupId: 'supply_chain/stock_count', targetMode: 'NEW_ENFORCED' })
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    const view = out.value.rows.find(r => r.permissionKey === 'inventory.stock_count.view')!
+    expect(view.status).toBe('kept_retired')
+    expect(KEPT_RETIRED_TEXT).toBe('Already using new access — kept retired')
+    expect(out.value.counts).toEqual({ change: 2, unchanged: 0, blocked: 0, keptRetired: 1 })
+    // Nothing blocked: "All permissions" stays available.
+    expect(out.value.canApplyAll).toBe(true)
+  })
+  it('apply sends the same previewed state; the database decides with the same rule under locks', async () => {
+    const admin = retiredWorld()
+    const p = await previewBulkModeChange(admin, ACTOR, { groupId: 'supply_chain/stock_count', targetMode: 'NEW_ENFORCED' })
+    const out = await applyBulkModeChange(admin, ACTOR, { groupId: 'supply_chain/stock_count', targetMode: 'NEW_ENFORCED', selection: 'all', previewHash: p.ok ? p.value.previewHash : '', idempotencyKey: KEY })
+    expect(out.ok).toBe(true)
+    const apply = admin.calls.find(c => c.fn === 'sa_bulk_set_migration_mode')!
+    expect(apply.args.p_expected['inventory.stock_count.view']).toBe('LEGACY_RETIRED')
+    expect(apply.args.p_reason).toBeNull()
+  })
+  it('a database without the keep-retired rule is refused instead of un-retiring silently', async () => {
+    const out = await previewBulkModeChange(retiredWorld({ legacyEvaluate: true }), ACTOR, { groupId: 'supply_chain/stock_count', targetMode: 'NEW_ENFORCED' })
+    expect(out).toMatchObject({ ok: false, status: 409, code: 'keep_retired_migration_missing' })
+  })
+})
+
+describe('reason rule for group changes', () => {
+  it('a move back to Monitoring / Shadow needs a reason; the server checks before calling the database', async () => {
+    const admin = fakeAdmin()
+    const p = await previewBulkModeChange(admin, ACTOR, { groupId: 'supply_chain/stock_transfer', targetMode: 'SHADOW' })
+    expect(p.ok && p.value.reasonRequired).toBe(true)
+    const base = { groupId: 'supply_chain/stock_transfer', targetMode: 'SHADOW' as const, selection: 'all' as const, previewHash: p.ok ? p.value.previewHash : '', idempotencyKey: KEY }
+    for (const reason of [undefined, null, '', '   short  ']) {
+      expect(await applyBulkModeChange(admin, ACTOR, { ...base, reason })).toMatchObject({ ok: false, status: 400, code: 'reason_required' })
+    }
+    expect(admin.calls.some(c => c.fn === 'sa_bulk_set_migration_mode')).toBe(false)
+    expect(await applyBulkModeChange(admin, ACTOR, { ...base, reason: 'Parity regression found in staging' })).toMatchObject({ ok: true })
+  })
+  it('a move to New Access Active takes an optional note (blank = none)', async () => {
+    const admin = fakeAdmin()
+    admin.modes.set('inventory.transfer.request', 'SHADOW')
+    const p = await previewBulkModeChange(admin, ACTOR, { groupId: 'supply_chain/stock_transfer', targetMode: 'NEW_ENFORCED' })
+    expect(p.ok && p.value.reasonRequired).toBe(false)
+    const out = await applyBulkModeChange(admin, ACTOR, { groupId: 'supply_chain/stock_transfer', targetMode: 'NEW_ENFORCED', selection: 'all', reason: '   ', previewHash: p.ok ? p.value.previewHash : '', idempotencyKey: KEY })
+    expect(out.ok).toBe(true)
+    expect(admin.calls.find(c => c.fn === 'sa_bulk_set_migration_mode')!.args.p_reason).toBeNull()
+  })
+  it('explains a database that still requires text for a forward change (migration not applied)', async () => {
+    const admin = fakeAdmin({ applyError: { message: 'sa_reason_required' } })
+    admin.modes.set('inventory.transfer.request', 'SHADOW')
+    const p = await previewBulkModeChange(admin, ACTOR, { groupId: 'supply_chain/stock_transfer', targetMode: 'NEW_ENFORCED' })
+    const out = await applyBulkModeChange(admin, ACTOR, { groupId: 'supply_chain/stock_transfer', targetMode: 'NEW_ENFORCED', selection: 'all', previewHash: p.ok ? p.value.previewHash : '', idempotencyKey: KEY })
+    expect(out).toMatchObject({ ok: false, status: 409, code: 'note_migration_missing' })
+    expect(!out.ok && out.error).toMatch(/20261019110000/)
   })
 })
 

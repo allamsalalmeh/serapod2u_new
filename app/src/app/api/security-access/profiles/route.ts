@@ -4,7 +4,7 @@ import { loadProfiles, profileActionSchema, runProfileAction } from '@/lib/secur
 
 export const dynamic = 'force-dynamic'
 
-/** Access Profiles with drafts and holder counts (security.access.view). */
+/** Group Policies with drafts and holder counts (security.access.view). */
 export async function GET() {
   const actor = await requireSecurityActor('security.access.view')
   if (actor instanceof NextResponse) return actor
@@ -24,7 +24,7 @@ export async function GET() {
  */
 export async function POST(request: NextRequest) {
   const parsed = profileActionSchema.safeParse(await request.json().catch(() => null))
-  if (!parsed.success) return NextResponse.json({ error: 'Invalid profile request', code: 'invalid_request' }, { status: 400 })
+  if (!parsed.success) return NextResponse.json({ error: 'Invalid policy request', code: 'invalid_request' }, { status: 400 })
   const actor = await requireSecurityActor(parsed.data.action === 'holders' ? 'security.access.view' : 'security.role.manage')
   if (actor instanceof NextResponse) return actor
   const result = await runProfileAction(actor.admin, actor.userId, parsed.data)

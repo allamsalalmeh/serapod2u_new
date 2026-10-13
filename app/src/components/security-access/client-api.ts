@@ -1,9 +1,11 @@
 'use client'
 
+import { notifyNavAccessChanged } from '@/hooks/useNavAccess'
+
 export interface ApiResult<T = any> { ok: boolean; data?: T; error?: string; code?: string }
 
 /** JSON helper for the Security & Access admin API; errors are human-readable. */
-export async function callApi<T = any>(url: string, init?: { method?: string; body?: unknown }): Promise<ApiResult<T>> {
+export async function callApi<T = any>(url: string, init?: { method?: string; body?: unknown; /** A read-only POST (a preflight): changes nothing, so the shell is not told to re-read access. */ readOnly?: boolean }): Promise<ApiResult<T>> {
   try {
     const response = await fetch(url, {
       method: init?.method ?? (init?.body ? 'POST' : 'GET'),
@@ -13,6 +15,9 @@ export async function callApi<T = any>(url: string, init?: { method?: string; bo
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) return { ok: false, error: data?.error || `Request failed (${response.status})`, code: data?.code }
+    // A successful change (assignment, revocation, policy, request decision) may change what this shell may show:
+    // tell it to re-read its answers now instead of waiting for the next navigation or focus.
+    if ((init?.method ?? (init?.body ? 'POST' : 'GET')) !== 'GET' && !init?.readOnly) notifyNavAccessChanged()
     return { ok: true, data }
   } catch {
     return { ok: false, error: 'Network error' }

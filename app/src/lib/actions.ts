@@ -15,12 +15,26 @@ import { normalizePhoneE164, samePhone } from '@/utils/phone'
 import { checkPermissionForUser } from '@/lib/server/permissions'
 import { userAllowed } from '@/lib/security-access/operation'
 import { ROOT_TARGET_PROTECTED_MESSAGE, rootTargetGuard } from '@/lib/security-access/root-access'
+import { legacyOrDelegatedSecurityAccess } from '@/lib/security-access/delegation'
+import { isSensitivePermission } from '@/lib/security-access/profiles'
+import { sortGroupPolicies } from '@/lib/security-access/group-policies'
+import { essAllowedForOrgType, ESS_HQ_ONLY_MESSAGE } from '@/lib/security-access/ess-eligibility'
+import { employmentEligibilityError, hqOnlyEmploymentFieldsPresent } from '@/lib/users/employment-eligibility'
+import { isManufacturerOrgType, recipientEligibility, type EligibilityModel } from '@/lib/security-access/recipient-eligibility'
+import { loadEligibilityModel } from '@/lib/security-access/eligibility-model'
+import { essGrantAllowed, validateInitialSelections } from '@/lib/identity/add-user-selections'
+import { reconcileEssBaseline, resolveEssIntent } from '@/lib/identity/ess-baseline'
+import { loadScopeChoices, validateScopeGrant } from '@/lib/security-access/scope-grant'
+import { warehouseSupportFor } from '@/lib/security-access/scope-eligibility'
+import { previewOnboardingCandidate } from '@/lib/hr/onboarding'
+import { explainOperation, PreflightUnavailableError } from '@/lib/security-access/preflight'
 import {
   identityHistoryReferences,
   provisionIdentity,
   setIdentityAccountStatus,
   updateIdentityAccess,
 } from '@/lib/identity/provisioning'
+import { authorizeIdentityRemoval } from '@/lib/identity/removal-authorization'
 
 /** Organization of an existing user (trusted row), for S&A target scoping. */
 const NO_ORGANIZATION_MATCH = '00000000-0000-0000-0000-000000000000'
@@ -61,13 +75,19 @@ import {
   pickAdminEditableUserFields,
   pickSelfServiceProfileFields,
 } from '@/lib/security/user-profile-updates'
+import { referenceEligibilityError } from '@/lib/users/reference-eligibility'
 
 export async function createUserWithAuth(userData: {
   email: string
   password: string
   full_name: string
   call_name?: string
-  role_code: string
+  /**
+   * Not accepted. Accounts are created without a legacy role/level (see below); any value is rejected, so a
+   * crafted payload cannot create a privileged legacy account. Legacy values of existing users change only through
+   * the audited access-administration update, never through creation.
+   */
+  role_code?: string
   organization_id?: string
   phone?: string
   is_active?: boolean
@@ -87,9 +107,18 @@ export async function createUserWithAuth(userData: {
   can_be_reference?: boolean
   /** Optional initial S&A business role (Security & Access administrators only; re-checked in the database). */
   initial_role_id?: string | null
-  initial_access_reason?: string | null
-  /** Several Access Profiles, each with its own explicit scope (validated together, all or nothing, in the database). */
+  /** Several Group Policies, each with its own explicit scope (validated together, all or nothing, in the database). */
   initial_profiles?: Array<{ role_id: string; scope_id: string }> | null
+  /**
+   * An existing HR employee (central identity) the administrator explicitly linked instead of creating a second account.
+   * HQ only; re-verified here against the identity the email/phone resolve to and the HR eligibility rules.
+   */
+  linked_user_id?: string | null
+  /**
+   * Employee Self Service (the HQ lifecycle baseline). Omitted = the organization's default (HQ yes, others no);
+   * false = excluded (non-employee HQ account); true is rejected for a non-HQ organization. Judged on the stored org type.
+   */
+  include_ess?: boolean | null
 }, _callerInfo?: { id: string, role_code: string }) {
   try {
     const supabase = await createClient()
@@ -100,6 +129,11 @@ export async function createUserWithAuth(userData: {
 
     const callerUserId = user.id
 
+    // Ordinary creation never takes a legacy role/level, from the form or from a crafted request.
+    if (String(userData.role_code ?? '').trim() !== '' || ['legacy_role_code', 'role_level'].some(key => key in (userData as Record<string, unknown>))) {
+      return { success: false, error: 'A legacy role or level cannot be set while creating a user. Assign access with Group Policies. Nothing was created.', code: 'LEGACY_ROLE_NOT_ALLOWED' }
+    }
+
     const permissionCheck = await checkPermissionForUser(callerUserId, 'create_users')
     const roleLevel = permissionCheck.context?.role_level
     const hasRoleLevelCreateAccess = typeof roleLevel === 'number' && roleLevel <= 30
@@ -107,7 +141,9 @@ export async function createUserWithAuth(userData: {
     // user joins (a consumer without an organization: the admin's own).
     if (!(await userAllowed(callerUserId, 'platform.user.manage', () => permissionCheck.allowed || hasRoleLevelCreateAccess,
       { organizationId: (userData as any).organization_id ?? null }))) {
-      return { success: false, error: 'Forbidden' }
+      // Say why (confirmed engine decision) without changing the outcome; an unavailable explanation keeps the plain denial.
+      const why = await explainOperation(callerUserId, 'platform.user.manage', (userData as any).organization_id ?? null, () => permissionCheck.allowed || hasRoleLevelCreateAccess).catch(() => null)
+      return { success: false, error: why && !why.allowed ? why.reason : 'Forbidden', code: 'FORBIDDEN' }
     }
 
     const adminClient = createAdminClient()
@@ -118,11 +154,73 @@ export async function createUserWithAuth(userData: {
       }
     }
 
+    // Validate every selection BEFORE any side effect (no login, profile or grant exists yet). Rules that need the
+    // real organization and policy rows live here; the database re-checks authority, scope and separation of duties.
+    const organizationId = userData.organization_id || null
+    let groupedProfiles: Array<{ roleId: string; scopeIds: string[] }> | undefined
+    if (userData.initial_profiles?.length) {
+      const selection = await validateInitialSelections(adminClient, organizationId, userData.initial_profiles, { essExcluded: userData.include_ess === false })
+      if (!selection.ok) return { success: false, error: selection.message, code: selection.code }
+      // Same scope eligibility the picker offers, policy compatibility and the administrator's authority per scope — before anything is created.
+      for (const group of selection.grouped) {
+        const scopeCheck = await validateScopeGrant(adminClient, { actorId: callerUserId, roleId: group.roleId, organizationId: organizationId as string, scopeIds: group.scopeIds })
+        if (!scopeCheck.ok) return { success: false, error: scopeCheck.message.replace('Nothing was changed.', 'Nothing was created.'), code: scopeCheck.code }
+      }
+      groupedProfiles = selection.grouped
+    } else if (userData.initial_role_id && userData.initial_role_id !== 'self' && organizationId) {
+      const ess = await essGrantAllowed(adminClient, userData.initial_role_id, organizationId)
+      if (!ess.ok) return { success: false, error: `${ess.message} Nothing was created.`, code: 'ESS_HQ_ONLY' }
+    }
+    // Employee Self Service intent, from the organization's STORED type (never a submitted type), before any side effect.
+    const { data: essOrg } = organizationId
+      ? await adminClient.from('organizations').select('org_type_code').eq('id', organizationId).maybeSingle()
+      : { data: null }
+    const essIntent = resolveEssIntent({ organizationTypeCode: essOrg?.org_type_code ?? null, includeEss: userData.include_ess ?? null, linkedUserId: userData.linked_user_id ?? null })
+    if (!essIntent.ok) return { success: false, error: essIntent.message, code: essIntent.code }
+    if (userData.include_ess === false && organizationId) {
+      // Excluding ESS revokes the automatic baseline: the same authority as any other revoke, checked before anything is created.
+      const revokeAllowed = await explainOperation(callerUserId, 'security.role.assign', organizationId, () => legacyOrDelegatedSecurityAccess(callerUserId, organizationId, 'security.role.assign')).catch(() => null)
+      if (!revokeAllowed?.allowed) return { success: false, error: 'You cannot exclude Employee Self Service in this organization. Nothing was created.', code: 'FORBIDDEN' }
+    }
+    {
+      // Employment details and the HR employee link are HQ-only: judged on the organization's stored type, before anything is created.
+      const carried = hqOnlyEmploymentFieldsPresent(userData as any)
+      if (carried.length) {
+        const { data: empOrg } = organizationId
+          ? await adminClient.from('organizations').select('org_type_code').eq('id', organizationId).maybeSingle()
+          : { data: null }
+        const empError = employmentEligibilityError(userData as any, empOrg?.org_type_code)
+        if (empError) return { success: false, error: `${empError} Nothing was created.`, code: 'EMPLOYMENT_HQ_ONLY' }
+      }
+    }
+    if (Boolean(userData.can_be_reference)) {
+      // Reference is HQ-only: judged on the organization's stored type, before anything is created.
+      const { data: refOrg } = organizationId
+        ? await adminClient.from('organizations').select('org_type_code').eq('id', organizationId).maybeSingle()
+        : { data: null }
+      const refError = referenceEligibilityError(true, refOrg?.org_type_code)
+      if (refError) return { success: false, error: `${refError} Nothing was created.`, code: 'REFERENCE_HQ_ONLY' }
+    }
+    if (userData.linked_user_id) {
+      // The employee link is HQ-only and must be an eligible employee of that organization (same checks as HR onboarding).
+      if (!organizationId) return { success: false, error: 'Choose an HQ organization before linking an HR employee.', code: 'INVALID_INPUT' }
+      const { data: orgRow } = await adminClient.from('organizations').select('org_type_code').eq('id', organizationId).maybeSingle()
+      if (!essAllowedForOrgType(orgRow?.org_type_code)) {
+        return { success: false, error: `${ESS_HQ_ONLY_MESSAGE} Employee linking is not available for this organization. Nothing was created.`, code: 'ESS_HQ_ONLY' }
+      }
+      const preview = await previewOnboardingCandidate(callerUserId, organizationId, userData.linked_user_id)
+      if (!preview.ok) return { success: false, error: preview.message, code: preview.code }
+      if (!preview.candidate.found || preview.candidate.user_id !== userData.linked_user_id || !preview.candidate.eligible) {
+        return { success: false, error: 'The linked employee is not eligible any more. Review the employee link and try again. Nothing was created.', code: 'IDENTITY_LINK_MISMATCH' }
+      }
+    }
+
     // Canonical provisioning: resolve the identity from email/phone (never a
     // duplicate), then profile + organization membership + baseline access in
     // one database transaction. A role code above the baseline is access
     // administration and is authorized separately in the database.
-    const isConsumerRole = ['GUEST', 'CONSUMER'].includes(String(userData.role_code || '').toUpperCase())
+    // No legacy role/level is requested: the database gives the no-authority GUEST classification (never the staff-level
+    // USER baseline), and the organization alone decides the account scope. Access comes only from Group Policies.
     const provisioned = await provisionIdentity({
       actorId: callerUserId,
       email: userData.email,
@@ -130,8 +228,8 @@ export async function createUserWithAuth(userData: {
       fullName: userData.full_name,
       callName: userData.call_name ?? null,
       organizationId: userData.organization_id || null,
-      accountScope: userData.organization_id && !isConsumerRole ? 'portal' : 'store',
-      legacyRoleCode: userData.role_code || null,
+      accountScope: userData.organization_id ? 'portal' : 'store',
+      noLegacyAccess: true,
       password: userData.password,
       hr: {
         departmentId: userData.department_id ?? null,
@@ -141,11 +239,12 @@ export async function createUserWithAuth(userData: {
         joinDate: userData.join_date ?? null,
       },
       initialAccess: !userData.initial_profiles?.length && userData.initial_role_id && userData.initial_role_id !== 'self'
-        ? { roleId: userData.initial_role_id, reason: userData.initial_access_reason?.trim() || 'Initial access at onboarding' }
+        ? { roleId: userData.initial_role_id }
         : undefined,
-      initialProfiles: userData.initial_profiles?.length
-        ? userData.initial_profiles.map(p => ({ roleId: p.role_id, scopeIds: [p.scope_id], reason: userData.initial_access_reason?.trim() || 'Initial access at onboarding' }))
-        : undefined,
+      initialProfiles: groupedProfiles?.map(g => ({ roleId: g.roleId, scopeIds: g.scopeIds })),
+      // Never reuse an account silently: an existing person is either linked explicitly (HQ employee) or the request stops.
+      requireNewIdentity: true,
+      linkUserId: userData.linked_user_id || null,
       source: 'user_management',
     })
     if (!provisioned.ok) {
@@ -155,11 +254,15 @@ export async function createUserWithAuth(userData: {
       // The person already has an identity in this organization: nothing is
       // duplicated and nothing about the existing identity is overwritten.
       revalidatePath('/dashboard')
+      revalidatePath('/security-access')
       return {
         success: true,
         user_id: provisioned.userId,
         reused: true,
-        message: `${userData.email} already has an account in this organization; the existing identity was kept.`,
+        linked: Boolean(userData.linked_user_id),
+        message: userData.linked_user_id
+          ? `Linked the existing HR employee; no duplicate account was created${groupedProfiles?.length ? ` and ${groupedProfiles.length} Group Policy ${groupedProfiles.length === 1 ? 'selection' : 'selections'} assigned` : ''}.`
+          : `${userData.email} already has an account in this organization; the existing identity was kept.`,
       }
     }
 
@@ -189,6 +292,7 @@ export async function createUserWithAuth(userData: {
         return {
           success: false,
           user_id: provisioned.userId,
+          partial: true,
           error: `The account was created, but some profile details could not be saved: ${profileError.message}`,
         }
       }
@@ -197,6 +301,24 @@ export async function createUserWithAuth(userData: {
     if (userData.is_active === false) {
       const statusResult = await setIdentityAccountStatus(callerUserId, provisioned.userId, 'DISABLED', 'Created as inactive in User Management')
       if (!statusResult.ok) console.error('Failed to set created user inactive:', statusResult.message)
+    } else if (userData.is_active === true) {
+      // Explicit, not implied by a default: the Add User flow creates Active accounts.
+      // Lifecycle only; this grants no Group Policy, legacy privilege or Employee Self Service.
+      const statusResult = await setIdentityAccountStatus(callerUserId, provisioned.userId, 'ACTIVE', 'Created as active in User Management')
+      if (!statusResult.ok) {
+        console.error('Failed to set created user active:', statusResult.message)
+        return { success: false, user_id: provisioned.userId, error: `The account was created, but it could not be activated: ${statusResult.message}` }
+      }
+    }
+
+    // Employee Self Service: make the stored baseline match the intent and say so truthfully (never report it provisioned when it is not).
+    {
+      const essResult = await reconcileEssBaseline(adminClient, {
+        actorId: callerUserId, userId: provisioned.userId, wanted: essIntent.wanted, hq: essAllowedForOrgType(essOrg?.org_type_code), verifyAssigned: userData.is_active !== false,
+      })
+      if (essResult.state === 'failed') {
+        return { success: false, user_id: provisioned.userId, partial: true, error: `The account was created, but Employee Self Service is not as requested: ${essResult.message} Review it in Security & Access → People & Access.` }
+      }
     }
 
     if (userData.organization_id) {
@@ -218,8 +340,9 @@ export async function createUserWithAuth(userData: {
       }
     }
 
-    // Step 3: Return success
+    // Step 3: Return success (User Management and the Security & Access people views refetch)
     revalidatePath('/dashboard')
+    revalidatePath('/security-access')
     return {
       success: true,
       user_id: provisioned.userId,
@@ -229,7 +352,7 @@ export async function createUserWithAuth(userData: {
     console.error('Error creating user:', error)
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to delete user'
+      error: error instanceof Error ? error.message : 'Failed to create user'
     }
   }
 }
@@ -247,61 +370,113 @@ export async function createUserWithAuth(userData: {
  */
 export async function listInitialAccessRoles(organizationId: string | null) {
   type InitialRole = { id: string; name: string; description: string | null }
-  const none = (success: boolean, legacyReadOnly = false) => ({ success, roles: [] as InitialRole[], canAssign: false, legacyReadOnly })
+  type Denial = { permission: string; code: string; reason: string; /** True when the administrator may not create users here at all. */ cannotCreate: boolean }
+  /** Which stage could not answer: the authorization engine itself, or the catalogue / scope reads AFTER authorization succeeded. */
+  type FailedStage = 'session' | 'settings' | 'engine' | 'catalogue' | 'scopes'
+  const none = (success: boolean, legacyReadOnly = false, extra: { failed?: boolean; failedStage?: FailedStage; denial?: Denial } = {}) => ({ success, roles: [] as InitialRole[], canAssign: false, legacyReadOnly, ...extra })
+  // The check could not be completed: never reported as a denial (the form offers Retry and assigns nothing unchecked).
+  // Server log carries only the stage and the database error code/message (no identities, tokens or ids).
+  const unavailable = (stage: FailedStage, detail?: { code?: string; message?: string } | null) => {
+    console.error(`[add-user] assignment preflight failed at stage=${stage}${detail?.code ? ` code=${detail.code}` : ''}${detail?.message ? ` message=${String(detail.message).slice(0, 160)}` : ''}`)
+    return none(false, false, { failed: true, failedStage: stage })
+  }
   try {
     if (!organizationId) return none(true)
     const supabase = await createClient()
     const { data: { user }, error } = await supabase.auth.getUser()
-    if (error || !user) return none(false)
+    if (error || !user) return unavailable('session', error)
     const admin = createAdminClient() as any
-    const { data: setting } = await admin.from('sa_settings').select('setting_value').eq('setting_key', 'legacy_authorization.read_only').maybeSingle()
+    const { data: setting, error: settingError } = await admin.from('sa_settings').select('setting_value').eq('setting_key', 'legacy_authorization.read_only').maybeSingle()
+    if (settingError && settingError.code !== 'PGRST205' && settingError.code !== '42P01') return unavailable('settings', settingError)
     const legacyReadOnly = setting?.setting_value === true
-    const allowed = await userAllowed(user.id, 'security.role.assign',
-      async () => (await checkPermissionForUser(user.id, 'manage_authorization')).allowed, { organizationId })
-    if (!allowed) return none(true, legacyReadOnly)
-    const { data } = await admin.from('sa_business_roles')
+    // The same two decisions the creation takes (same engine, permission, target organization and legacy rule), explained.
+    const permissionCheck = await checkPermissionForUser(user.id, 'create_users')
+    const roleLevel = permissionCheck.context?.role_level
+    const userManage = await explainOperation(user.id, 'platform.user.manage', organizationId, () => permissionCheck.allowed || (typeof roleLevel === 'number' && roleLevel <= 30))
+    if (!userManage.allowed) return none(true, legacyReadOnly, { denial: { permission: 'platform.user.manage', code: userManage.code, reason: userManage.reason, cannotCreate: true } })
+    const roleAssign = await explainOperation(user.id, 'security.role.assign', organizationId, () => legacyOrDelegatedSecurityAccess(user.id, organizationId, 'security.role.assign'))
+    if (!roleAssign.allowed) return none(true, legacyReadOnly, { denial: { permission: 'security.role.assign', code: roleAssign.code, reason: roleAssign.reason, cannotCreate: false } })
+    const { data, error: rolesError } = await admin.from('sa_business_roles')
       .select('id, name, description, role_key, source')
       .eq('status', 'active').neq('source', 'legacy').neq('role_key', 'employee-self-service')
       .order('name')
+    if (rolesError) return unavailable('catalogue', rolesError)
     const roles = (data || []).map((r: any) => ({ id: r.id, name: r.name, description: r.description ?? null })) as InitialRole[]
-    // Additive Access Profile metadata (applicability, sensitivity) and the scopes an
-    // administrator may choose for this organization. Every read is tolerant: before the
-    // Access Profiles migration is applied, the plain role list above is all that is offered.
+    // Group Policy metadata (eligibility, sensitivity) and the scopes an administrator may choose
+    // for this organization. Without the metadata nothing is offered (see the fail-closed check below).
     let profiles: any[] | undefined
+    const deferredProfiles: Array<{ id: string; name: string }> = []
+    // Policies not eligible for this organization type (recipient-eligibility.ts): never offered, listed with why so the
+    // pickers can explain the gap and Edit User can mark existing grants that no longer qualify.
+    const ineligibleProfiles: Array<{ id: string; name: string; code: string; message: string }> = []
+    const sensitiveEntries: any[] = []
     let scopes: any[] = []
+    let orgNames: Record<string, string> = {}
+    let scopesFailure: { code?: string; message?: string } | null = null
+    let catalogueFailure: { code?: string; message?: string } | null = null
     let organization: { name: string | null; typeCode: string | null } | null = null
+    let eligibilityModel: EligibilityModel = 'org_type'
     try {
-      const { data: org } = await admin.from('organizations').select('org_name, org_type_code').eq('id', organizationId).maybeSingle()
+      const [{ data: org }, model] = await Promise.all([
+        admin.from('organizations').select('org_name, org_type_code').eq('id', organizationId).maybeSingle(),
+        loadEligibilityModel(admin),
+      ])
+      eligibilityModel = model
       organization = org ? { name: org.org_name ?? null, typeCode: org.org_type_code ?? null } : null
       const ids = (data || []).map((r: any) => r.id)
       const { data: extra, error: extraError } = await admin.from('sa_business_roles')
-        .select('id, applicable_account_types, applicable_org_types, permissions:sa_business_role_permissions(permission:sa_permissions(permission_key))').in('id', ids)
+        .select('id, role_key, source, applicable_account_types, applicable_org_types, permissions:sa_business_role_permissions(permission:sa_permissions(permission_key))').in('id', ids)
+      if (extraError) catalogueFailure = extraError
       if (!extraError && extra) {
         const byId = new Map<string, any>(extra.map((x: any) => [x.id, x]))
-        const accountType = ['MFG', 'DIST', 'SHOP'].includes(String(organization?.typeCode || '').toUpperCase()) ? 'partner' : 'internal'
         profiles = []
         for (const r of roles) {
           const x = byId.get(r.id)
           const keys: string[] = (x?.permissions || []).map((p: any) => p?.permission?.permission_key).filter(Boolean)
-          const sensitive = keys.some(k => k.startsWith('security.') || ['hr.data.reset', 'platform.data.destructive', 'finance.data.reset'].includes(k))
+          const sensitive = keys.some(isSensitivePermission)
           const accountTypes: string[] = x?.applicable_account_types || []
           const orgTypes: string[] = x?.applicable_org_types || []
-          const applicable = (!accountTypes.length || accountTypes.includes(accountType)) && (!orgTypes.length || orgTypes.includes(String(organization?.typeCode || '').toUpperCase()))
-          // Sensitive administrative / reset profiles are assigned afterwards in People & Access, never at creation.
-          if (applicable && !sensitive) profiles.push({ ...r, permissionCount: keys.length, accountTypes, orgTypes })
+          // Recipient eligibility, judged on the TARGET organization's stored type (the same rule as submission, People & Access
+          // and the database guard). A policy is offered exactly as published, never trimmed.
+          const eligibility = recipientEligibility({ roleKey: x?.role_key ?? null, source: x?.source ?? null, accountTypes, orgTypes, permissionKeys: keys }, organization?.typeCode, eligibilityModel)
+          if (!eligibility.ok) { ineligibleProfiles.push({ id: r.id, name: r.name, code: eligibility.code, message: eligibility.message }); continue }
+          const entry = { ...r, roleKey: x?.role_key ?? null, kind: x?.source === 'template' ? 'standard' : 'custom', permissionKeys: keys, permissionCount: keys.length, accountTypes, orgTypes, warehouseSupport: warehouseSupportFor(keys) }
+          if (!sensitive) profiles.push(entry)
+          else sensitiveEntries.push(entry)
         }
+        // A sensitive (administrative / reset) policy is offered only where the database accepts it AND this administrator holds the same
+        // authority Grant Policy requires (sa_actor_may_assign_profile). Before that migration is applied, or without the authority, it stays
+        // a post-creation assignment in People & Access. A failed check never offers it.
+        const allowedSensitive = await Promise.all(sensitiveEntries.map(async e => {
+          const { data: may, error: mayError } = await admin.rpc('sa_actor_may_assign_profile', { p_actor: user.id, p_role: e.id, p_org: organizationId })
+          return !mayError && may === true
+        }))
+        sensitiveEntries.forEach((e, i) => { if (allowedSensitive[i]) profiles!.push(e); else deferredProfiles.push({ id: e.id, name: e.name }) })
       }
-      const { data: children } = await admin.from('organizations').select('id').eq('parent_org_id', organizationId)
-      const childIds = (children || []).map((c: any) => c.id)
-      const { data: grandchildren } = childIds.length ? await admin.from('organizations').select('id').in('parent_org_id', childIds) : { data: [] }
-      const orgIds = [organizationId, ...childIds, ...(grandchildren || []).map((c: any) => c.id)]
-      const { data: scopeRows } = await admin.from('sa_scope_definitions')
-        .select('id, organization_id, scope_type, display_name').eq('status', 'active').in('organization_id', orgIds).neq('scope_type', 'own_record').order('display_name')
-      scopes = scopeRows || []
-    } catch { /* optional metadata */ }
-    return { success: true, roles, canAssign: true, legacyReadOnly, ...(profiles ? { profiles } : {}), scopes, organization }
-  } catch {
-    return none(false)
+      // The shared scope eligibility (scope-eligibility.ts): an HQ recipient is offered the HQ and its own warehouses only; the choices
+      // are limited to organizations where this administrator holds the grant authority. Read-only; nothing is created here.
+      try {
+        const loaded = await loadScopeChoices(admin, organizationId, user.id)
+        scopes = (loaded?.choices ?? []).map(c => ({ id: c.scopeId, organization_id: c.targetOrganizationId, scope_type: c.scopeType, display_name: c.name, kind: c.kind, label: c.label, coverage: c.coverage }))
+        orgNames = loaded?.orgNames ?? {}
+      } catch (scopeError) {
+        // A failed read is a failed check, not an empty catalogue.
+        scopesFailure = { message: scopeError instanceof Error ? scopeError.message : 'scope read failed' }
+      }
+    } catch (metadataError) {
+      // Without the metadata no picker can be built (fail closed below).
+      catalogueFailure = catalogueFailure ?? { message: metadataError instanceof Error ? metadataError.name : 'metadata exception' }
+    }
+    if (scopesFailure) return unavailable('scopes', scopesFailure)
+    // Only policies the eligibility rule has seen are ever offered; never fall back to the unfiltered role list (fail closed).
+    if (!profiles && (eligibilityModel === 'org_type' || isManufacturerOrgType(organization?.typeCode))) return unavailable('catalogue', catalogueFailure)
+    // The Group Policies link in the empty state is offered only to someone who may open Security & Access (same rule as the page).
+    const policiesAccess = await explainOperation(user.id, 'security.access.view', organizationId, () => legacyOrDelegatedSecurityAccess(user.id, organizationId, 'security.access.view')).catch(() => null)
+    const canOpenGroupPolicies = Boolean(policiesAccess?.allowed)
+    return { success: true, roles, canAssign: true, canOpenGroupPolicies, legacyReadOnly, ...(profiles ? { profiles: sortGroupPolicies(profiles, (p: any) => p.roleKey, (p: any) => p.name), deferredProfiles, ineligibleProfiles } : {}), eligibilityModel, scopes, orgNames, organization, essAllowed: essAllowedForOrgType(organization?.typeCode) }
+  } catch (error) {
+    if (error instanceof PreflightUnavailableError) return unavailable('engine')
+    return unavailable('engine', { message: error instanceof Error ? error.name : 'exception' })
   }
 }
 
@@ -375,6 +550,21 @@ export async function updateUserWithAuth(userId: string, userData: {
     const authorizedUserData = (isSelfUpdate
       ? pickSelfServiceProfileFields(requestedUpdate)
       : pickAdminEditableUserFields(requestedUpdate)) as typeof userData
+
+    // Reference is HQ-only. Judged on the organization the user will belong to after this update (stored type, not a
+    // submitted one). Turning it off, or leaving an existing value untouched, is always allowed.
+    if (!isSelfUpdate && authorizedUserData.can_be_reference === true) {
+      let targetOrgId = authorizedUserData.organization_id !== undefined ? (authorizedUserData.organization_id || null) : undefined
+      if (targetOrgId === undefined) {
+        const { data: row } = await adminClient.from('users').select('organization_id').eq('id', userId).maybeSingle()
+        targetOrgId = (row as any)?.organization_id ?? null
+      }
+      const { data: refOrg } = targetOrgId
+        ? await adminClient.from('organizations').select('org_type_code').eq('id', targetOrgId).maybeSingle()
+        : { data: null }
+      const refError = referenceEligibilityError(true, refOrg?.org_type_code)
+      if (refError) return { success: false, error: refError, code: 'REFERENCE_HQ_ONLY' }
+    }
 
     // Enterprise access fields and the account lifecycle are not profile data:
     // they change only through the identity functions, which re-authorize in
@@ -734,6 +924,9 @@ export async function setUserAccountStatus(userId: string, status: 'ACTIVE' | 'S
     const { data: { user }, error } = await supabase.auth.getUser()
     if (error || !user) return { success: false, error: 'Unauthorized' }
     if (user.id === userId) return { success: false, error: 'You cannot change the status of your own account.' }
+    // Server actions accept any runtime argument: archiving is Archive
+    // Identities (the User Management delete flow), never this lifecycle path.
+    if (!['ACTIVE', 'SUSPENDED', 'DISABLED'].includes(status)) return { success: false, error: 'Invalid account status' }
 
     const permissionCheck = await checkPermissionForUser(user.id, 'edit_users')
     const roleLevel = permissionCheck.context?.role_level
@@ -787,6 +980,15 @@ export async function deleteUserWithAuth(userId: string, _callerInfo?: { id: str
         success: false,
         error: 'Unauthorized: Only administrators can delete users'
       }
+    }
+
+    // Removing an identity is Archive Identities (platform.identity.delete)
+    // for the target's organization, with self and target protection — the
+    // same decision as the User Management delete flow. Managing users alone
+    // does not authorize it.
+    const removal = await authorizeIdentityRemoval(currentUser!.id, userId)
+    if (!removal.ok) {
+      return { success: false, error: removal.status === 403 ? 'Unauthorized: Only administrators can delete users' : removal.error }
     }
 
     // Business or audit history must survive account removal: such an

@@ -42,7 +42,7 @@ const openProfile = async (module: string, name: RegExp) => {
 const posts = (f: any) => f.mock.calls.filter((c: any) => c[1]?.body).map((c: any) => JSON.parse(c[1].body))
 const mount = async (onChanged = vi.fn()) => { render(<AccessProfilesPanel permissions={PERMS} onChanged={onChanged} fallback={<p>read-only fallback</p>} />); await screen.findByRole('button', { name: /^Standard\s*\d+$/ }); return onChanged }
 
-describe('Access Profiles', () => {
+describe('Group Policies', () => {
   it('separates Standard, Custom and Compatibility; standard originals only offer Copy & Customize', async () => {
     stub()
     await mount()
@@ -113,8 +113,8 @@ describe('Access Profiles', () => {
     await screen.findByRole('button', { name: /^Standard\s*\d+$/ })
     await userEvent.click(screen.getByRole('button', { name: /^Custom\s*3$/ }))
     await userEvent.click(screen.getByRole('button', { name: /^Expand all/ }))
-    const buttons = screen.getAllByRole('button', { name: /^Assign profile/ })
-    expect(buttons.map(b => b.textContent)).toEqual(['Assign profile Counter Staff', 'Assign profile Unused Profile']) // not the draft
+    const buttons = screen.getAllByRole('button', { name: /^Assign policy/ })
+    expect(buttons.map(b => b.textContent)).toEqual(['Assign policy Counter Staff', 'Assign policy Unused Profile']) // not the draft
     await userEvent.click(buttons[1])
     expect(onAssign).toHaveBeenCalledWith(expect.objectContaining({ id: 'free' }))
   })
@@ -124,7 +124,7 @@ describe('Access Profiles', () => {
     render(<AccessProfilesPanel permissions={PERMS} onChanged={vi.fn()} onAssignProfile={vi.fn()} fallback={<p>x</p>} />)
     await screen.findByRole('button', { name: /^Standard\s*\d+$/ })
     await userEvent.click(screen.getByRole('button', { name: /^Expand all/ }))
-    expect(screen.queryByRole('button', { name: /^Assign profile/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Assign policy/ })).toBeNull()
   })
 
   it('a never-published copy is marked as a draft that cannot be assigned', async () => {
@@ -191,12 +191,12 @@ describe('Access Profiles', () => {
     const f = stub((b: any) => b.action === 'create' ? { ok: true, result: 'new-id' } : { ok: true, result: {} })
     await mount()
     await userEvent.click(screen.getByRole('button', { name: /^Custom\s*3$/ }))
-    await userEvent.click(screen.getByRole('button', { name: 'New profile' }))
+    await userEvent.click(screen.getByRole('button', { name: 'New policy' }))
     const dialog = within(screen.getByRole('dialog'))
     await userEvent.type(dialog.getByLabelText('Name'), 'Mfg Operator')
-    expect((dialog.getByLabelText(/Profile key/) as HTMLInputElement).value).toBe('mfg-operator')
+    expect((dialog.getByLabelText(/Policy key/) as HTMLInputElement).value).toBe('mfg-operator')
     await userEvent.click(dialog.getByRole('checkbox', { name: 'Partner account' }))
-    expect(dialog.getByText(/Partner profiles cannot include HR/)).toBeTruthy()
+    expect(dialog.getByText(/Partner policies cannot include HR/)).toBeTruthy()
     await userEvent.click(dialog.getByRole('button', { name: /^Supply Chain/ }))
     await userEvent.click(dialog.getByRole('checkbox', { name: /View Stock Count/ }))
     await userEvent.click(dialog.getByRole('button', { name: /^HR & Payroll/ }))
@@ -210,7 +210,7 @@ describe('Access Profiles', () => {
     const f = stub()
     await mount()
     await userEvent.click(screen.getByRole('button', { name: /^Custom\s*3$/ }))
-    await userEvent.click(screen.getByRole('button', { name: 'New profile' }))
+    await userEvent.click(screen.getByRole('button', { name: 'New policy' }))
     const dialog = within(screen.getByRole('dialog'))
     await userEvent.type(dialog.getByLabelText('Name'), 'Counter Only')
     await userEvent.click(dialog.getByRole('button', { name: /^Supply Chain/ }))
@@ -232,7 +232,7 @@ describe('Access Profiles', () => {
     stub()
     await mount()
     const headers = screen.getAllByRole('button', { name: /, \d+ profiles?, (expand|collapse)$/ })
-    expect(headers.map(h => h.getAttribute('aria-label')!.split(',')[0])).toEqual(['Supply Chain', 'Customer & Growth', 'HR & Payroll', 'Finance', 'Platform & Security', 'Reporting'])
+    expect(headers.map(h => h.getAttribute('aria-label')!.split(',')[0])).toEqual(['Supply Chain', 'Customer & Growth', 'HR & Payroll', 'Finance', 'Security & Access', 'Platform & Settings', 'Reporting'])
     for (const h of headers) expect(h.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByRole('button', { name: /^Warehouse Operator/ })).toBeNull()
     await userEvent.click(headers[0])
@@ -243,8 +243,10 @@ describe('Access Profiles', () => {
     stub()
     await mount()
     await userEvent.click(screen.getByRole('button', { name: /^HR & Payroll, 0 profiles, expand$/ }))
-    expect(screen.getByText(/No standard profiles in HR & Payroll\./)).toBeTruthy()
-    expect(screen.getByText(/1 permission in this module is not in any profile yet — that is informational/)).toBeTruthy()
+    expect(screen.getByText(/No standard policies in HR & Payroll\./)).toBeTruthy()
+    // The informational coverage note lives in the information popover.
+    await userEvent.click(screen.getByRole('button', { name: 'About HR & Payroll coverage' }))
+    expect(screen.getByText(/1 permission in this module is not in any policy yet\. That is informational/)).toBeTruthy()
   })
 
   it('Expand all / Collapse all work from the keyboard and group permissions by module → area', async () => {
@@ -257,8 +259,7 @@ describe('Access Profiles', () => {
     const profile = screen.getByRole('button', { name: /^Warehouse Operator, 2 permissions, collapse$/ })
     expect(profile.getAttribute('aria-expanded')).toBe('true')
     const details = within(profile.closest('li')!)
-    expect(details.getByText(/^Supply Chain/)).toBeTruthy()        // module
-    expect(details.getByText('Stock Count')).toBeTruthy()           // functional area
+    expect(details.getByRole('button', { name: /^Stock Count, 2 permissions, expand$/ })).toBeTruthy()   // functional area, collapsed
     const collapse = screen.getByRole('button', { name: 'Collapse all' })
     collapse.focus()
     await userEvent.keyboard(' ')
@@ -270,12 +271,12 @@ describe('Access Profiles', () => {
     stub()
     await mount()
     await userEvent.click(screen.getByRole('button', { name: /^Supply Chain, \d+ profiles?, expand$/ }))      // the user's own expansion
-    await userEvent.type(screen.getByRole('textbox', { name: 'Search profiles' }), 'create stock count')
+    await userEvent.type(screen.getByRole('textbox', { name: 'Search policies' }), 'create stock count')
     expect(screen.getByRole('status').textContent).toMatch(/Showing 1 matching profile/)
     // matched through a permission: its module and details are revealed, others are not listed
     expect(screen.getByRole('button', { name: /^Warehouse Operator, 2 permissions, collapse$/ })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /^Finance, / })).toBeNull()
-    await userEvent.clear(screen.getByRole('textbox', { name: 'Search profiles' }))
+    await userEvent.clear(screen.getByRole('textbox', { name: 'Search policies' }))
     expect(screen.getByRole('button', { name: /^Supply Chain, \d+ profiles?, collapse$/ })).toBeTruthy()            // still open as the user left it
     expect(screen.getByRole('button', { name: /^Warehouse Operator, 2 permissions, expand$/ })).toBeTruthy()          // its details were not permanently opened
     expect(screen.getByRole('button', { name: /^Finance, 0 profiles, expand$/ })).toBeTruthy()
@@ -289,6 +290,7 @@ describe('Access Profiles', () => {
     expect(screen.getByText(/1 profile · 3 assignments/)).toBeTruthy()
     await userEvent.click(header)
     expect(screen.getAllByText('Payroll Finance Approver')).toHaveLength(1)
+    await userEvent.click(screen.getByRole('button', { name: /^About Shared \/ Cross-module$/ }))
     expect(screen.getByText(/listed once here/)).toBeTruthy()
     // still discoverable through each module it touches
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Module' }), 'finance')

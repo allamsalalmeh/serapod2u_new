@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSupabaseAuth } from '@/lib/hooks/useSupabaseAuth'
 import { usePermissions } from '@/hooks/usePermissions'
+import { useSaCapabilityState } from '@/hooks/useSaCapability'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -370,8 +371,14 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
   const [postedOpeningCategoryIds, setPostedOpeningCategoryIds] = useState<Set<string>>(new Set())
   const [verificationNow, setVerificationNow] = useState(Date.now())
   const [visibleColumns, setVisibleColumns] = useState({ unitCost: true, adjustmentValue: true, note: true })
-  const hasPostStockCountPermission = !permissionLoading && hasPermission(STOCK_COUNT_POST_PERMISSION)
-  const permissionGate = stockCountPermissionGate(permissionLoading, hasPostStockCountPermission)
+  // Security & Access decides once each key is enforced (answered for the selected warehouse, as the server and
+  // database decide); until then the screen's historical rules apply: posting needs the legacy post_stock_count key,
+  // draft saving had no screen-level rule.
+  const saPost = useSaCapabilityState('inventory.stock_count.post', !permissionLoading && hasPermission(STOCK_COUNT_POST_PERMISSION), null, selectedWarehouse || null)
+  const saCreate = useSaCapabilityState('inventory.stock_count.create', true, null, selectedWarehouse || null)
+  const hasPostStockCountPermission = !permissionLoading && saPost.allowed
+  const permissionGate = stockCountPermissionGate(permissionLoading || saPost.loading, hasPostStockCountPermission)
+  const hasCreateStockCountPermission = saCreate.allowed
   const isLegacyInitialReadOnly = countType === 'initial_configuration_classification'
   // The retired type is displayed through the regular configuration table in
   // read-only mode. Its former specialised editor remains unavailable.
@@ -1091,7 +1098,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
   const hasUnsavedChanges = currentSignature !== lastSavedSignature
   const verificationStale = Boolean(verification) && verifiedSignature !== null && verifiedSignature !== currentSignature
 
-  const canSave = Boolean(selectedWarehouse && selectedWarehouseIsValid
+  const canSave = Boolean(selectedWarehouse && selectedWarehouseIsValid && hasCreateStockCountPermission
     && countDate && currentStatus !== 'posted' && !isOpeningBalanceReadOnly
     && (!isOpeningBalanceMode || selectedCategory)
     && !(isOpeningBalanceMode && openingBalancePosted)
@@ -1440,7 +1447,10 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
       await loadDrafts(selectedWarehouse)
       return sessionId
     } catch (error: any) {
-      toast({ title: 'Save draft failed', description: error.message, variant: 'destructive' })
+      const description = /sa_authorization_required/.test(String(error?.message || ''))
+        ? 'You are not allowed to create or edit Stock Count drafts for this warehouse. Please contact your administrator.'
+        : error.message
+      toast({ title: 'Save draft failed', description, variant: 'destructive' })
       return null
     } finally {
       setSaving(false)
@@ -2380,6 +2390,9 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
           }} />
           {hasUnsavedChanges && currentStatus !== 'posted' && (
             <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">Unsaved changes</Badge>
+          )}
+          {selectedWarehouse && !saCreate.loading && !hasCreateStockCountPermission && currentStatus !== 'posted' && (
+            <span role="status" className="text-xs text-gray-600">You can view this warehouse&apos;s counts, but not create or edit drafts here.</span>
           )}
           <Button variant={hasUnsavedChanges ? 'default' : 'outline'} onClick={() => void saveDraft()} disabled={!canSave || saving || openingDraftDetectionPending} className={hasUnsavedChanges && currentStatus !== 'posted' ? 'bg-amber-600 hover:bg-amber-700' : ''}><Save className="mr-2 h-4 w-4" /> {saving ? 'Saving...' : openingDraftDetectionPending ? 'Checking for existing draft…' : isOpeningBalanceMode && currentSessionId ? 'Update Draft' : 'Save Draft'}</Button>
           {!isOpeningBalanceMode && !isOpeningBalanceReadOnly && (

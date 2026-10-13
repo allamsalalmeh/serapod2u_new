@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { requireSelfServiceActor } from '@/lib/security-access/admin-api'
+import { loadScopeChoices } from '@/lib/security-access/scope-grant'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,14 +22,21 @@ export async function GET() {
     .eq('user_id', actor.userId).eq('status', 'active')
   if (error) return NextResponse.json({ error: 'Unable to load request options' }, { status: 500 })
   const orgIds = (memberships || []).map((m: any) => m.organization_id)
-  const [{ data: scopes }, { data: roles }] = await Promise.all([
-    orgIds.length
-      ? admin.from('sa_scope_definitions').select('id, organization_id, scope_type, display_name')
-        .in('organization_id', orgIds).eq('status', 'active').neq('scope_type', 'own_record').order('display_name')
-      : Promise.resolve({ data: [] }),
-    admin.from('sa_business_roles').select('id, name, description')
-      .eq('status', 'active').neq('source', 'legacy').neq('role_key', 'employee-self-service').order('name'),
-  ])
+  // The same canonical choices the grant forms offer (an HQ membership: the HQ and its own warehouses only). The requester holds no
+  // grant authority, so none is filtered here; the approver's decision and the database apply it.
+  let scopes: any[] = []
+  try {
+    for (const orgId of orgIds) {
+      const loaded = await loadScopeChoices(admin, orgId, null)
+      for (const c of loaded?.choices ?? []) {
+        scopes.push({ id: c.scopeId, organization_id: c.targetOrganizationId, membership_organization_id: orgId, scope_type: c.scopeType, display_name: c.name, kind: c.kind, label: c.label, coverage: c.coverage })
+      }
+    }
+  } catch {
+    return NextResponse.json({ error: 'Unable to load request options' }, { status: 500 })
+  }
+  const { data: roles } = await admin.from('sa_business_roles').select('id, name, description')
+    .eq('status', 'active').neq('source', 'legacy').neq('role_key', 'employee-self-service').order('name')
   const now = Date.now()
   return NextResponse.json({
     memberships: (memberships || []).map((m: any) => ({
@@ -38,7 +46,7 @@ export async function GET() {
         .filter((a: any) => a.status === 'active' && !(a.effective_until && new Date(a.effective_until).getTime() <= now))
         .map((a: any) => a.role_id),
     })),
-    scopes: scopes || [],
+    scopes,
     roles: roles || [],
   })
 }

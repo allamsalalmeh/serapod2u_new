@@ -12,6 +12,8 @@ export const DIFFERENCE_SAMPLE_LIMIT = 100
 export type OverviewTarget =
   | { tab: 'people' }
   | { tab: 'audit'; differencesOnly: boolean }
+  | { tab: 'governance' }
+  | { tab: 'technical' }
   | { tab: 'roles'; query: string }
 
 interface Props {
@@ -69,6 +71,8 @@ export default function OverviewPanel({ data, onNavigate }: Props) {
   )
   const period = periodText(diffs.from, diffs.to)
   const metrics = data?.metrics || {}
+  // Zero differences / an empty catalogue are facts only when a successful response measured them.
+  const measured = data?.schemaReady === true
   // The Overview API loads only the latest non-matching decisions, so the
   // count is "in that sample", never a complete total for the period.
   const sampleText = diffs.capped
@@ -89,8 +93,8 @@ export default function OverviewPanel({ data, onNavigate }: Props) {
           caption="active, automatic and granted"
           action={<LinkButton onClick={() => onNavigate({ tab: 'people' })}>Assignments</LinkButton>} />
         <SummaryCard icon={Activity} title="Recent access differences"
-          value={diffs.count > 0 ? `${diffs.count}${diffs.capped ? '+' : ''}` : 0}
-          caption={diffs.count > 0 ? sampleText : 'none in the recorded decisions'}
+          value={!measured ? null : diffs.count > 0 ? `${diffs.count}${diffs.capped ? '+' : ''}` : 0}
+          caption={!measured ? 'not measured' : diffs.count > 0 ? sampleText : 'none in the recorded decisions'}
           action={<LinkButton onClick={reviewDifferences}>Review</LinkButton>} />
       </div>
 
@@ -120,6 +124,7 @@ export default function OverviewPanel({ data, onNavigate }: Props) {
       <PermissionTree
         rollout={rollout}
         title="Access rollout by module"
+        emptyText={measured ? undefined : 'The permission catalogue is not available until the schema is applied.'}
         description="Permissions per access mode, by module → area → permission. Change modes in Roles & Policies."
         renderDetails={p => (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">

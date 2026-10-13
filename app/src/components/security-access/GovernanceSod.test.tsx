@@ -27,8 +27,7 @@ const data = { people: [{ id: 'u1', full_name: 'Aisha Admin' }], actors: [], org
 
 async function openSod() {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => (url.includes('/sod') ? sod : {}) })))
-  render(<GovernancePanel data={data} governance={{}} />)
-  await userEvent.click(screen.getByRole('tab', { name: /Segregation of Duties/ }))
+  render(<GovernancePanel section="sod" data={data} governance={{}} />)
   await screen.findByRole('button', { name: /^Supply Chain, 1 rule/ })
 }
 
@@ -79,7 +78,7 @@ describe('Governance → Access Requests module filter', () => {
     ]
     const roles = [{ id: 'role-gl', name: 'GL Clerk', source: 'template', status: 'active', permissions: [{ permission: { permission_key: 'finance.ledger.view' } }] }]
     vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => (url.includes('access-requests') ? { requests, canApprove: true } : {}) })))
-    render(<GovernancePanel data={{ ...data, roles }} governance={{}} />)
+    render(<GovernancePanel section="requests" data={{ ...data, roles }} governance={{}} />)
     const select = await screen.findByRole('combobox', { name: 'Module' }) as HTMLSelectElement
     await screen.findByText(/month end close/)
     expect(Array.from(select.options).map(o => o.text)).toEqual(['All modules', 'Finance', 'Other / Unmapped'])
@@ -89,3 +88,36 @@ describe('Governance → Access Requests module filter', () => {
   })
 })
 
+
+describe('Governance → Access Requests card', () => {
+  const mk = (id: string, status: string) => ({ id, role_id: 'r', target_user_id: 'u1', requester_id: 'u1', organization_id: 'o', status, reason: `reason for ${id}`, created_at: '2026-09-29T02:00:00Z' })
+  const renderReq = (requests: any[]) => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => (url.includes('access-requests') ? { requests, canApprove: true } : {}) })))
+    render(<GovernancePanel section="requests" data={{ ...data, roles: [] }} governance={{}} />)
+  }
+  it('is one card with Pending/Decided/All counts, a New request action and the intro behind the info popover', async () => {
+    renderReq([mk('a', 'requested'), mk('b', 'approved'), mk('c', 'denied')])
+    await screen.findByText(/reason for a/)
+    expect(screen.getAllByRole('heading', { name: 'Access Requests' })).toHaveLength(1)
+    expect(screen.queryByText('Request access')).toBeNull()
+    expect(screen.getByRole('button', { name: /^Pending\s*1$/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^Decided\s*2$/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^All\s*3$/ })).toBeTruthy()
+    expect(screen.queryByText(/requester and the person receiving access cannot approve/)).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'About access requests' }))
+    expect(screen.getByText(/Temporary requests must end/)).toBeTruthy()
+    expect(screen.getByText(/requester and the person receiving access cannot approve/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'New request' }).getAttribute('aria-expanded')).toBe('false')
+  })
+  it('offers "Switch to All" only when previous requests exist', async () => {
+    renderReq([mk('b', 'approved')])
+    await screen.findByText('No pending access requests.')
+    await userEvent.click(screen.getByRole('button', { name: 'Switch to All to view previous requests' }))
+    expect(screen.getByText(/reason for b/)).toBeTruthy()
+  })
+  it('shows only the plain empty state when there are no requests at all', async () => {
+    renderReq([])
+    await screen.findByText('No pending access requests.')
+    expect(screen.queryByText(/Switch to All/)).toBeNull()
+  })
+})

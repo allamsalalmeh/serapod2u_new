@@ -14,8 +14,9 @@ describe('Security & Access UI contract', () => {
   })
   it('shows only implemented top-level sections', () => {
     // Governance and Technical Access exist since the Final Wave (access
-    // requests, delegations, reviews, SoD, service identities).
-    for (const label of ['Overview', 'People & Access', 'Roles & Policies', 'Governance', 'Technical Access', 'Audit & Diagnostics']) expect(view).toContain(label)
+    // requests, delegations, reviews, SoD, service identities); Data Scope and
+    // Approval Limits moved under Advanced from Roles & Policies.
+    for (const label of ['Overview', 'People & Access', 'Roles & Policies', 'Governance', 'Technical Access', 'Audit & Diagnostics', 'Data Scope', 'Approval Limits']) expect(view).toContain(label)
   })
   it('uses the canonical evaluator in non-mutating explain mode', () => {
     expect(simulator).toContain("import { authorize }")

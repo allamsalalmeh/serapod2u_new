@@ -33,7 +33,7 @@ describe('Authorization decision details', () => {
     render(<DecisionLog decisions={[decision, hr]} actors={[]} people={[{ id: 'u1', full_name: 'Super Admin', role_code: 'SA' }]}
       organizations={[{ id: 'org-1', org_name: 'Serapod Technology Sdn Bhd' } as any]} />)
     const select = screen.getByRole('combobox', { name: 'Module' }) as HTMLSelectElement
-    expect(Array.from(select.options).map(o => o.text)).toEqual(['All modules', 'HR & Payroll', 'Platform & Security'])
+    expect(Array.from(select.options).map(o => o.text)).toEqual(['All modules', 'HR & Payroll', 'Security & Access'])
     await userEvent.selectOptions(select, 'hr_payroll')
     expect(screen.getByText('Approve Payroll')).toBeTruthy()
     expect(screen.queryByText('View Security & Access')).toBeNull()

@@ -4,10 +4,11 @@ import { useMemo, useState } from 'react'
 import { formatDate } from './client-api'
 import { permissionLabel } from '@/lib/security-access/labels'
 import { EmptyState, FilterChips, SearchInput, ShowMore, useLimit } from './ui'
+import { useReadModel } from './useSecurityAccessData'
 
 const ACTION_LABELS: Record<string, string> = {
   'assignment.granted': 'Access granted', 'assignment.revoked': 'Access revoked', 'assignment.derived': 'Lifecycle access derived',
-  'assignment.restored': 'Automatic access restored', 'assignment.removed': 'Access removed with its role', 'role.deleted': 'Role deleted',
+  'assignment.restored': 'Automatic access restored', 'policy_restore': 'Revoked grant restored', 'assignment.removed': 'Access removed with its role', 'role.deleted': 'Role deleted',
   'legacy_authorization.locked': 'Legacy authorization locked',
   'access_request.submitted': 'Access requested', 'access_request.approved': 'Request approved', 'access_request.denied': 'Request denied',
   'access_request.cancelled': 'Request cancelled', 'access_request.expired': 'Request expired',
@@ -27,7 +28,7 @@ const nameMap = (people: any[], actors: any[]) => {
 
 type ChangeFilter = 'all' | 'access' | 'governance' | 'lifecycle' | 'modes'
 const CATEGORY: Array<[ChangeFilter, (action: string) => boolean]> = [
-  ['access', a => a.startsWith('assignment.') || a.startsWith('identity.')],
+  ['access', a => a.startsWith('assignment.') || a.startsWith('identity.') || a === 'policy_restore'],
   ['governance', a => /^(access_request|delegation|access_review|sod)\./.test(a)],
   ['lifecycle', a => a.startsWith('lifecycle.') || a === 'governance.maintenance'],
   ['modes', a => a.startsWith('migration_mode.') || a.startsWith('legacy_authorization.') || a.startsWith('scope.')],
@@ -35,10 +36,19 @@ const CATEGORY: Array<[ChangeFilter, (action: string) => boolean]> = [
 const categoryOf = (action: string): ChangeFilter => CATEGORY.find(([, test]) => test(action))?.[0] ?? 'all'
 
 /** Parity evidence: legacy role definitions vs Security & Access. */
-export function ParityEvidence({ governance }: { governance: any | null }) {
+export function ParityEvidence({ scopeKey = '' }: { scopeKey?: string }) {
   const [query, setQuery] = useState('')
   const [onlyGaps, setOnlyGaps] = useState(false)
-  if (!governance) return <EmptyState>Parity evidence needs the Security audit view.</EmptyState>
+  // Expensive (an identity × permission analysis): loaded only while this section is open.
+  const model = useReadModel<any>('/api/security-access/governance/parity', scopeKey)
+  if (model.status === 'denied') return <EmptyState>Parity evidence needs the Security audit view.</EmptyState>
+  if (model.status === 'unauthenticated') return <EmptyState>Your session has expired. Sign in again.</EmptyState>
+  if (!model.data) {
+    if (model.status === 'loading') return <div role="status" aria-live="polite" className="rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-500">Analysing parity evidence… this can take several seconds.</div>
+    return <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><span>Parity evidence is temporarily unavailable. {model.error}</span>
+      <button type="button" onClick={model.reload} className="rounded-lg border border-orange-300 bg-white px-3 py-1.5 font-medium text-orange-700 hover:bg-orange-50">Retry</button></div>
+  }
+  const governance = model.data
   const parity: any[] = governance.shadowParity || []
   const q = query.trim().toLowerCase()
   const rows = parity.filter((p: any) => (!onlyGaps || p.legacy_allow_new_deny || p.legacy_deny_new_allow || p.other_mismatch)
@@ -47,9 +57,10 @@ export function ParityEvidence({ governance }: { governance: any | null }) {
     <div className="border-b border-gray-100 p-4"><h2 className="font-semibold text-gray-950">Parity evidence</h2>
       <p className="text-sm text-gray-500">Analytic check of every active business identity: legacy role definition vs Security & Access in the person's own organization. Observed shadow comparisons from the last 30 days follow.</p></div>
     <div className="grid gap-3 border-b border-gray-100 p-4 text-sm sm:grid-cols-3">
-      <div><div className="text-2xl font-semibold">{governance.compatParity?.checked ?? 0}</div><div className="text-gray-500">identity × permission checks</div></div>
-      <div><div className={`text-2xl font-semibold ${governance.compatParity?.legacyAllowNewDeny ? 'text-red-700' : ''}`}>{governance.compatParity?.legacyAllowNewDeny ?? 0}</div><div className="text-gray-500">legacy access missing in S&A</div></div>
-      <div><div className="text-2xl font-semibold">{governance.compatParity?.legacyDenyNewAllow ?? 0}</div><div className="text-gray-500">explicit S&A grants beyond legacy</div></div>
+      {!governance.compatParity && <p className="text-gray-500 sm:col-span-3">The analytic parity report is not installed in this environment.</p>}
+      <div><div className="text-2xl font-semibold">{governance.compatParity?.checked ?? '—'}</div><div className="text-gray-500">identity × permission checks</div></div>
+      <div><div className={`text-2xl font-semibold ${governance.compatParity?.legacyAllowNewDeny ? 'text-red-700' : ''}`}>{governance.compatParity?.legacyAllowNewDeny ?? '—'}</div><div className="text-gray-500">legacy access missing in S&A</div></div>
+      <div><div className="text-2xl font-semibold">{governance.compatParity?.legacyDenyNewAllow ?? '—'}</div><div className="text-gray-500">explicit S&A grants beyond legacy</div></div>
     </div>
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-4 py-2">
       <FilterChips label="Show" value={onlyGaps ? 'gaps' : 'all'} onChange={v => setOnlyGaps(v === 'gaps')} items={[
@@ -62,7 +73,7 @@ export function ParityEvidence({ governance }: { governance: any | null }) {
       <span className="font-medium text-gray-800">{permissionLabel(p.permission_key).label}</span>
       <span className="text-gray-500">{p.total} decisions · {p.match_allow + p.match_deny} match · <span className={p.legacy_allow_new_deny ? 'text-amber-700' : ''}>{p.legacy_allow_new_deny} legacy-only</span> · {p.legacy_deny_new_allow} new-only · {p.other_mismatch} other</span>
     </div>)}</div>
-    {!rows.length && <EmptyState>{parity.length ? 'No permissions match.' : 'No decisions recorded in the last 30 days.'}</EmptyState>}
+    {!rows.length && <EmptyState>{parity.length ? 'No permissions match.' : governance.shadowParityAvailable === false ? 'Shadow parity is not installed in this environment.' : 'No decisions recorded in the last 30 days.'}</EmptyState>}
   </section>
 }
 

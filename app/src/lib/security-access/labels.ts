@@ -50,6 +50,7 @@ const RESOURCES: Record<string, { noun: string; group: string; resourceType: str
   'ecommerce.outdoor': { noun: 'Outdoor Store', group: 'E-Commerce', resourceType: 'outdoor_store' },
   'customer.crm': { noun: 'CRM Module', group: 'Customer & Growth', resourceType: 'crm_module' },
   'platform.notification_monitor': { noun: 'Delivery Monitors', group: 'Platform', resourceType: 'notification_monitor' },
+  'platform.system_logs': { noun: 'System Logs', group: 'Platform', resourceType: 'system_logs' },
   'supply_chain.order': { noun: 'Orders', group: 'Supply Chain', resourceType: 'order' },
   'supply_chain.document': { noun: 'Order Documents', group: 'Supply Chain', resourceType: 'document' },
   'inventory.opening_balance': { noun: 'Opening Balance', group: 'Inventory', resourceType: 'opening_balance' },
@@ -68,7 +69,15 @@ export const PERMISSION_GROUP_ORDER = [
 
 const titleCase = (value: string) => value.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 
+/** Operations whose generated "<Verb> <Noun>" reads wrongly; the display name is fixed here (presentation only). */
+const LABEL_OVERRIDES: Record<string, PermissionLabel> = {
+  'platform.user.password_reset': { label: 'Reset User Password', group: 'Identity', resourceType: 'identity' },
+  'platform.system_logs.view': { label: 'View System Logs', group: 'Platform', resourceType: 'system_logs' },
+}
+
 export function permissionLabel(permissionKey: string): PermissionLabel {
+  const override = LABEL_OVERRIDES[permissionKey]
+  if (override) return override
   const [module = '', resource = '', action = ''] = permissionKey.split('.')
   const known = RESOURCES[`${module}.${resource}`]
   const verb = ACTIONS[action] ?? titleCase(action)

@@ -2,27 +2,30 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MODE_LABELS, modeLabel } from '@/lib/security-access/labels'
+import { MODE_NOTE_MAX, MODE_REASON_MIN } from '@/lib/security-access/mode-change-rules'
 import { callApi } from './client-api'
 import { FOCUS } from './ui'
 
 const MODES = ['LEGACY_ENFORCED', 'SHADOW', 'NEW_ENFORCED', 'LEGACY_RETIRED'] as const
 type Selection = 'all' | 'eligible_only'
 
-interface PreviewRow { permissionKey: string; label: string; currentMode: string; targetMode: string; status: 'change' | 'unchanged' | 'blocked'; blockers: Array<{ code: string; message: string }> }
+interface PreviewRow { permissionKey: string; label: string; currentMode: string; targetMode: string; status: 'change' | 'unchanged' | 'blocked' | 'kept_retired'; blockers: Array<{ code: string; message: string }> }
 interface Preview {
   group: { id: string; name: string; total: number }
   targetMode: string
   rows: PreviewRow[]
-  counts: { change: number; unchanged: number; blocked: number }
+  counts: { change: number; unchanged: number; blocked: number; keptRetired?: number }
+  /** An actual change back to Legacy enforced / Monitoring: a reason is required. */
+  reasonRequired?: boolean
   previewHash: string
   canApplyAll: boolean
   canApplyEligibleOnly: boolean
 }
-interface Result { batchId: string; changed: number; unchanged: number; skipped: number; replayed: boolean; items: Array<{ permissionKey: string; status: string }> }
+interface Result { batchId: string; changed: number; unchanged: number; skipped: number; keptRetired?: number; replayed: boolean; items: Array<{ permissionKey: string; status: string }> }
 
 const newKey = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(16)}-0000-4000-8000-${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`)
-const STATUS_TEXT = { change: 'Will change', unchanged: 'Already in target mode', blocked: 'Blocked' } as const
-const STATUS_TONE = { change: 'text-emerald-700', unchanged: 'text-gray-500', blocked: 'text-rose-700' } as const
+const STATUS_TEXT = { change: 'Will change', unchanged: 'Already in target mode', blocked: 'Blocked', kept_retired: 'Already using new access — kept retired' } as const
+const STATUS_TONE = { change: 'text-emerald-700', unchanged: 'text-gray-500', blocked: 'text-rose-700', kept_retired: 'text-purple-700' } as const
 
 interface Props {
   groupId: string
@@ -44,6 +47,7 @@ export default function BulkModeDialog({ groupId, groupName, total, onClose, onC
   const [loading, setLoading] = useState(false)
   const [selection, setSelection] = useState<Selection>('all')
   const [reason, setReason] = useState('')
+  const [noteOpen, setNoteOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<{ text: string; code?: string } | null>(null)
   const [result, setResult] = useState<Result | null>(null)
@@ -68,7 +72,10 @@ export default function BulkModeDialog({ groupId, groupName, total, onClose, onC
     idempotencyKey.current = newKey()
   }, [groupId])
 
-  const reasonOk = reason.trim().length >= 10
+  const reasonRequired = !!preview?.reasonRequired
+  const trimmedReason = reason.trim()
+  const reasonOk = trimmedReason.length <= MODE_NOTE_MAX && (!reasonRequired || trimmedReason.length >= MODE_REASON_MIN)
+  const kept = preview?.counts.keptRetired ?? 0
   const applicable = !!preview && (selection === 'all' ? preview.canApplyAll : preview.canApplyEligibleOnly)
   const toApply = preview ? preview.counts.change : 0
 
@@ -77,7 +84,7 @@ export default function BulkModeDialog({ groupId, groupName, total, onClose, onC
     submittingRef.current = true
     setSubmitting(true); setError(null)
     const res = await callApi('/api/security-access/modes/bulk', {
-      body: { action: 'apply', groupId, mode: preview.targetMode, selection, reason: reason.trim(), previewHash: preview.previewHash, idempotencyKey: idempotencyKey.current },
+      body: { action: 'apply', groupId, mode: preview.targetMode, selection, ...(trimmedReason ? { reason: trimmedReason } : {}), previewHash: preview.previewHash, idempotencyKey: idempotencyKey.current },
     })
     submittingRef.current = false
     setSubmitting(false)
@@ -126,8 +133,10 @@ export default function BulkModeDialog({ groupId, groupName, total, onClose, onC
             <span className="font-medium text-gray-900">{preview.group.name} → {modeLabel(preview.targetMode).label}</span>
             <span className="text-emerald-700">{preview.counts.change} will change</span>
             <span className="text-gray-600">{preview.counts.unchanged} already in target mode</span>
+            {kept > 0 && <span className="text-purple-700">{kept} already using new access — kept retired</span>}
             <span className={preview.counts.blocked ? 'text-rose-700' : 'text-gray-600'}>{preview.counts.blocked} blocked</span>
           </div>
+          {kept > 0 && <p className="text-xs text-gray-600">Legacy Retired permissions already use only the new access model, so this group change leaves them retired. To move one back to New Access Active, change it individually.</p>}
 
           <div className="max-h-72 overflow-auto rounded-lg border border-gray-200">
             <table className="w-full text-sm">
@@ -137,7 +146,7 @@ export default function BulkModeDialog({ groupId, groupName, total, onClose, onC
               </thead>
               <tbody>{preview.rows.map(r => <tr key={r.permissionKey} className="border-t border-gray-100 align-top">
                 <th scope="row" className="px-3 py-1.5 text-left font-normal"><div className="text-gray-900">{r.label}</div><code className="text-[11px] text-gray-400">{r.permissionKey}</code></th>
-                <td className="px-3 py-1.5 text-xs text-gray-700">{modeLabel(r.currentMode).label} → {modeLabel(r.targetMode).label}</td>
+                <td className="px-3 py-1.5 text-xs text-gray-700">{r.status === 'kept_retired' ? `${modeLabel(r.currentMode).label} (kept)` : `${modeLabel(r.currentMode).label} → ${modeLabel(r.targetMode).label}`}</td>
                 <td className="px-3 py-1.5 text-xs">
                   <span className={`font-medium ${STATUS_TONE[r.status]}`}>{STATUS_TEXT[r.status]}</span>
                   {r.blockers.map(b => <div key={b.code} className="text-rose-700">{b.message}</div>)}
@@ -151,7 +160,7 @@ export default function BulkModeDialog({ groupId, groupName, total, onClose, onC
             <label className="flex gap-2 text-sm">
               <input type="radio" name="bulk-selection" checked={selection === 'all'} onChange={() => pickSelection('all')} className="mt-1" />
               <span><span className="font-medium text-gray-900">All permissions</span>
-                <span className="block text-xs text-gray-500">{preview.counts.blocked > 0 ? 'Disabled while any permission is blocked: nothing will change.' : 'Every permission that is not already in the target mode changes together.'}</span></span>
+                <span className="block text-xs text-gray-500">{preview.counts.blocked > 0 ? 'Disabled while any permission is blocked: nothing will change.' : `Every permission that is not already in the target mode changes together${kept > 0 ? ' (retired permissions are kept)' : ''}.`}</span></span>
             </label>
             {preview.counts.blocked > 0 && <label className={`flex gap-2 text-sm ${preview.canApplyEligibleOnly ? '' : 'opacity-50'}`}>
               <input type="radio" name="bulk-selection" checked={selection === 'eligible_only'} disabled={!preview.canApplyEligibleOnly} onChange={() => pickSelection('eligible_only')} className="mt-1" />
@@ -160,15 +169,26 @@ export default function BulkModeDialog({ groupId, groupName, total, onClose, onC
             </label>}
           </fieldset>
 
-          <div>
-            <label htmlFor="bulk-reason" className="text-sm font-medium text-gray-900">Reason (recorded in the audit log)</label>
-            <textarea id="bulk-reason" value={reason} onChange={e => setReason(e.target.value)} rows={2} maxLength={500}
-              className="mt-1 w-full rounded-lg border border-gray-200 p-2 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-100" />
-            {!reasonOk && <p className="text-xs text-gray-500">At least 10 characters.</p>}
-          </div>
+          {reasonRequired
+            ? <div>
+              <label htmlFor="bulk-reason" className="text-sm font-medium text-gray-900">Reason (required, recorded in the audit log)</label>
+              <textarea id="bulk-reason" value={reason} onChange={e => setReason(e.target.value)} rows={2} maxLength={MODE_NOTE_MAX}
+                className="mt-1 w-full rounded-lg border border-gray-200 p-2 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-100" />
+              {!reasonOk && <p className="text-xs text-gray-500">Moving back to {modeLabel(preview.targetMode).label} needs a reason of at least {MODE_REASON_MIN} characters.</p>}
+            </div>
+            : <div className="text-sm">
+              <p className="text-xs text-gray-500">Your name, the time, each permission&apos;s old and new mode and what was changed, kept or skipped are recorded automatically.</p>
+              {!noteOpen
+                ? <button type="button" onClick={() => setNoteOpen(true)} className={`mt-1 rounded font-medium text-orange-700 underline ${FOCUS}`}>Add note</button>
+                : <div className="mt-1">
+                  <label htmlFor="bulk-reason" className="font-medium text-gray-900">Note (optional)</label>
+                  <textarea id="bulk-reason" value={reason} onChange={e => setReason(e.target.value)} rows={2} maxLength={MODE_NOTE_MAX} autoFocus
+                    className="mt-1 w-full rounded-lg border border-gray-200 p-2 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-100" />
+                </div>}
+            </div>}
 
           {!applicable && <p role="status" className="text-sm text-gray-600">
-            {preview.counts.change === 0 ? 'No changes remain: every permission is already in the target mode or blocked.' : 'Apply is disabled because some permissions are blocked and “All permissions” is selected. Nothing will change.'}
+            {preview.counts.change === 0 ? 'No changes remain: every permission is already in the target mode, kept retired or blocked.' : 'Apply is disabled because some permissions are blocked and “All permissions” is selected. Nothing will change.'}
           </p>}
           <div className="flex justify-end gap-2">
             <button type="button" onClick={onClose} disabled={submitting} className={`rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 ${FOCUS}`}>Cancel</button>
@@ -181,7 +201,7 @@ export default function BulkModeDialog({ groupId, groupName, total, onClose, onC
 
         {result && <div role="status" className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
           <p className="font-medium">{result.replayed ? 'This change was already applied; nothing was repeated.' : 'Group mode changed and audited.'}</p>
-          <p>{result.changed} changed · {result.unchanged} unchanged · {result.skipped} skipped</p>
+          <p>{result.changed} changed · {result.unchanged} unchanged{result.keptRetired ? ` · ${result.keptRetired} kept retired` : ''} · {result.skipped} skipped</p>
           <p className="text-xs text-emerald-800">Batch {result.batchId}</p>
           <div className="flex justify-end"><button type="button" onClick={onClose} className={`rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-sm ${FOCUS}`}>Done</button></div>
         </div>}
