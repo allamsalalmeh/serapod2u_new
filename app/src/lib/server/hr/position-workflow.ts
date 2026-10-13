@@ -19,6 +19,63 @@ export interface CreateChangeRequestInput {
   effectiveDate?: string | null
 }
 
+/**
+ * Every record a change request points at must belong to the request's organization. The workflow runs with the
+ * service role (no RLS), so this is the only tenant boundary for ids taken from the request body. Checked when the
+ * request is created and again right before activation (covers requests stored before this check existed).
+ */
+export async function validateChangeReferences(
+  admin: any,
+  organizationId: string,
+  positionId: string | null | undefined,
+  payload: Record<string, unknown>,
+): Promise<{ ok: true; slot: unknown } | { ok: false; error: string }> {
+  const inOrg = async (table: string, id: unknown) => {
+    const { data } = await admin.from(table).select('id').eq('id', String(id)).eq('organization_id', organizationId).maybeSingle()
+    return !!data
+  }
+
+  let slot: unknown = null
+  if (positionId) {
+    const { data } = await admin
+      .from('hr_position_slots')
+      .select('*')
+      .eq('id', positionId)
+      .eq('organization_id', organizationId)
+      .maybeSingle()
+    if (!data) return { ok: false, error: 'Position not found' }
+    slot = data
+  }
+
+  const refs: Array<[string, string, string]> = [
+    ['parent_position_id', 'hr_position_slots', 'Reports-to position not found'],
+    ['employee_user_id', 'users', 'Employee not found in this organization'],
+    ['job_classification_id', 'hr_job_classifications', 'Job classification not found'],
+    ['department_id', 'departments', 'Department not found'],
+  ]
+  for (const [key, table, message] of refs) {
+    const value = payload[key]
+    if (value !== null && value !== undefined && value !== '' && !(await inOrg(table, value))) return { ok: false, error: message }
+  }
+  return { ok: true, slot }
+}
+
+/**
+ * Whether the caller may decide (approve / reject / return) a pending request: a resolved USER step for them, or a
+ * POLICY step (any hr.employee.manage holder other than the submitter; the caller checks both of those).
+ */
+async function callerMayDecide(admin: any, requestId: string, userId: string) {
+  const { data: steps } = await admin
+    .from('hr_position_approval_steps')
+    .select('*')
+    .eq('change_request_id', requestId)
+    .eq('status', 'pending')
+    .order('step_no')
+  const list = (steps ?? []) as any[]
+  const allowed = list.some((s) => s.approver_type === 'POLICY' || (s.approver_type === 'USER' && s.approver_ref === userId))
+  return { allowed, steps: list }
+}
+
 /** Create a DRAFT change request (never modifies live data). */
 export async function createPositionChangeRequest(
   admin: any,
@@ -26,16 +83,9 @@ export async function createPositionChangeRequest(
   actorUserId: string,
   input: CreateChangeRequestInput,
 ) {
-  let before: unknown = null
-  if (input.positionId) {
-    const { data: slot } = await admin
-      .from('hr_position_slots')
-      .select('*')
-      .eq('id', input.positionId)
-      .eq('organization_id', organizationId)
-      .maybeSingle()
-    before = slot ?? null
-  }
+  const refs = await validateChangeReferences(admin, organizationId, input.positionId, input.changePayload)
+  if (!refs.ok) return { success: false, error: refs.error, status: 400 }
+  const before = refs.slot
 
   const { data, error } = await admin
     .from('hr_position_change_requests')
@@ -138,19 +188,11 @@ export async function approveChangeRequest(admin: any, ctx: HrAuthContext, id: s
   if (req.submitted_by === ctx.userId) return { success: false, error: 'You cannot approve your own request', status: 403 }
   if (!(await hrCan(ctx, 'hr.employee.manage'))) return { success: false, error: 'Unauthorized', status: 403 }
 
-  const { data: steps } = await admin
-    .from('hr_position_approval_steps')
-    .select('*')
-    .eq('change_request_id', id)
-    .eq('status', 'pending')
-    .order('step_no')
+  const { allowed, steps: list } = await callerMayDecide(admin, id, ctx.userId)
+  if (!allowed) return { success: false, error: 'You are not a resolved approver for this request', status: 403 }
 
-  const list = (steps ?? []) as any[]
-  const isConcreteApprover = list.some((s) => s.approver_type === 'USER' && s.approver_ref === ctx.userId)
-  const hasPolicyStep = list.some((s) => s.approver_type === 'POLICY')
-  if (!isConcreteApprover && !hasPolicyStep) {
-    return { success: false, error: 'You are not a resolved approver for this request', status: 403 }
-  }
+  const refs = await validateChangeReferences(admin, req.organization_id, req.position_id, req.change_payload ?? {})
+  if (!refs.ok) return { success: false, error: refs.error, status: 409 }
 
   const now = new Date().toISOString()
   for (const s of list) {
@@ -207,6 +249,9 @@ export async function rejectChangeRequest(admin: any, ctx: HrAuthContext, id: st
   if (req.status !== 'pending') return { success: false, error: 'Request is not pending approval', status: 409 }
   if (req.submitted_by === ctx.userId) return { success: false, error: 'You cannot reject your own request', status: 403 }
   if (!(await hrCan(ctx, 'hr.employee.manage'))) return { success: false, error: 'Unauthorized', status: 403 }
+  if (!(await callerMayDecide(admin, id, ctx.userId)).allowed) {
+    return { success: false, error: 'You are not a resolved approver for this request', status: 403 }
+  }
 
   const { data, error } = await admin
     .from('hr_position_change_requests')
@@ -231,6 +276,9 @@ export async function returnChangeRequest(admin: any, ctx: HrAuthContext, id: st
   if (req.status !== 'pending') return { success: false, error: 'Request is not pending approval', status: 409 }
   if (req.submitted_by === ctx.userId) return { success: false, error: 'You cannot return your own request', status: 403 }
   if (!(await hrCan(ctx, 'hr.employee.manage'))) return { success: false, error: 'Unauthorized', status: 403 }
+  if (!(await callerMayDecide(admin, id, ctx.userId)).allowed) {
+    return { success: false, error: 'You are not a resolved approver for this request', status: 403 }
+  }
 
   const { data, error } = await admin
     .from('hr_position_change_requests')

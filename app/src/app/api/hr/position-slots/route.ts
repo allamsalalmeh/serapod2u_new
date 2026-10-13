@@ -18,6 +18,8 @@ export async function GET(request: NextRequest) {
     }
     const { organizationId } = ctxResult.data
     if (!organizationId) return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
+    // Position master (occupants included) is an HR view, read with the service role (same rule as /api/hr/employees).
+    if (!(await hrCan(ctxResult.data, 'hr.employee.view'))) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
 
     const params = request.nextUrl.searchParams
     const admin = createAdminClient() as any
@@ -108,7 +110,7 @@ export async function POST(request: NextRequest) {
       effectiveDate: body.effective_date ?? null,
     })
 
-    if (!result.success) return NextResponse.json({ success: false, error: result.error }, { status: 500 })
+    if (!result.success) return NextResponse.json({ success: false, error: result.error }, { status: result.status ?? 500 })
     return NextResponse.json({ success: true, data: result.data, position_code: positionCode })
   } catch (error: any) {
     console.error('Failed to create position change request:', error)

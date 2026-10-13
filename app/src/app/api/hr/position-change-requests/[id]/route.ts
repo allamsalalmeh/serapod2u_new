@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { getHrAuthContext } from '@/lib/server/hrAccess'
+import { getHrAuthContext, hrCan } from '@/lib/server/hrAccess'
 import { loadChangeRequest } from '@/lib/server/hr/position-workflow'
 
 export const dynamic = 'force-dynamic'
@@ -19,6 +19,8 @@ export async function GET(
     }
     const { organizationId } = ctxResult.data
     if (!organizationId) return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
+    // Change requests carry assignment payloads; only HR administrators read them (same rule as /api/hr/employees).
+    if (!(await hrCan(ctxResult.data, 'hr.employee.manage'))) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
 
     const { id } = await params
     const admin = createAdminClient() as any

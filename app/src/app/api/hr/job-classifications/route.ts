@@ -16,6 +16,8 @@ export async function GET() {
     }
     const { organizationId } = ctxResult.data
     if (!organizationId) return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
+    // Job classifications are HR reference data (same rule as /api/hr/employees).
+    if (!(await hrCan(ctxResult.data, 'hr.employee.view'))) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
 
     const admin = createAdminClient() as any
     const result = await listJobClassifications(admin, organizationId)

@@ -142,6 +142,7 @@ export async function activateAssignment(
     const { error } = await admin
       .from('hr_position_assignments')
       .update({ effective_to: req.effective_date ?? now(), status: 'ended' })
+      .eq('organization_id', orgId)
       .eq('position_id', positionId)
       .eq('employee_user_id', employeeId)
       .eq('status', 'active')

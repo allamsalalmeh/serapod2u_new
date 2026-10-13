@@ -20,6 +20,8 @@ export async function GET(
     }
     const { organizationId } = ctxResult.data
     if (!organizationId) return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
+    // Position detail and history are an HR view, read with the service role (same rule as /api/hr/employees).
+    if (!(await hrCan(ctxResult.data, 'hr.employee.view'))) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
 
     const { id } = await params
     const admin = createAdminClient() as any
@@ -66,7 +68,7 @@ export async function PATCH(
         },
         effectiveDate: body.effective_date ?? null,
       })
-      if (!result.success) return NextResponse.json({ success: false, error: result.error }, { status: 500 })
+      if (!result.success) return NextResponse.json({ success: false, error: result.error }, { status: result.status ?? 500 })
       return NextResponse.json({ success: true, data: result.data })
     }
 
@@ -82,7 +84,7 @@ export async function PATCH(
       changePayload: payload,
       effectiveDate: body.effective_date ?? null,
     })
-    if (!result.success) return NextResponse.json({ success: false, error: result.error }, { status: 500 })
+    if (!result.success) return NextResponse.json({ success: false, error: result.error }, { status: result.status ?? 500 })
     return NextResponse.json({ success: true, data: result.data })
   } catch (error: any) {
     console.error('Failed to update position slot:', error)

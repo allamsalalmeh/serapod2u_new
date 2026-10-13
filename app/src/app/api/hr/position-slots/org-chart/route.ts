@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { getHrAuthContext } from '@/lib/server/hrAccess'
+import { getHrAuthContext, hrCan } from '@/lib/server/hrAccess'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,6 +20,8 @@ export async function GET(request: NextRequest) {
     }
     const { organizationId } = ctxResult.data
     if (!organizationId) return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
+    // Position hierarchy is an HR view; staff use /api/hr/org-chart/staff (same rule as /api/hr/employees).
+    if (!(await hrCan(ctxResult.data, 'hr.employee.view'))) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
 
     const asOf = request.nextUrl.searchParams.get('as_of') ?? new Date().toISOString().slice(0, 10)
     const admin = createAdminClient() as any
