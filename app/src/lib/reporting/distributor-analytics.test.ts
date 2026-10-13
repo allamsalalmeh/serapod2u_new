@@ -800,3 +800,35 @@ describe('browser payload stays report-sized', () => {
     expect(JSON.stringify(report).length).toBeLessThan(120_000)
   })
 })
+
+describe('Top Products lists every flavour ordered in the period', () => {
+  it('keeps all products, ranked by Order Value, not only the top 10', () => {
+    const topProducts = Array.from({ length: 14 }, (_, index) => ({
+      variantId: `v${index + 1}`,
+      productId: 'p1',
+      productName: 'Cellera Hero',
+      variantName: `Flavour ${index + 1}`,
+      productCode: null,
+      units: 10 + index,
+      orderValue: (index + 1) * 100,
+    }))
+    const report = buildDistributorAnalyticsReport(aggregate({
+      current: { orders: 14, orderValue: 10_500, activeDistributors: 1 },
+      topProducts,
+    }), NOW)
+
+    expect(report.topProducts).toHaveLength(14)
+    expect(report.topProducts[0].variantId).toBe('v14')
+    expect(report.topProducts[13].variantId).toBe('v1')
+    expect(report.topProducts.map((row) => row.rank)).toEqual(Array.from({ length: 14 }, (_, index) => index + 1))
+  })
+
+  it('the database report no longer stops at 10 products', () => {
+    const sql = readFileSync(`${__dirname}/../../../../supabase/migrations/20261013150000_distributor_analytics_all_products.sql`, 'utf8')
+    const topProductsCte = sql.slice(sql.indexOf('top_products AS ('), sql.indexOf('recent AS ('))
+    expect(topProductsCte).toContain('GROUP BY oi.variant_id')
+    expect(topProductsCte).not.toMatch(/LIMIT/i)
+    expect(sql).toContain('SECURITY INVOKER')
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.reporting_distributor_analytics(text, uuid, text) TO authenticated;')
+  })
+})
