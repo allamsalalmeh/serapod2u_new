@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useSupabaseAuth } from '@/lib/hooks/useSupabaseAuth'
 import { getStorageUrl } from '@/lib/utils'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -24,6 +25,9 @@ import {
   List
 } from 'lucide-react'
 import SupplyChainPageHeader from '@/modules/supply-chain/components/SupplyChainPageHeader'
+import { MANUFACTURER_PRODUCTS_PARAM } from '@/lib/organizations/manufacturer-categories'
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 interface Product {
   id: string
@@ -69,7 +73,11 @@ export default function ProductsView({ userProfile, onViewChange }: ProductsView
   const [categories, setCategories] = useState<any[]>([])
   const [brands, setBrands] = useState<any[]>([])
   const [manufacturers, setManufacturers] = useState<any[]>([])
-  const [manufacturerFilter, setManufacturerFilter] = useState('all')
+  // "View products" from a manufacturer deep-links here with ?manufacturer=<organization id>.
+  const searchParams = useSearchParams()
+  const requestedManufacturer = searchParams?.get(MANUFACTURER_PRODUCTS_PARAM) || ''
+  const manufacturerParam = UUID_PATTERN.test(requestedManufacturer) ? requestedManufacturer : ''
+  const [manufacturerFilter, setManufacturerFilter] = useState(() => manufacturerParam || 'all')
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [sortColumn, setSortColumn] = useState<string | null>(null)
@@ -109,6 +117,11 @@ export default function ProductsView({ userProfile, onViewChange }: ProductsView
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isReady])
+
+  useEffect(() => {
+    setManufacturerFilter(manufacturerParam || 'all')
+    setCurrentPage(1)
+  }, [manufacturerParam])
 
   useEffect(() => {
     if (isReady) {
@@ -304,7 +317,18 @@ export default function ProductsView({ userProfile, onViewChange }: ProductsView
         .order('org_name')
 
       if (error) throw error
-      setManufacturers(data || [])
+      const list = data || []
+      // Keep a deep-linked manufacturer selectable even when it is inactive.
+      if (manufacturerParam && !list.some((manufacturer: any) => manufacturer.id === manufacturerParam)) {
+        const { data: linked } = await supabase
+          .from('organizations')
+          .select('id, org_name, org_code')
+          .eq('id', manufacturerParam)
+          .in('org_type_code', ['MANU', 'MFG'])
+          .maybeSingle()
+        if (linked) list.push({ ...linked, org_name: `${linked.org_name} (inactive)` })
+      }
+      setManufacturers(list)
     } catch (error) {
       console.error('Error fetching manufacturers:', error)
     }

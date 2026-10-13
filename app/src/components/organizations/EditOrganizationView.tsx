@@ -14,7 +14,16 @@ import { Loader2, ArrowLeft, Save, Info, AlertTriangle, Star, Link as LinkIcon, 
 import OrgLogoUpload from './OrgLogoUpload'
 import DistributorOrderFulfillmentCard from './DistributorOrderFulfillmentCard'
 import OnlineShopWarehouseCard from './OnlineShopWarehouseCard'
-import ManufacturerCategoriesCard from './ManufacturerCategoriesCard'
+import ManufacturerCategoryField from './ManufacturerCategoryField'
+import {
+  diffCategorySelection,
+  loadCategoryOptions,
+  loadManufacturerCategorySummaries,
+  saveManufacturerCategories,
+  validateManufacturerCategories,
+  type CategoryOption,
+  type ManufacturerCategorySummary,
+} from '@/lib/organizations/manufacturer-categories'
 import { compressAvatar, formatFileSize } from '@/lib/utils/imageCompression'
 import {
   getOwnedOrganizationLogoPath,
@@ -77,6 +86,13 @@ export default function EditOrganizationView({ userProfile, onViewChange }: Edit
   const [organization, setOrganization] = useState<Organization | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  // Manufacturer classification (MFG only). Summary: undefined = not loaded, null = unreadable.
+  const [categoryOptions, setCategoryOptions] = useState<CategoryOption[]>([])
+  const [savedCategoryIds, setSavedCategoryIds] = useState<string[]>([])
+  const [categoryIds, setCategoryIds] = useState<string[]>([])
+  const [categorySummary, setCategorySummary] = useState<ManufacturerCategorySummary | null | undefined>(undefined)
+  const [categorySummaryLoading, setCategorySummaryLoading] = useState(false)
+  const [categoryError, setCategoryError] = useState('')
   const [formData, setFormData] = useState<OrganizationFormData>({})
   const [parentOrgs, setParentOrgs] = useState<ParentOrganization[]>([])
   const [filteredParentOrgs, setFilteredParentOrgs] = useState<ParentOrganization[]>([])
@@ -392,6 +408,36 @@ export default function EditOrganizationView({ userProfile, onViewChange }: Edit
     setFormData(prev => ({ ...prev, [field]: value }))
   }
 
+  const loadManufacturerCategories = async (orgId: string) => {
+    setCategorySummaryLoading(true)
+    try {
+      const [options, summaries] = await Promise.all([
+        loadCategoryOptions(supabase).catch((loadError) => {
+          console.error('Error fetching product categories:', loadError)
+          return [] as CategoryOption[]
+        }),
+        loadManufacturerCategorySummaries(supabase, [orgId]),
+      ])
+      setCategoryOptions(options)
+      // null = summary unreadable; the field is then read-only so nothing can be cleared by mistake.
+      const summary = summaries ? summaries.get(orgId) || null : null
+      setCategorySummary(summary)
+      const assignedIds = (summary?.assigned || []).map((category) => category.category_id)
+      setSavedCategoryIds(assignedIds)
+      setCategoryIds(assignedIds)
+      setCategoryError('')
+    } finally {
+      setCategorySummaryLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (isReady && organization?.org_type_code === 'MFG') {
+      void loadManufacturerCategories(organization.id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReady, organization?.id, organization?.org_type_code])
+
   const handleLogoChange = (file: File | null) => {
     setLogoFile(file)
     if (file) setLogoRemoved(false)
@@ -412,6 +458,25 @@ export default function EditOrganizationView({ userProfile, onViewChange }: Edit
 
   const handleSave = async () => {
     let uploadedLogoPath: string | null = null
+
+    // Only an actual change is validated and saved, so unrelated edits of an
+    // unclassified manufacturer never force a category backfill.
+    const categoryChange = organization?.org_type_code === 'MFG' && categorySummary
+      ? diffCategorySelection(savedCategoryIds, categoryIds)
+      : null
+    if (categoryChange?.changed) {
+      const categoryValidation = validateManufacturerCategories({
+        mode: 'edit',
+        saved: savedCategoryIds,
+        selected: categoryIds,
+        options: categoryOptions,
+      })
+      setCategoryError(categoryValidation || '')
+      if (categoryValidation) {
+        toast({ title: 'Check product categories', description: categoryValidation, variant: 'destructive' })
+        return
+      }
+    }
 
     try {
       setSaving(true)
@@ -656,6 +721,22 @@ export default function EditOrganizationView({ userProfile, onViewChange }: Edit
               console.error('❌ Auto-repair failed:', linkError)
             }
           }
+        }
+      }
+
+      if (categoryChange?.changed && organization) {
+        try {
+          await saveManufacturerCategories(supabase, organization.id, categoryIds)
+          await loadManufacturerCategories(organization.id)
+        } catch (categorySaveError: any) {
+          // The organization itself is saved; stay here so the categories can be retried.
+          setCategoryError(categorySaveError?.message || 'Product categories could not be saved.')
+          toast({
+            title: 'Product categories not saved',
+            description: `Organization details were saved. ${categorySaveError?.message || ''}`.trim(),
+            variant: 'destructive'
+          })
+          return
         }
       }
 
@@ -906,6 +987,24 @@ export default function EditOrganizationView({ userProfile, onViewChange }: Edit
                 </SelectContent>
               </Select>
             </div>
+          )}
+
+          {organization?.org_type_code === 'MFG' && (
+            <ManufacturerCategoryField
+              mode="edit"
+              options={categoryOptions}
+              savedIds={savedCategoryIds}
+              value={categoryIds}
+              onChange={(ids) => {
+                setCategoryIds(ids)
+                setCategoryError('')
+              }}
+              summary={categorySummary}
+              summaryLoading={categorySummaryLoading}
+              manufacturerId={organization.id}
+              error={categoryError}
+              disabled={saving || categorySummaryLoading || categorySummary === null}
+            />
           )}
 
           {organization?.org_type_code === 'WH' && parentHqDetails?.org_type_code === 'HQ' && (

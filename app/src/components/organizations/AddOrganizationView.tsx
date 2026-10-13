@@ -12,6 +12,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { ArrowLeft, Building2, Save, AlertCircle, Info, MapPin, Loader2, RefreshCw, CheckCircle2, AlertTriangle } from 'lucide-react'
 import OrgLogoUpload from './OrgLogoUpload'
 import OrganizationImport from './OrganizationImport'
+import ManufacturerCategoryField from './ManufacturerCategoryField'
 import { compressAvatar, formatFileSize } from '@/lib/utils/imageCompression'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { 
@@ -29,6 +30,12 @@ import {
   getFieldRules,
   ORG_CODE_PREFIX_MAP,
 } from '@/lib/utils/orgValidation'
+import {
+  loadCategoryOptions,
+  saveManufacturerCategories,
+  validateManufacturerCategories,
+  type CategoryOption,
+} from '@/lib/organizations/manufacturer-categories'
 
 interface AddOrganizationViewProps {
   userProfile: any
@@ -128,8 +135,24 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
   const [orgCodeStatus, setOrgCodeStatus] = useState<'idle' | 'generating' | 'ready' | 'error'>('idle')
   const [orgCodeError, setOrgCodeError] = useState('')
   const [formWarnings, setFormWarnings] = useState<string[]>([])
+  const [categoryOptions, setCategoryOptions] = useState<CategoryOption[] | null>(null)
+  const [categoryIds, setCategoryIds] = useState<string[]>([])
+  const [categoryError, setCategoryError] = useState('')
 
   const { isReady, supabase } = useSupabaseAuth()
+  const isManufacturer = formData.org_type_code === 'MFG'
+
+  // Product Master categories are only needed once Manufacturer is chosen.
+  useEffect(() => {
+    if (!isReady || !isManufacturer || categoryOptions) return
+    loadCategoryOptions(supabase)
+      .then(setCategoryOptions)
+      .catch((loadError) => {
+        console.error('Error fetching product categories:', loadError)
+        setCategoryOptions([])
+      })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReady, isManufacturer])
 
   useEffect(() => {
     if (isReady) {
@@ -454,6 +477,20 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
       return
     }
 
+    if (isManufacturer) {
+      const categoryValidation = validateManufacturerCategories({
+        mode: 'create',
+        saved: [],
+        selected: categoryIds,
+        options: categoryOptions || [],
+      })
+      setCategoryError(categoryValidation || '')
+      if (categoryValidation) {
+        setError(categoryValidation)
+        return
+      }
+    }
+
     // Validate organization hierarchy constraints
     const parentOrg = formData.parent_org_id 
       ? parentOrgs.find(p => p.id === formData.parent_org_id)
@@ -527,6 +564,17 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
       if (insertError) throw insertError
 
       const newOrgId = data[0].id
+
+      // Classification is saved right after the manufacturer exists; the organization is kept
+      // if this fails, and the admin is taken to Edit to finish (it shows "Not classified").
+      let categorySaveError = ''
+      if (isManufacturer && newOrgId) {
+        try {
+          await saveManufacturerCategories(supabase, newOrgId, categoryIds)
+        } catch (saveError: any) {
+          categorySaveError = saveError?.message || 'Product categories could not be saved.'
+        }
+      }
 
       if ((formData.org_type_code === 'SHOP' || formData.org_type_code === 'DIST') && newOrgId) {
         try {
@@ -668,6 +716,16 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
         } else {
           console.log('ℹ️ Parent is not a distributor, skipping shop_distributors link')
         }
+      }
+
+      if (categorySaveError) {
+        setError(`Manufacturer created, but its product categories were not saved: ${categorySaveError} Opening the manufacturer so you can assign them.`)
+        sessionStorage.setItem('selectedOrgId', newOrgId)
+        sessionStorage.setItem('selectedOrgType', 'MFG')
+        setTimeout(() => {
+          onViewChange('edit-organization')
+        }, 2500)
+        return
       }
 
       setSuccess('Organization created successfully!')
@@ -880,6 +938,24 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
                       )}
                     </>
                   )}
+                </div>
+              )}
+
+              {isManufacturer && (
+                <div className="md:col-span-2">
+                  <ManufacturerCategoryField
+                    mode="create"
+                    options={categoryOptions || []}
+                    savedIds={[]}
+                    value={categoryIds}
+                    onChange={(ids) => {
+                      setCategoryIds(ids)
+                      setCategoryError('')
+                      setError('')
+                    }}
+                    error={categoryError}
+                    disabled={loading || categoryOptions === null}
+                  />
                 </div>
               )}
 
