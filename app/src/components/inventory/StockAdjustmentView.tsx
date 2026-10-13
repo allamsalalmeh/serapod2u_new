@@ -99,8 +99,6 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
-  Boxes,
-  CalendarDays,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -111,7 +109,6 @@ import {
   MessageSquare,
   MoreHorizontal,
   Package,
-  RotateCcw,
   Save,
   Search,
   Upload,
@@ -346,6 +343,8 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
   const [searchTerm, setSearchTerm] = useState('')
   const [showVarianceOnly, setShowVarianceOnly] = useState(false)
   const [showNotCountedOnly, setShowNotCountedOnly] = useState(false)
+  const [showCountedOnly, setShowCountedOnly] = useState(false)
+  const [setupExpanded, setSetupExpanded] = useState(false)
   const [showInactive, setShowInactive] = useState(false)
   const [groupExpanded, setGroupExpanded] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -371,7 +370,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
   const [openingBalancePosted, setOpeningBalancePosted] = useState(false)
   const [postedOpeningCategoryIds, setPostedOpeningCategoryIds] = useState<Set<string>>(new Set())
   const [verificationNow, setVerificationNow] = useState(Date.now())
-  const [visibleColumns, setVisibleColumns] = useState({ unitCost: true, adjustmentValue: true, note: true })
+  const [visibleColumns, setVisibleColumns] = useState({ unitCost: false, adjustmentValue: false, note: true })
   const hasPostStockCountPermission = !permissionLoading && hasPermission(STOCK_COUNT_POST_PERMISSION)
   const permissionGate = stockCountPermissionGate(permissionLoading, hasPostStockCountPermission)
   const isLegacyInitialReadOnly = countType === 'initial_configuration_classification'
@@ -523,8 +522,13 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
     setSelectedGroupId(ALL_GROUP_ID)
     setSearchTerm('')
     setShowNotCountedOnly(false)
+    setShowCountedOnly(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpeningBalanceMode, selectedCategory])
+
+  useEffect(() => {
+    setSetupExpanded(false)
+  }, [currentSessionId])
 
   // Group tabs are secondary filters *within* the selected category, so a
   // category change resets the active group tab and search to the recalculated,
@@ -900,10 +904,39 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
       const variance = varianceForRow(row)
       if (showVarianceOnly && (!variance || variance === 0)) return false
       if (showNotCountedOnly && parseCount(row.physicalCount) !== null) return false
+      if (showCountedOnly && parseCount(row.physicalCount) === null) return false
       if (!query) return true
       return matchesStockCountSearch(row, query)
     })
-  }, [visibleRows, searchTerm, selectedGroupId, showVarianceOnly, showNotCountedOnly])
+  }, [visibleRows, searchTerm, selectedGroupId, showVarianceOnly, showNotCountedOnly, showCountedOnly])
+
+  const countedByGroup = useMemo(() => {
+    const counts = new Map<string, number>()
+    visibleRows.forEach(row => {
+      if (parseCount(row.physicalCount) === null) return
+      counts.set(row.groupId, (counts.get(row.groupId) || 0) + 1)
+      counts.set(ALL_GROUP_ID, (counts.get(ALL_GROUP_ID) || 0) + 1)
+    })
+    return counts
+  }, [visibleRows])
+
+  const rowFilterCounts = useMemo(() => {
+    const scoped = selectedGroupId === ALL_GROUP_ID ? visibleRows : visibleRows.filter(row => row.groupId === selectedGroupId)
+    let counted = 0
+    let variance = 0
+    scoped.forEach(row => {
+      if (parseCount(row.physicalCount) !== null) counted += 1
+      if (varianceForRow(row)) variance += 1
+    })
+    return { all: scoped.length, notCounted: scoped.length - counted, counted, variance }
+  }, [visibleRows, selectedGroupId])
+
+  const rowFilter = showVarianceOnly ? 'variance' : showNotCountedOnly ? 'not_counted' : showCountedOnly ? 'counted' : 'all'
+  const applyRowFilter = (filter: 'all' | 'not_counted' | 'counted' | 'variance') => {
+    setShowVarianceOnly(filter === 'variance')
+    setShowNotCountedOnly(filter === 'not_counted')
+    setShowCountedOnly(filter === 'counted')
+  }
 
   // Operational counting shows the Configuration badge only when a variant
   // genuinely carries more than one. Legacy classification (the Legacy Source →
@@ -1132,6 +1165,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
     const validation = validateStockCountReference(referenceName)
     if (!validation.valid) {
       setReferenceError(validation.message || null)
+      setSetupExpanded(true)
       toast({ title: 'Reference required', description: validation.message, variant: 'destructive' })
       referenceInputRef.current?.focus()
       referenceInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -2297,14 +2331,22 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
     setVerificationError(null)
   }
 
-  const summaryCards = [
-    { label: 'Total Items', value: formatNumber(pageSummary.totalItems), sub: `Across ${Math.max(groups.length - 1, 0)} groups`, icon: Boxes, color: 'text-violet-600 bg-violet-50' },
-    { label: 'Counted', value: formatNumber(pageSummary.counted), sub: `${pageSummary.totalItems ? Math.round((pageSummary.counted / pageSummary.totalItems) * 100) : 0}% of total`, icon: CheckCircle2, color: 'text-green-600 bg-green-50' },
-    { label: 'Not Counted', value: formatNumber(pageSummary.notCounted), sub: `${pageSummary.totalItems ? Math.round((pageSummary.notCounted / pageSummary.totalItems) * 100) : 0}% remaining`, icon: CalendarDays, color: 'text-amber-600 bg-amber-50' },
-    { label: 'Variance Items', value: formatNumber(pageSummary.varianceItems), sub: 'Items with variance', icon: AlertTriangle, color: 'text-red-600 bg-red-50' },
-    { label: 'Net Adjustment', value: `${pageSummary.netAdjustment > 0 ? '+' : ''}${formatNumber(pageSummary.netAdjustment)}`, sub: 'Total units', icon: RotateCcw, color: 'text-[var(--sera-orange)] bg-[var(--sera-orange)]/[0.06]' },
-    { label: 'Estimated Value', value: formatMoney(pageSummary.estimatedValue), sub: 'Based on variance', icon: FileSpreadsheet, color: 'text-purple-600 bg-purple-50' },
-  ]
+  const countedPercent = pageSummary.totalItems ? Math.round((pageSummary.counted / pageSummary.totalItems) * 100) : 0
+  const isStandardCount = !isOpeningBalanceMode && !isClassificationMode && !isLegacyInitialReadOnly
+  const referenceValid = validateStockCountReference(referenceName).valid
+  const setupComplete = Boolean(selectedWarehouse && countDate && referenceValid)
+  const setupCollapsed = isStandardCount && Boolean(currentSessionId) && !setupExpanded && !referenceError && referenceValid
+  const countSteps = [
+    { label: 'Setup', hint: 'Warehouse, date, type', state: setupComplete ? 'done' : 'active' },
+    { label: 'Count', hint: 'Enter physical quantities', state: currentStatus === 'posted' ? 'done' : setupComplete ? 'active' : 'todo' },
+    { label: 'Review & Post', hint: 'Check variances, then post', state: currentStatus === 'posted' ? 'done' : confirmPostOpen ? 'active' : 'todo' },
+  ] as const
+  const rowFilterOptions = [
+    { value: 'all', label: 'All', count: rowFilterCounts.all },
+    { value: 'not_counted', label: 'Not counted', count: rowFilterCounts.notCounted },
+    { value: 'counted', label: 'Counted', count: rowFilterCounts.counted },
+    { value: 'variance', label: 'Variance', count: rowFilterCounts.variance },
+  ] as const
   const warehouseName = warehouseLocations.find(location => location.id === selectedWarehouse)?.org_name || '—'
   const currentDraftMetadata = drafts.find(draft => draft.id === currentSessionId)
   const expirySeconds = verification ? Math.max(0, Math.ceil((new Date(verification.expiresAt).getTime() - verificationNow) / 1000)) : 0
@@ -2362,19 +2404,24 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
           <div className="mb-2 flex items-center gap-2 text-sm text-slate-500">
             <span>Supply Chain</span><ChevronRight className="h-4 w-4" /><span>Inventory</span><ChevronRight className="h-4 w-4" /><span className="font-medium text-slate-900">Stock Count</span>
           </div>
-          <h1 className="text-3xl font-bold tracking-normal text-slate-950">Stock Count</h1>
+          <h1 className="text-2xl font-bold tracking-normal text-slate-950">Stock Count</h1>
           <p className="mt-1 text-sm text-slate-600">Count inventory faster with grouped variants and Excel bulk update.</p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          {onViewChange && <Button variant="outline" onClick={() => onViewChange('inventory')}><ArrowLeft className="mr-2 h-4 w-4" /> Inventory</Button>}
-          <Button
-            variant="outline"
-            onClick={downloadExcel}
-            disabled={isOpeningBalanceReadOnly || (isClassificationMode ? classificationGroups.length === 0 : visibleRows.length === 0)}
-          >
-            <Download className="mr-2 h-4 w-4" /> Download Excel Template
-          </Button>
-          <Button variant="outline" disabled={isOpeningBalanceReadOnly || currentStatus === 'posted'} onClick={() => fileInputRef.current?.click()}><Upload className="mr-2 h-4 w-4" /> Import Updated Excel</Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {onViewChange && <Button variant="ghost" onClick={() => onViewChange('inventory')}><ArrowLeft className="mr-2 h-4 w-4" /> Inventory</Button>}
+          <div className="inline-flex items-center overflow-hidden rounded-md border bg-white" role="group" aria-label="Excel">
+            <span className="flex items-center gap-1.5 border-r px-3 text-sm font-semibold text-slate-600"><FileSpreadsheet className="h-4 w-4" /> Excel</span>
+            <Button
+              variant="ghost"
+              className="rounded-none"
+              title="Download Excel Template"
+              onClick={downloadExcel}
+              disabled={isOpeningBalanceReadOnly || (isClassificationMode ? classificationGroups.length === 0 : visibleRows.length === 0)}
+            >
+              <Download className="mr-2 h-4 w-4" /> Template
+            </Button>
+            <Button variant="ghost" className="rounded-none border-l" title="Import Updated Excel" disabled={isOpeningBalanceReadOnly || currentStatus === 'posted'} onClick={() => fileInputRef.current?.click()}><Upload className="mr-2 h-4 w-4" /> Import</Button>
+          </div>
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={event => {
             const file = event.target.files?.[0]
             if (file) importExcel(file)
@@ -2389,6 +2436,26 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
           )}
         </div>
       </div>
+
+      {isStandardCount && (
+        <ol className="grid overflow-hidden rounded-xl border bg-white sm:grid-cols-3" aria-label="Stock count steps">
+          {countSteps.map((step, index) => (
+            <li
+              key={step.label}
+              aria-current={step.state === 'active' ? 'step' : undefined}
+              className={`flex items-center gap-3 border-b px-4 py-3 last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0 ${step.state === 'active' ? 'bg-orange-50' : ''}`}
+            >
+              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${step.state === 'done' ? 'border-green-600 bg-green-600 text-white' : step.state === 'active' ? 'border-orange-600 bg-orange-600 text-white' : 'border-slate-300 text-slate-500'}`}>
+                {step.state === 'done' ? <CheckCircle2 className="h-4 w-4" /> : index + 1}
+              </span>
+              <span className="min-w-0">
+                <span className={`block text-sm font-semibold ${step.state === 'todo' ? 'text-slate-500' : 'text-slate-950'}`}>{index + 1}. {step.label}</span>
+                <span className="block text-xs text-slate-500">{step.hint}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
 
       {invalidWarehouseDrafts.length > 0 && (
         <Card className="border-red-200 bg-red-50">
@@ -2451,7 +2518,31 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
         </Card>
       )}
 
+      {setupCollapsed ? (
+        <Card>
+          <CardContent className="flex flex-wrap items-center gap-2 p-3">
+            {[
+              { label: 'Warehouse', value: warehouseName },
+              { label: 'Date', value: countDate },
+              { label: 'Type', value: countTypeOptions.find(option => option.value === countType)?.label || '—' },
+              { label: 'Category', value: selectedCategory ? selectedCategoryName : 'All Categories' },
+              { label: 'Ref', value: referenceName },
+              ...(notes.trim() ? [{ label: 'Notes', value: notes }] : []),
+            ].map(item => (
+              <span key={item.label} className="max-w-xs truncate rounded-full border bg-slate-50 px-3 py-1 text-sm text-slate-900">
+                <span className="mr-1 text-slate-500">{item.label}</span>{item.value}
+              </span>
+            ))}
+            <Button variant="ghost" size="sm" className="ml-auto text-orange-700 hover:text-orange-800" onClick={() => setSetupExpanded(true)}>Edit setup</Button>
+          </CardContent>
+        </Card>
+      ) : (
       <Card>
+        {isStandardCount && currentSessionId && referenceValid && (
+          <div className="flex justify-end px-5 pt-3">
+            <Button variant="ghost" size="sm" onClick={() => setSetupExpanded(false)}>Hide setup</Button>
+          </div>
+        )}
         <CardContent className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-6">
           <div>
             <label className="mb-2 block text-sm font-semibold text-slate-700">
@@ -2539,6 +2630,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
           </div>
         </CardContent>
       </Card>
+      )}
 
       {selectedWarehouse && (
         <Card className="border-blue-100 bg-[var(--sera-orange)]/[0.06]/50">
@@ -2678,9 +2770,31 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
             </CardContent>
           </Card>
         )}
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-          {summaryCards.map(card => <Card key={card.label}><CardContent className="flex items-center gap-4 p-4"><div className={`flex h-12 w-12 items-center justify-center rounded-lg ${card.color}`}><card.icon className="h-6 w-6" /></div><div className="min-w-0"><p className="text-sm font-semibold text-slate-600">{card.label}</p><p className="truncate text-xl font-bold text-slate-950">{card.value}</p><p className="text-xs text-slate-500">{card.sub}</p></div></CardContent></Card>)}
-        </div>
+        <Card>
+          <CardContent className="grid divide-y p-0 md:grid-cols-[1.4fr_1fr_1fr_1fr] md:divide-x md:divide-y-0">
+            <div className="p-4">
+              <p className="text-sm font-semibold text-slate-600">Counted</p>
+              <p className="text-2xl font-bold text-slate-950 tabular-nums">{formatNumber(pageSummary.counted)} <span className="text-sm font-medium text-slate-500">of {formatNumber(pageSummary.totalItems)} items</span></p>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-label="Counted items" aria-valuemin={0} aria-valuemax={100} aria-valuenow={countedPercent}>
+                <div className="h-full rounded-full bg-orange-500 transition-all" style={{ width: `${countedPercent}%` }} />
+              </div>
+              <p className="mt-1 text-xs text-slate-500">{formatNumber(pageSummary.notCounted)} not counted · {Math.max(groups.length - 1, 0)} groups</p>
+            </div>
+            <div className="p-4">
+              <p className="text-sm font-semibold text-slate-600">Items with variance</p>
+              <p className={`text-2xl font-bold tabular-nums ${pageSummary.varianceItems ? 'text-amber-700' : 'text-slate-950'}`}>{formatNumber(pageSummary.varianceItems)}</p>
+            </div>
+            <div className="p-4">
+              <p className="text-sm font-semibold text-slate-600">Net adjustment</p>
+              <p className={`text-2xl font-bold tabular-nums ${pageSummary.netAdjustment > 0 ? 'text-green-600' : pageSummary.netAdjustment < 0 ? 'text-red-600' : 'text-slate-950'}`}>{pageSummary.netAdjustment > 0 ? '+' : ''}{formatNumber(pageSummary.netAdjustment)} <span className="text-sm font-medium text-slate-500">units</span></p>
+            </div>
+            <div className="p-4">
+              <p className="text-sm font-semibold text-slate-600">Estimated value</p>
+              <p className={`text-2xl font-bold tabular-nums ${pageSummary.estimatedValue > 0 ? 'text-green-600' : pageSummary.estimatedValue < 0 ? 'text-red-600' : 'text-slate-950'}`}>{formatMoney(pageSummary.estimatedValue)}</p>
+              <p className="text-xs text-slate-500">Based on variance</p>
+            </div>
+          </CardContent>
+        </Card>
         </>
       )}
 
@@ -2718,16 +2832,54 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
       )}
 
       {!isClassificationMode && (
-        <Card>
+        <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
+        <Card className="self-start">
+          <CardContent className="p-2">
+            <p className="px-2 pb-1 pt-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">Product groups</p>
+            <nav className="flex flex-wrap gap-1 xl:flex-col" aria-label="Product groups">
+              {groups.map(group => {
+                const counted = countedByGroup.get(group.id) || 0
+                const percent = group.count ? Math.round((counted / group.count) * 100) : 0
+                const selected = selectedGroupId === group.id
+                return (
+                  <button
+                    key={group.id}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => setSelectedGroupId(group.id)}
+                    className={`rounded-lg px-3 py-2 text-left text-sm transition xl:w-full ${selected ? 'bg-orange-50 font-semibold text-orange-800' : 'text-slate-700 hover:bg-slate-50'}`}
+                  >
+                    <span className="flex items-center justify-between gap-3">
+                      <span className="truncate">{group.name}</span>
+                      <span className={`text-xs tabular-nums ${group.count > 0 && counted === group.count ? 'font-semibold text-green-700' : 'text-slate-500'}`}>{counted} / {group.count}</span>
+                    </span>
+                    <span className="mt-1.5 hidden h-1 overflow-hidden rounded-full bg-slate-100 xl:block">
+                      <span className="block h-full rounded-full bg-orange-500" style={{ width: `${percent}%` }} />
+                    </span>
+                  </button>
+                )
+              })}
+            </nav>
+          </CardContent>
+        </Card>
+        <Card className="min-w-0">
           <CardContent className="space-y-4 p-4">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-              <div className="flex flex-wrap gap-2">
-                {groups.map(group => <Button key={group.id} variant={selectedGroupId === group.id ? 'default' : 'outline'} onClick={() => setSelectedGroupId(group.id)} className={selectedGroupId === group.id ? 'bg-orange-600 hover:bg-orange-700' : ''}>{group.name} ({group.count})</Button>)}
+            <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center">
+              <div role="group" aria-label="Filter rows" className="inline-flex shrink-0 self-start overflow-hidden rounded-lg border">
+                {rowFilterOptions.map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={rowFilter === option.value}
+                    onClick={() => applyRowFilter(option.value)}
+                    className={`border-r px-3 py-1.5 text-sm last:border-r-0 ${rowFilter === option.value ? 'bg-slate-900 font-semibold text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    {option.label} <span className="tabular-nums opacity-70">{formatNumber(option.count)}</span>
+                  </button>
+                ))}
               </div>
+              <div className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><Input className="w-full pl-9" value={searchTerm} onChange={event => setSearchTerm(event.target.value)} placeholder={selectedGroupId === ALL_GROUP_ID ? 'Search all variants...' : 'Search variants in this group...'} /></div>
               <div className="flex flex-wrap items-center gap-3">
-                <div className="relative"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><Input className="w-72 pl-9" value={searchTerm} onChange={event => setSearchTerm(event.target.value)} placeholder={selectedGroupId === ALL_GROUP_ID ? 'Search all variants...' : 'Search variants in this group...'} /></div>
-                <div className="flex items-center gap-2"><Switch checked={showVarianceOnly} onCheckedChange={setShowVarianceOnly} /><span className="text-sm font-semibold text-slate-700">Show Variance Only</span></div>
-                {isOpeningBalanceMode && <div className="flex items-center gap-2"><Switch checked={showNotCountedOnly} onCheckedChange={setShowNotCountedOnly} /><span className="text-sm font-semibold text-slate-700">Not Counted</span></div>}
                 {!isOpeningBalanceMode && <div className="flex items-center gap-2"><Switch checked={showInactive} onCheckedChange={setShowInactive} /><span className="text-sm font-semibold text-slate-700">Show inactive</span></div>}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild><Button variant="outline"><Columns3 className="mr-2 h-4 w-4" /> Columns</Button></DropdownMenuTrigger>
@@ -2766,10 +2918,10 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
                         const adjustmentValue = adjustmentValueForRow(row)
                         return (
                           <TableRow key={row.stockConfigId}>
-                            <TableCell><div className="flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded bg-slate-100">{row.imageUrl ? <img src={getStorageUrl(row.imageUrl) || row.imageUrl} alt="" className="h-full w-full object-cover" /> : <Package className="h-5 w-5 text-slate-400" />}</div><div><p className="font-semibold text-slate-950">{row.variantName}</p><div className="mt-1 flex flex-wrap items-center gap-1.5">{showConfiguration && <Badge variant={row.configStatus === 'active' ? 'secondary' : 'outline'}>{withStockStrengthUnit(row.configLabel)}</Badge>}{!row.variantIsActive && <Badge variant="outline" className="border-amber-300 text-amber-700" title="Archived variant — historical snapshot item">Archived variant · historical</Badge>}{row.variantIsActive && (!row.productIsActive || row.configStatus !== 'active') && <Badge variant="outline" className="border-amber-300 text-amber-700" title="Inactive master data — historical snapshot item">Historical configuration</Badge>}{row.productCode && <span className="text-xs text-slate-500">{row.productCode}</span>}</div><p className="text-xs text-slate-500">{row.productName}</p></div></div></TableCell>
+                            <TableCell className={`border-l-4 ${variance === null ? 'border-l-transparent' : variance === 0 ? 'border-l-green-500' : 'border-l-amber-500'}`}><div className="flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded bg-slate-100">{row.imageUrl ? <img src={getStorageUrl(row.imageUrl) || row.imageUrl} alt="" className="h-full w-full object-cover" /> : <Package className="h-5 w-5 text-slate-400" />}</div><div><p className="font-semibold text-slate-950">{row.variantName}</p><div className="mt-1 flex flex-wrap items-center gap-1.5">{showConfiguration && <Badge variant={row.configStatus === 'active' ? 'secondary' : 'outline'}>{withStockStrengthUnit(row.configLabel)}</Badge>}{!row.variantIsActive && <Badge variant="outline" className="border-amber-300 text-amber-700" title="Archived variant — historical snapshot item">Archived variant · historical</Badge>}{row.variantIsActive && (!row.productIsActive || row.configStatus !== 'active') && <Badge variant="outline" className="border-amber-300 text-amber-700" title="Inactive master data — historical snapshot item">Historical configuration</Badge>}{row.productCode && <span className="text-xs text-slate-500">{row.productCode}</span>}</div><p className="text-xs text-slate-500">{row.productName}</p></div></div></TableCell>
                             <TableCell className="text-right font-medium tabular-nums">{formatNumber(row.systemQuantity)}{row.piecesPerCase && <p className="text-xs font-normal text-slate-500">{formatPiecesAsCases(row.systemQuantity, row.piecesPerCase)}</p>}</TableCell>
                             <TableCell><StockCountQuantityInput countInputId={row.stockConfigId} value={row.physicalCount} piecesPerCase={row.piecesPerCase} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={value => handlePhysicalCountChange(row.stockConfigId, value)} onEnter={() => focusNextCountInput(row.stockConfigId)} /></TableCell>
-                            <TableCell className={`text-right font-bold tabular-nums ${variance === null || variance === 0 ? 'text-slate-600' : variance > 0 ? 'text-green-600' : 'text-red-600'}`}>{variance === null ? 'Not counted' : `${variance > 0 ? '+' : ''}${formatNumber(variance)}`}{variance !== null && variance !== 0 && row.piecesPerCase && <p className="text-xs font-normal">{variance > 0 ? '+' : ''}{formatPiecesAsCases(variance, row.piecesPerCase)}</p>}</TableCell>
+                            <TableCell className="text-right tabular-nums">{variance === null ? <span className="text-sm font-medium text-slate-400">Not counted</span> : variance === 0 ? <span className="inline-flex rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-semibold text-green-700">Match</span> : <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${variance > 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>{variance > 0 ? '+' : ''}{formatNumber(variance)}</span>}{variance !== null && variance !== 0 && row.piecesPerCase && <p className={`mt-1 text-xs ${variance > 0 ? 'text-green-700' : 'text-red-700'}`}>{variance > 0 ? '+' : ''}{formatPiecesAsCases(variance, row.piecesPerCase)}</p>}</TableCell>
                             {visibleColumns.unitCost && <TableCell className="text-right tabular-nums">{row.unitCost === null ? '—' : formatMoney(row.unitCost)}</TableCell>}
                             {visibleColumns.adjustmentValue && <TableCell className={`text-right font-semibold tabular-nums ${!adjustmentValue ? 'text-slate-600' : adjustmentValue > 0 ? 'text-green-600' : 'text-red-600'}`}>{adjustmentValue === null ? '-' : formatMoney(adjustmentValue)}</TableCell>}
                             {visibleColumns.note && <TableCell><div className="flex items-center gap-2"><MessageSquare className="h-4 w-4 text-slate-400" /><Input value={row.note} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={event => updateRow(row.stockConfigId, { note: event.target.value })} placeholder={variance === null ? 'Not counted' : variance === 0 ? 'Matched' : 'Add note'} /></div></TableCell>}
@@ -2783,6 +2935,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
             </div>
           </CardContent>
         </Card>
+        </div>
       )}
 
       {isClassificationMode && (
