@@ -1040,12 +1040,6 @@ export default function EditOrganizationView({ userProfile, onViewChange }: Edit
             />
           )}
 
-          {organization?.org_type_code === 'MFG' && (
-            <ManufacturerCategoriesCard
-              manufacturer={{ id: organization.id, org_name: formData.org_name || organization.org_name }}
-            />
-          )}
-
           {organization?.org_type_code === 'WH' && (
             <div className="flex items-center gap-3 rounded-md border border-border px-3 py-3">
               <input
