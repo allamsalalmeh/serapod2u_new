@@ -2,18 +2,30 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Download, QrCode, Users, LayoutDashboard, Settings } from 'lucide-react'
+import { ArrowLeft, Download } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import type { EventEvent, EventRegistration, EventStaff, EventQrToken } from '@/modules/event-management/types/event'
+import { EVENT_MANAGEMENT_BASE_PATH, eventManagementEventTabs, eventTabHref, type EventTabId } from '@/modules/event-management/eventManagementNav'
+import { EventPageHeader, EventStatusBadge } from '@/modules/event-management/components/EventManagementShared'
 
 interface Props {
   organizationId: string | null
   eventId: string
+  /** Active tab, from the URL (/marketing/event-management/<eventId>[/visitors|/staff-qr|/settings]). */
+  tab?: EventTabId
 }
 
-type Tab = 'overview' | 'visitors' | 'staff-qr' | 'settings'
+const EVENTS_HREF = `${EVENT_MANAGEMENT_BASE_PATH}/events`
 
-export function EventDetailView({ eventId }: Props) {
-  const [tab, setTab] = useState<Tab>('overview')
+function BackToEvents() {
+  return (
+    <Link href={EVENTS_HREF} className="mb-3 inline-flex items-center gap-1 text-sm font-medium text-[var(--sera-orange)] hover:text-[var(--sera-orange-deep)]">
+      <ArrowLeft size={14} /> Events
+    </Link>
+  )
+}
+
+export function EventDetailView({ eventId, tab = 'event-overview' }: Props) {
   const [event, setEvent] = useState<EventEvent | null>(null)
   const [stats, setStats] = useState<any>(null)
   const [staff, setStaff] = useState<EventStaff[]>([])
@@ -53,48 +65,56 @@ export function EventDetailView({ eventId }: Props) {
     loadAll()
   }, [loadAll])
 
-  if (loading && !event) return <div className="p-6 text-sm text-gray-500">Loading…</div>
+  if (loading && !event) return <div className="sera-sc-page text-sm text-muted-foreground">Loading…</div>
   if (error && !event) {
     return (
-      <div className="p-6">
-        <Link href="/marketing/event-management" className="mb-4 inline-flex items-center gap-1 text-sm text-orange-600"><ArrowLeft size={14} /> Back</Link>
-        <p className="text-sm text-red-600">{error}</p>
+      <div className="sera-sc-page">
+        <div>
+          <BackToEvents />
+          <p className="text-sm text-red-600">{error}</p>
+        </div>
       </div>
     )
   }
 
-  const tabs: Array<{ id: Tab; label: string; icon: any }> = [
-    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-    { id: 'visitors', label: 'Visitors', icon: Users },
-    { id: 'staff-qr', label: 'Staff & QR', icon: QrCode },
-    { id: 'settings', label: 'Settings', icon: Settings },
-  ]
-
   return (
-    <div className="mx-auto max-w-6xl p-6">
-      <div className="mb-4">
-        <Link href="/marketing/event-management" className="inline-flex items-center gap-1 text-sm text-orange-600"><ArrowLeft size={14} /> Event Management</Link>
-        <h1 className="mt-1 text-2xl font-semibold text-gray-900">{event?.name ?? 'Event'}</h1>
-      </div>
+    <div className="sera-sc-page">
+      <EventPageHeader
+        eyebrow="Event Management · Event"
+        title={<>{event?.name ?? 'Event'}{event ? <EventStatusBadge status={event.status} /> : null}</>}
+        description={event ? `${new Date(event.starts_at).toLocaleString()} – ${new Date(event.ends_at).toLocaleString()}` : undefined}
+      >
+        <BackToEvents />
+      </EventPageHeader>
 
-      <div className="mb-6 flex gap-1 border-b border-gray-200">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`inline-flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium ${
-              tab === t.id ? 'border-orange-600 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <t.icon size={16} /> {t.label}
-          </button>
-        ))}
-      </div>
+      <nav aria-label="Event sections" className="scrollbar-hide -mt-2 flex gap-1 overflow-x-auto border-b border-[var(--sera-line)]">
+        {eventManagementEventTabs.map((t) => {
+          const active = tab === t.id
+          const Icon = t.icon
+          return (
+            <Link
+              key={t.id}
+              href={eventTabHref(eventId, t.id)}
+              aria-current={active ? 'page' : undefined}
+              className={cn(
+                '-mb-px inline-flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition-colors sm:px-4',
+                active
+                  ? 'border-[var(--sera-orange)] text-[var(--sera-orange-deep)]'
+                  : 'border-transparent text-[var(--sera-muted)] hover:text-[var(--sera-ink)]'
+              )}
+            >
+              <Icon size={16} /> {t.label}
+            </Link>
+          )
+        })}
+      </nav>
 
-      {tab === 'overview' ? <OverviewTab event={event} stats={stats} /> : null}
-      {tab === 'visitors' ? <VisitorsTab eventId={eventId} registrations={registrations} /> : null}
-      {tab === 'staff-qr' ? <StaffQrTab eventId={eventId} staff={staff} tokens={tokens} onReload={loadAll} /> : null}
-      {tab === 'settings' && event ? <SettingsTab event={event} onReload={loadAll} /> : null}
+      <div>
+        {tab === 'event-overview' ? <OverviewTab event={event} stats={stats} /> : null}
+        {tab === 'event-visitors' ? <VisitorsTab eventId={eventId} registrations={registrations} /> : null}
+        {tab === 'event-staff-qr' ? <StaffQrTab eventId={eventId} staff={staff} tokens={tokens} onReload={loadAll} /> : null}
+        {tab === 'event-settings' && event ? <SettingsTab event={event} onReload={loadAll} /> : null}
+      </div>
     </div>
   )
 }
@@ -110,7 +130,7 @@ function OverviewTab({ event, stats }: { event: EventEvent | null; stats: any })
         <StatCard label="Status" value={event.status} />
       </div>
 
-      <div className="rounded-lg border border-gray-200 p-4">
+      <div className="rounded-lg border border-[var(--sera-line)] bg-white p-4">
         <h3 className="mb-2 text-sm font-semibold text-gray-900">Staff leaderboard</h3>
         {!stats?.staffComparison?.length ? (
           <p className="text-sm text-gray-500">No staff registrations yet.</p>
@@ -130,7 +150,7 @@ function OverviewTab({ event, stats }: { event: EventEvent | null; stats: any })
         <p className="mt-2 text-xs text-gray-400">Booth registrations are excluded from staff rankings.</p>
       </div>
 
-      <div className="rounded-lg border border-gray-200 p-4 text-sm text-gray-600">
+      <div className="rounded-lg border border-[var(--sera-line)] bg-white p-4 text-sm text-gray-600">
         <h3 className="mb-2 text-sm font-semibold text-gray-900">Event details</h3>
         <p>Starts: {new Date(event.starts_at).toLocaleString()}</p>
         <p>Ends: {new Date(event.ends_at).toLocaleString()}</p>
@@ -142,7 +162,7 @@ function OverviewTab({ event, stats }: { event: EventEvent | null; stats: any })
 
 function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-lg border border-gray-200 p-4">
+    <div className="rounded-lg border border-[var(--sera-line)] bg-white p-4">
       <p className="text-xs text-gray-500">{label}</p>
       <p className="mt-1 text-2xl font-semibold text-gray-900">{value}</p>
     </div>
@@ -164,16 +184,16 @@ function VisitorsTab({ eventId, registrations }: { eventId: string; registration
 
   return (
     <div>
-      <div className="mb-4 flex items-center gap-2">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search name, phone or email…"
-          className="w-full max-w-xs rounded-lg border border-gray-200 px-3 py-2 text-sm"
+          className="w-full max-w-xs rounded-lg border border-[var(--sera-line)] px-3 py-2 text-sm"
         />
         <a
           href={`/api/event-management/events/${eventId}/registrations/export?format=csv`}
-          className="ml-auto inline-flex items-center gap-1 rounded-lg bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-700"
+          className="ml-auto inline-flex items-center gap-1 rounded-lg bg-[var(--sera-orange)] px-3 py-2 text-sm font-semibold text-white hover:bg-[var(--sera-orange-deep)]"
         >
           <Download size={14} /> Export CSV
         </a>
@@ -182,7 +202,7 @@ function VisitorsTab({ eventId, registrations }: { eventId: string; registration
       {filtered.length === 0 ? (
         <p className="text-sm text-gray-500">No registrations yet.</p>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-gray-200">
+        <div className="overflow-x-auto rounded-lg border border-[var(--sera-line)] bg-white">
           <table className="w-full text-left text-sm">
             <thead className="bg-gray-50 text-xs uppercase text-gray-500">
               <tr>
@@ -270,17 +290,17 @@ function StaffQrTab({ eventId, staff, tokens, onReload }: { eventId: string; sta
       <div>
         <h3 className="mb-2 text-sm font-semibold text-gray-900">Assigned staff</h3>
         <div className="mb-2 flex gap-2">
-          <input value={staffUserId} onChange={(e) => setStaffUserId(e.target.value)} placeholder="Staff user id" className="w-full max-w-xs rounded-lg border border-gray-200 px-3 py-2 text-sm" />
-          <button onClick={assign} disabled={busy} className="rounded-lg bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-60">Assign</button>
+          <input value={staffUserId} onChange={(e) => setStaffUserId(e.target.value)} placeholder="Staff user id" className="w-full max-w-xs rounded-lg border border-[var(--sera-line)] px-3 py-2 text-sm" />
+          <button onClick={assign} disabled={busy} className="rounded-lg bg-[var(--sera-orange)] px-3 py-2 text-sm font-semibold text-white hover:bg-[var(--sera-orange-deep)] disabled:opacity-60">Assign</button>
         </div>
         {staff.length === 0 ? (
           <p className="text-sm text-gray-500">No staff assigned.</p>
         ) : (
-          <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200">
+          <ul className="divide-y divide-gray-100 rounded-lg border border-[var(--sera-line)] bg-white">
             {staff.map((s) => (
               <li key={s.id} className="flex items-center justify-between px-4 py-2 text-sm">
                 <span className="text-gray-900">{s.full_name ?? s.user_id}</span>
-                <button onClick={() => generate('staff', s.user_id)} disabled={busy} className="text-orange-600 hover:text-orange-700">Generate QR</button>
+                <button onClick={() => generate('staff', s.user_id)} disabled={busy} className="text-[var(--sera-orange)] hover:text-[var(--sera-orange-deep)]">Generate QR</button>
               </li>
             ))}
           </ul>
@@ -290,12 +310,12 @@ function StaffQrTab({ eventId, staff, tokens, onReload }: { eventId: string; sta
       <div>
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-gray-900">QR codes</h3>
-          <button onClick={() => generate('booth')} disabled={busy} className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">Generate booth QR</button>
+          <button onClick={() => generate('booth')} disabled={busy} className="rounded-lg border border-[var(--sera-line)] px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">Generate booth QR</button>
         </div>
         {tokens.length === 0 ? (
           <p className="text-sm text-gray-500">No QR codes yet.</p>
         ) : (
-          <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200">
+          <ul className="divide-y divide-gray-100 rounded-lg border border-[var(--sera-line)] bg-white">
             {tokens.map((t) => (
               <li key={t.id} className="flex items-center justify-between px-4 py-2 text-sm">
                 <div>
@@ -304,7 +324,7 @@ function StaffQrTab({ eventId, staff, tokens, onReload }: { eventId: string; sta
                   <span className="ml-2 text-xs text-gray-400">{t.status}</span>
                 </div>
                 <div className="flex items-center gap-3">
-                  {t.status === 'active' ? <a href={`/api/event-management/events/${eventId}/qr/${t.token}/image`} target="_blank" rel="noreferrer" className="text-orange-600 hover:text-orange-700">View QR</a> : null}
+                  {t.status === 'active' ? <a href={`/api/event-management/events/${eventId}/qr/${t.token}/image`} target="_blank" rel="noreferrer" className="text-[var(--sera-orange)] hover:text-[var(--sera-orange-deep)]">View QR</a> : null}
                   {t.status === 'active' ? <button onClick={() => revoke(t.id)} disabled={busy} className="text-red-600 hover:text-red-700">Revoke</button> : null}
                 </div>
               </li>
@@ -346,7 +366,7 @@ function SettingsTab({ event, onReload }: { event: EventEvent; onReload: () => v
     <div className="max-w-sm space-y-4">
       <div>
         <label className="block text-sm font-medium text-gray-900">Status</label>
-        <select value={status} onChange={(e) => setStatus(e.target.value as any)} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm">
+        <select value={status} onChange={(e) => setStatus(e.target.value as any)} className="mt-1 w-full rounded-lg border border-[var(--sera-line)] px-3 py-2 text-sm">
           <option value="draft">Draft</option>
           <option value="active">Active</option>
           <option value="ended">Ended</option>
@@ -355,7 +375,7 @@ function SettingsTab({ event, onReload }: { event: EventEvent; onReload: () => v
         <p className="mt-1 text-xs text-gray-400">Public registration only works while status is Active and within the registration window.</p>
       </div>
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
-      <button onClick={saveStatus} disabled={busy} className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-60">
+      <button onClick={saveStatus} disabled={busy} className="rounded-lg bg-[var(--sera-orange)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--sera-orange-deep)] disabled:opacity-60">
         {busy ? 'Saving…' : 'Save'}
       </button>
     </div>

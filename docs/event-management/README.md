@@ -143,6 +143,25 @@ points, sample inventory, automated broadcasts, budgeting.
 - Ellbow `brands` row / `logo_url` existence is a **technical verification** (read-only
   DB check), not a business decision; keep it pending if DB access is unavailable.
 
+## Admin layout (standard module shell, 2026-10-08)
+
+Admin pages render inside the standard dashboard shell (`DashboardContent`: sidebar, Customer & Growth bar,
+module bar), the same way Road Tour does. Previously the pages returned the bare view, which dropped the sidebar
+and header.
+
+| URL | View id | Module bar tab |
+|---|---|---|
+| `/marketing/event-management` | `event-management` | Overview |
+| `/marketing/event-management/events` | `event-management-events` | Events |
+| `/marketing/event-management/settings` | `event-management-settings` | Settings (read-only registration rules; nothing is configurable yet) |
+| `/marketing/event-management/<eventId>[/visitors\|/staff-qr\|/settings]` | `event-overview` / `event-visitors` / `event-staff-qr` / `event-settings` | Events |
+
+- Shared server renderer: `app/src/app/marketing/event-management/_EventManagementAdminView.tsx` (same
+  `marketing.module.view` + org gate as before). Unknown event tabs return 404.
+- Module bar: `modules/event-management/components/EventManagementTopNav.tsx`, used instead of the Marketing bar
+  (as Road Tour has its own bar).
+- The public `/event/[token]` registration page is unchanged.
+
 ## Next action
 
 The core business decisions (name + phone mandatory, no OTP, optional email/cat
