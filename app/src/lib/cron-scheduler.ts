@@ -33,6 +33,9 @@ const CRON_JOBS: CronJob[] = [
   // stale requests every 15 minutes; the worker re-syncs the Joiner/Mover/
   // Leaver lifecycle once a day (contract end dates, missed triggers).
   { path: '/api/cron/sa-governance-maintenance', schedule: '*/15 * * * *' },
+  // System Logs: 30-day retention of diagnostic errors only (activity and audit
+  // sources untouched). Daily, bounded batches; the database function is idempotent.
+  { path: '/api/cron/system-log-retention', schedule: '41 3 * * *' },
   // Outdoor orders unpaid for 24 hours are cancelled and their Stripe page closed.
   { path: '/api/cron/storefront-unpaid-expiry', schedule: '*/15 * * * *' },
   // TikTok Shop API: hourly sync of connected shops (no-op when none is connected).
@@ -142,6 +145,10 @@ async function triggerJob(path: string, expression: string): Promise<void> {
 
     if (!res.ok) {
       console.warn(`[Cron] ${path} responded ${res.status}`)
+      // 5xx = the worker run failed. 409 (remote-DB guard) and 401 (secret) are configuration states, not failures.
+      if (res.status >= 500) {
+        reportCronFailure(path, { status: res.status, message: `${path} responded ${res.status}`, serverReferenceId: res.headers.get('x-request-id') })
+      }
     }
   } catch (err: any) {
     // Don't crash the scheduler on transient failures
@@ -150,7 +157,27 @@ async function triggerJob(path: string, expression: string): Promise<void> {
     } else {
       console.warn(`[Cron] ${path} error: ${err.message}`)
     }
+    reportCronFailure(path, { error: err, message: err?.name === 'TimeoutError' ? `${path} timed out after 55s` : undefined })
   }
+}
+
+/**
+ * System Logs worker report for a failed run (fire-and-forget, never throws). When the route itself crashed, its own
+ * server report carries the same X-Request-ID and the two are linked instead of counted twice.
+ */
+function reportCronFailure(path: string, input: { status?: number; message?: string; error?: unknown; serverReferenceId?: string | null }) {
+  import('./system-logs/server')
+    .then(({ reportWorkerFailure }) => reportWorkerFailure(path.replace(/^\/api\/cron\//, ''), {
+      error: input.error,
+      status: input.status ?? null,
+      message: input.message,
+      apiRoute: path,
+      method: 'GET',
+      correlationId: null,
+      details: { scheduler: getRegistry().schedulerInstanceId, ...(input.serverReferenceId ? { server_reference_id: input.serverReferenceId } : {}) },
+      serverReferenceId: input.serverReferenceId ?? null,
+    }))
+    .catch(() => { /* diagnostics must never affect the scheduler */ })
 }
 
 /**
