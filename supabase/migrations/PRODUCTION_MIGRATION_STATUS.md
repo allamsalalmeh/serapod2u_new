@@ -2,7 +2,7 @@
 
 **Living document.** Update it in the same commit as every new migration, and again whenever a migration is applied to staging or production (see [How to update this file](#how-to-update-this-file)).
 
-Last updated: **2026-10-07 MYT (+08:00)** — integrated `event_management` into `issues-fixing-oct2`. Added the Event Management module migrations `20261007_event01`/`event02`/`event03` as **CREATED / NOT APPLIED** (schema, QR functions, constraints; validated only in an isolated disposable database). `20261006110000`/`20261006150000` (TikTok Shop) applied and verified on production. `20261005150000` staging applied, production pending. `20261003100000_hr_onboarding_state_and_data_reset.sql` (and the issues-fixing-oct2 S&A migrations) remain tracked on this branch.
+Last updated: **2026-10-13 MYT (+08:00)** — `issues-fixing-oct2` parity check: all branch migrations are present on staging except the intentional `20261024110000` opt-in; `20261003100000_qr_buffer…` and `20261014100000` user-confirmed and verified; HR01–HR05 user-confirmed and verified. Production not checked. (Previous: 2026-10-07 Event Management integration.)
 
 Original full audit: 2026-10-01 15:07 MYT at `2961c21a` (read-only; every row below up to `20260930100000` comes from it unless the change log says otherwise).
 
@@ -10,15 +10,83 @@ This report records **database state**, not merely whether a file is present on 
 
 ## Current pending list
 
-| Order | Migration | Staging | Production |
-|---|---|---|---|
-| 1 | `20261005150000_manufacturer_product_categories.sql` | Verified applied (2026-10-05) | **Pending** |
-| 2 | `20261007_event01_create_event_tables.sql` | **CREATED / NOT APPLIED** | **CREATED / NOT APPLIED** |
-| 3 | `20261007_event02_event_qr_functions.sql` | **CREATED / NOT APPLIED** | **CREATED / NOT APPLIED** |
-| 4 | `20261007_event03_event_constraints_verify.sql` | **CREATED / NOT APPLIED** | **CREATED / NOT APPLIED** |
+Branch `issues-fixing-oct2`, migrations not on `main` (plus the three order-index migrations that are). **Staging
+evidence (2026-10-13, read-only):** every migration's objects (tables, columns, indexes, policies, triggers,
+functions) were checked on `serapod-stg-db`, the latest function bodies compared by `md5(prosrc)` with the files,
+and data effects (policies, SoD rules, settings, column privileges) queried directly. There is no migration ledger,
+so "Verified applied" means the effects are present. "User-confirmed" rows were run by the owner and then
+independently verified the same way. **Production: nothing below was checked on production**; "Pending" means no
+record of application, not a verified absence.
 
-Production pending: `20261005150000` (new table only; ship with the manufacturer Product Categories card). Last cleared: `20261006110000` + `20261006150000` verified on production 2026-10-06 15:00; `20261005130000` verified on production 2026-10-05 13:05. Everything earlier: the first nine checks `true` on both, 2026-10-02; the three `_sms` checks `true` on both, 2026-10-02 10:35.
-Event Management (`event01` → `event02` → `event03`): **CREATED, not applied anywhere** — the user runs these manually, in order, and then records the application here. Each file documents its purpose, prerequisites, execution order, verification queries and rollback. These were validated only in an isolated disposable test database with synthetic fixtures (see `supabase/tests/security/event-management/event_management.sql`); no existing local/staging/production database was touched.
+Apply to production in the order of the table (filename order; HR01–HR05 last), each file in one transaction.
+
+| # | Migration | Purpose | Staging | Production | Order / dependencies | Production impact |
+|---|---|---|---|---|---|---|
+| 1 | `20261002120000_notification_monitor_indexes.sql` | Notification Monitor indexes | Verified applied (2026-10-13) | Pending | — | Indexes only |
+| 2 | `20261003100000_hr_onboarding_state_and_data_reset.sql` | HR onboarding state, Add Employee onboarding, pre-go-live HR data reset tooling | Verified applied (2026-10-13) | Pending | — | New columns/tables, HR permissions and readiness rows; reset is a function, not run |
+| 3 | `20261003100000_qr_buffer_one_percent_and_one_batch_per_order.sql` | QR 1% buffer default; one QR batch per order | User-confirmed; verified 2026-10-13 | Pending | Needs zero orders with >1 batch (index is skipped otherwise) | Sets qr_buffer_percent 10→1 on H2M orders that have no batch yet |
+| 4 | `20261004100000_sa_bulk_migration_mode.sql` | S&A bulk migration-mode change | Verified applied (2026-10-13) | Pending | — | Functions only |
+| 5 | `20261005100000_sa_directory_visibility.sql` | S&A directory across authorized organizations | Verified applied (2026-10-13) | Pending | — | Functions only |
+| 6 | `20261005110000_sa_access_profiles.sql` | S&A Access Profiles (standard/custom, draft→review→publish) | Verified applied (2026-10-13) | Pending | Prerequisite of every later Group Policy migration | New tables/columns, settings |
+| 7 | `20261005150000_manufacturer_product_categories.sql` | Manufacturer ↔ product category mapping | Verified applied (2026-10-13) | Pending | — | New table |
+| 8 | `20261006100000_sa_qr_batch_operator_profile.sql` | QR Batch Operator policy, manufacturer ownership | Verified applied (2026-10-13) | Pending | After 20261005110000 | New standard policy |
+| 9 | `20261006110000_tiktok_shop_import.sql` | TikTok Shop import tables | Verified applied (2026-10-13) | Verified applied (2026-10-06) | — | — |
+| 10 | `20261006150000_tiktok_shop_api_connection.sql` | TikTok Shop API connection | Verified applied (2026-10-13) | Verified applied (2026-10-06) | After 20261006110000 | — |
+| 11 | `20261007100000_order_item_fk_indexes_qr_codes.sql` | Index order_items FK on qr_codes | Verified applied (2026-10-13) | Uncertain (on main via 0200d4a5; not verified) | Before 20261007100100 | Index build on qr_codes (large table) |
+| 12 | `20261007100000_sa_directory_filters.sql` | S&A directory filters | Verified applied (2026-10-13) | Pending | — | Functions only |
+| 13 | `20261007100100_order_item_fk_indexes_small.sql` | Remaining order_items FK indexes | Verified applied (2026-10-13) | Uncertain (on main; not verified) | Before 20261007100200 | Indexes only |
+| 14 | `20261007100200_save_order_with_items_rpc.sql` | Atomic order save RPC | Verified applied (2026-10-13) (body later replaced by 20261028100000) | Uncertain (on main; not verified) | — | Function only |
+| 15 | `20261007_event01_create_event_tables.sql` | Event Management tables | Verified applied (2026-10-13) | Pending | event01 → event02 → event03 | New tables |
+| 16 | `20261007_event02_event_qr_functions.sql` | Event QR validation + registration RPCs | Verified applied (2026-10-13) | Pending | After event01 | Functions only |
+| 17 | `20261007_event03_event_constraints_verify.sql` | Event cross-entity constraints | Verified applied (2026-10-13) | Pending | After event02 | Constraints on new tables |
+| 18 | `20261008100000_sa_mode_governance_actor_context.sql` | Mode governance evaluates actor in its organization | Verified applied (2026-10-13) | Pending | — | Functions only |
+| 19 | `20261009100000_sa_group_policies_full_access.sql` | Group Policies: module Full Access policies | Verified applied (2026-10-13) | Pending | After 20261005110000 | New standard policies + settings |
+| 20 | `20261010100000_sa_manufacturer_manufacturing_policies_draft.sql` | Three Manufacturer policies as DRAFTS | Verified applied (2026-10-13) (3 roles status=draft, 2026-10-06) | Pending | After 20261005110000 | Draft policies only (not assignable until published) |
+| 21 | `20261011100000_sa_scope_eligibility_for_grants.sql` | Scope eligibility for new grants (HQ → HQ + own warehouses) | Verified applied (2026-10-13) | Pending | — | Functions only |
+| 22 | `20261012100000_sa_manufacturing_full_access_manufacturer.sql` | Manufacturing Full Access — Manufacturer policy | Verified applied (2026-10-13) | Pending | After 20261009100000 | New standard policy |
+| 23 | `20261013100000_identity_provision_no_legacy_access.sql` | Provision accounts without a legacy role | Verified applied (2026-10-13) | Pending | — | Functions only |
+| 24 | `20261013110000_sa_ensure_organization_scope_definitions.sql` | Every organization has its own-organization scope | Verified applied (2026-10-13) | Pending | — | Backfills missing scope definitions |
+| 25 | `20261014100000_sa_ess_baseline_hq_only.sql` | ESS baseline HQ-only for new users | User-confirmed; verified 2026-10-13 | Pending | — | No backfill; existing ESS rows untouched |
+| 26 | `20261015100000_sa_initial_policy_same_authority_as_grant.sql` | Add User initial policies use Grant authority | Verified applied (2026-10-13) | Pending | — | Functions only |
+| 27 | `20261016100000_sa_user_password_reset_permission.sql` | platform.user.password_reset permission | Verified applied (2026-10-13) | Pending | Before 20261025100000 | New permission, compat rule, mode, readiness |
+| 28 | `20261017100000_system_logs_foundation.sql` | System Logs store, activity model, retention | Verified applied (2026-10-13) | Pending | Before 20261017110000 | New tables |
+| 29 | `20261017110000_sa_system_logs_view_permission.sql` | platform.system_logs.view | Verified applied (2026-10-13) | Pending | After 20261017100000 | New permission |
+| 30 | `20261018100000_manufacturer_product_categories_controls.sql` | Atomic category save, active guard, summary | Verified applied (2026-10-13) | Pending | After 20261005150000 | Functions/trigger |
+| 31 | `20261019100000_sa_stock_count_create_post_enforcement.sql` | Stock count create/post enforcement | Verified applied (2026-10-13) | Pending | — | Readiness rows; gates in functions |
+| 32 | `20261019110000_sa_mode_change_note_and_keep_retired.sql` | Mode change note / keep retired | Verified applied (2026-10-13) | Pending | — | Functions only |
+| 33 | `20261020100000_sa_grant_optional_note.sql` | Grant: optional note | Verified applied (2026-10-13) | Pending | — | Functions only |
+| 34 | `20261021100000_sa_tenant_remainder_write_guards.sql` | Tenant-remainder write guards on RLS gates | Verified applied (2026-10-13) | Pending | — | Policies/functions; tighter writes |
+| 35 | `20261022100000_sa_actor_org_gates_row_context.sql` | RLS write gates decided at the row organization | Verified applied (2026-10-13) | Pending | After 20261021100000 | Policies/functions |
+| 36 | `20261023100000_sa_identity_delete_enforcement_ready.sql` | platform.identity.delete readiness | Verified applied (2026-10-13) (readiness row present) | Pending | — | Readiness row |
+| 37 | `20261024100000_sa_emergency_access_grant_flow.sql` | Emergency Access grant flow with MFA step-up | Verified applied (2026-10-13) | Pending | Before 20261026100000 | Feature stays OFF; mfa_step_up_available=true |
+| 38 | `20261024110000_sa_emergency_access_enable.sql` | Switch Emergency Access ON (untracked, explicit decision) | Not applied (intentional; enabled=false) | Not applied | After 20261024100000 + application step-up release | Turns the feature on — do not apply without a decision |
+| 39 | `20261025100000_sa_password_reset_compat_roles.sql` | Materialize password_reset on compat roles | Verified applied (2026-10-13) (2 compat roles hold it) | Pending | After 20261016100000 | Adds the permission to legacy compatibility roles |
+| 40 | `20261026100000_sa_root_access.sql` | Root Access (Full System Administrator) | Verified applied (2026-10-13) | Pending | After 20261024100000 | New tables/functions; no grant created |
+| 41 | `20261027100000_sa_root_identity_target_protection.sql` | Root targets protected in identity lifecycle | Verified applied (2026-10-13) | Pending | After 20261026100000 | Functions only |
+| 42 | `20261028100000_sa_order_creator_policy.sql` | Order Creator policy + H2M rule | Verified applied (2026-10-13) | Pending | After 20261007100200 | New standard policy; replaces save_order_with_items |
+| 43 | `20261029100000_stock_movements_ordered_view_invoker.sql` | Superseded no-op | No-op | No-op | Superseded by 20261107100000 | None |
+| 44 | `20261030100000_sa_policy_org_type_eligibility.sql` | Organization-aware Group Policy eligibility | Verified applied (2026-10-13) | Pending | After 20261009100000 | Classifies existing policies (applicable_org_types) |
+| 45 | `20261031100000_sa_inventory_stock_view.sql` | View Inventory permission + Inventory Viewer policy | Verified applied (2026-10-13) | Pending | After 20261030100000 | Replaces stock views (originals kept) |
+| 46 | `20261101100000_sa_order_view_policy_dependencies.sql` | View Orders + supporting reads for policies | Verified applied (2026-10-13) | Pending | After 20261031100000 | Adds supporting read permissions to existing policies |
+| 47 | `20261102100000_order_status_events.sql` | Order status event ledger | Verified applied (2026-10-13) | Pending | — | New table + trigger |
+| 48 | `20261102110000_hr_commission_core.sql` | Staff Sales Commission core | Verified applied (2026-10-13) | Pending | After 20261101100000 | New tables, permissions |
+| 49 | `20261102120000_hr_commission_policies.sql` | Commission standard policies | Verified applied (2026-10-13) | Pending | After 20261102110000 | New standard policies |
+| 50 | `20261103100000_hr_mss_compensation_viewer.sql` | MSS + Manager Compensation Viewer | Verified applied (2026-10-13) | Pending | — | New permissions/policy |
+| 51 | `20261104100000_hr_mss_compensation_rls.sql` | Compensation viewer RLS backstop | Verified applied (2026-10-13) | Pending | After 20261103100000 | Policies |
+| 52 | `20261105100000_hr_compensation_column_grants.sql` | Compensation column-level privileges | Verified applied (2026-10-13) (authenticated: no table SELECT, column SELECT) | Pending | After 20261104100000 | Revokes table-wide SELECT on compensation tables from authenticated |
+| 53 | `20261106100000_hr_ess_profile_edit.sql` | ESS hybrid profile editing columns | Verified applied (2026-10-13) | Pending | — | New columns |
+| 54 | `20261107100000_sa_stock_movement_access.sql` | Stock Movement 403 fix + masked movement views | Verified applied (2026-10-13) | Pending | After 20261031100000; supersedes 20261029100000 | Replaces movement views |
+| 55 | `20261108100000_sa_policy_grant_restore.sql` | One-click Restore of a revoked grant | Verified applied (2026-10-13) | Pending | After 20261030100000 | New functions + partial unique index |
+| 56 | `20261109100000_sa_warehouse_manager_full_access.sql` | Warehouse Manager full access + warehouse scope reach | Verified applied (2026-10-13) (warehouse-manager: 19 permissions) | Pending | After 20261107100000 | Widens the standard Warehouse Manager policy for its holders |
+| 57 | `20261110100000_sa_policy_hardening_and_new_standard_policies.sql` | Break-glass destructive keys, SoD enforce, four new policies | Verified applied (2026-10-13) (SoD enforce; no destructive key in Full Access) | Pending | After 20261109100000 and 20261102120000 | Transfers current Full Access holders to break-glass policies, then narrows Full Access; payroll/payment SoD → enforce |
+| 58 | `20261210100000_hr01_position_management_foundation.sql` | Position Management: job classifications + position master | User-confirmed; verified 2026-10-13 | Pending | hr01 → hr05 | New tables |
+| 59 | `20261210110000_hr02_position_reporting_relationships.sql` | Position reporting relationships | User-confirmed; verified 2026-10-13 | Pending | After hr01 | New table + org chart function |
+| 60 | `20261210120000_hr03_position_assignments.sql` | Position assignments | User-confirmed; verified 2026-10-13 | Pending | After hr02 | New table |
+| 61 | `20261210130000_hr04_position_change_approval.sql` | Position change requests + approval steps | User-confirmed; verified 2026-10-13 | Pending | After hr03 | New tables |
+| 62 | `20261210140000_hr05_position_history_and_permissions.sql` | Position history, audit, permissions | User-confirmed; verified 2026-10-13 | Pending | After hr04 | New tables, permissions |
+
+Earlier history: `20261006110000` + `20261006150000` verified on production 2026-10-06 15:00; `20261005130000` verified on production 2026-10-05 13:05. Everything earlier: the first nine checks `true` on both, 2026-10-02; the three `_sms` checks `true` on both, 2026-10-02 10:35.
+
 ## Executive result
 - **Production pending:** `20261005150000_manufacturer_product_categories.sql` (added 2026-10-05; staging verified). `20261006110000_tiktok_shop_import.sql` and `20261006150000_tiktok_shop_api_connection.sql` applied to production in one transaction and verified 2026-10-06 15:00 (pre-state: no `marketplace_*` tables). `20261005130000_bank_statement_import.sql` applied to production in one transaction and verified 2026-10-05 13:05 (pre-state: both tables absent). `20260911120000`, `20260911130000`, `20260911140000` (notification-type SMS channels from the `sms-dynamic-enhancement` merge) were applied and verified on production 2026-10-02 10:35. All S&A migrations through `20261001140000` verified on production 2026-10-02 (nine `true`); the earlier owner-reported rows were confirmed by a direct read-only verification. `20260930100000`, `20261001100000` and `20261001120000` were applied to production on 2026-10-01 (reported by the owner; confirm with the verification query below — not yet independently re-read).
 Also pending on this branch (from `issues-fixing-oct2`): `20261003100000_hr_onboarding_state_and_data_reset.sql` and the S&A/QR-buffer migrations tracked here (see the audit table below).
@@ -172,6 +240,7 @@ The repository's `.gitignore` explicitly re-includes `supabase/migrations/**/*.m
 
 | Date (MYT) | Change |
 |---|---|
+| 2026-10-13 | Read-only staging parity for every `issues-fixing-oct2` migration (objects, function-body md5, data effects): all applied on staging except `20261024110000_sa_emergency_access_enable.sql` (intentional; `emergency_access.enabled=false`). `20261003100000_qr_buffer_one_percent_and_one_batch_per_order.sql` and `20261014100000_sa_ess_baseline_hq_only.sql` applied by the owner, then verified (buffer defaults 1.00 + unique index; `sa_sync_user_lifecycle` = 20261014 body). HR01–HR05 owner-applied and verified. Several file headers still read "NOT APPLIED"; they describe the state when written. Production not checked. |
 | 2026-10-07 | Added `20261007_event01_create_event_tables.sql`, `20261007_event02_event_qr_functions.sql`, `20261007_event03_event_constraints_verify.sql` (Event Management module: 6 `event_*` tables with RLS on + privileges revoked from anon/authenticated and granted to service_role; `validate_event_qr_token` and atomic `register_event_visitor` RPCs with PUBLIC EXECUTE revoked; composite FKs + partial unique indexes). **CREATED / NOT APPLIED** — validated only in an isolated disposable Postgres 17 database: 26 SQL assertions + a two-connection concurrency check (same-phone dedupe → one contact + one registration). App-side verification: `next build` clean (518/518 pages, no errors/warnings); 45 Event Management Vitest tests pass (authorization gate, cross-org scoping, validation, attribution, export formula-injection, nav, jsdom component renders); authorization coverage gate passes. Remaining pre-existing (unrelated) inventory test failures are baseline. Do not apply to staging/production yet. |
 | 2026-10-06 15:00 | `20261006110000_tiktok_shop_import.sql` + `20261006150000_tiktok_shop_api_connection.sql` applied to production in one transaction (pre-state recorded locally: no `marketplace_*` tables) and verified: six tables, RLS on, no policies, no `anon`/`authenticated` privileges, `service_role` write, unique keys. Shipped to production via PR #71. Real SeraOutdoor test data removed from staging afterwards (only the fake "Demo Outdoor" shop remains). |
 | 2026-10-06 12:45 | Added `20261006150000_tiktok_shop_api_connection.sql` (TikTok Shop API connection per shop, new table only). Applied to staging in one transaction and verified (26 columns, RLS on, no policies, no `anon`/`authenticated` privileges, unique external shop key, 0 rows). Production pending, after `20261006110000`. |
