@@ -128,7 +128,6 @@ export const ALL_STATUS_LABEL = 'All Status'
 // ── Limits ─────────────────────────────────────────────────────────────────
 
 export const LEADERBOARD_LIMIT = 25
-export const TOP_PRODUCTS_LIMIT = 10
 export const HEALTH_ROWS_LIMIT = 60
 export const ACTION_ROWS_LIMIT = 60
 export const RECENT_ORDERS_LIMIT = 20
@@ -952,7 +951,6 @@ export function buildDistributorAnalyticsReport(
   const productValueTotal = aggregate.topProducts.reduce((sum, row) => sum + row.orderValue, 0)
   const topProducts: TopProductRow[] = [...aggregate.topProducts]
     .sort((a, b) => b.orderValue - a.orderValue || b.units - a.units)
-    .slice(0, TOP_PRODUCTS_LIMIT)
     .map((row, index) => ({
       rank: index + 1,
       variantId: row.variantId,
