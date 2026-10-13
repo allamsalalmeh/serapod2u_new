@@ -1,6 +1,7 @@
 import 'server-only'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import { navActorFromProfile, resolveDestinationAccess } from '@/lib/server/nav-access'
 
 /**
  * Server-only context helper for Loyalty (Consumer Engagement) pages.
@@ -52,9 +53,10 @@ export async function getLoyaltyPageContext() {
         roles
     }
 
-    // Loyalty is accessible to HQ, SHOP, and INDEPENDENT org types
-    const orgType = organization?.org_type_code
-    const canViewLoyalty = ['HQ', 'SHOP', 'INDEPENDENT'].includes(orgType)
+    // Module entry is the canonical Security & Access decision for the 'loyalty' destination (see nav-access.ts), in
+    // the user's own organization. A failed check is reported as such, not as a denial.
+    const access = await resolveDestinationAccess(navActorFromProfile(transformedUserProfile), 'loyalty')
+    const canViewLoyalty = access.state === 'allowed'
 
-    return { user, userProfile: transformedUserProfile, canViewLoyalty }
+    return { user, userProfile: transformedUserProfile, canViewLoyalty, accessState: access.state }
 }

@@ -7,9 +7,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
 import { ArrowLeft, User, Package, CheckSquare, Loader2, Trash2 } from 'lucide-react'
-import { canCreateH2MOrder } from '@/modules/supply-chain/h2m-access'
+import { useOrderCreateAccess } from '@/modules/supply-chain/useOrderCreateAccess'
 import { DEFAULT_QR_BUFFER_PERCENT, allocateQrBufferCases, qrBufferCases, resolveQrBufferPercent } from '@/lib/orders/qr-buffer'
 import { formatOrderExpectedBoxes } from '@/lib/orders/packaging'
+import { referenceSuffix, reportClientError } from '@/lib/system-logs/client'
 import {
   PRODUCT_SEPARATOR,
   variantIdentityLabel,
@@ -167,7 +168,8 @@ const getDefaultCaseSize = (family: string): number => {
 export default function CreateOrderView({ userProfile, onViewChange }: CreateOrderViewProps) {
   const { toast } = useToast()
   const supabase = createClient()
-  const canCreateH2M = canCreateH2MOrder(userProfile.organizations.org_type_code, userProfile.roles.role_level)
+  // H2M follows Security & Access once supply_chain.order.create is enforced (legacy: HQ level 40); the save RPC re-decides.
+  const { canCreateH2M } = useOrderCreateAccess(userProfile.organizations.org_type_code, userProfile.roles.role_level, false)
 
   // Determine order type based on user's organization type
   const [orderType, setOrderType] = useState<'H2M' | 'D2H' | 'S2D'>('H2M')
@@ -1140,7 +1142,7 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
     if (!editingOrderId && orderType === 'H2M' && !canCreateH2M) {
       toast({
         title: 'Unauthorized',
-        description: 'H2M orders can only be created by Headquarters users with access level 40 or higher.',
+        description: 'You do not have access to create H2M orders. Ask your administrator for the Order Creator policy.',
         variant: 'destructive',
       })
       return
@@ -1255,9 +1257,16 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
 
     } catch (error: any) {
       console.error('Error saving order:', error)
+      // System Logs: handled failures never reach the global listeners, so report explicitly (routine validation and
+      // permission outcomes are not sent; network/timeout/unexpected failures are, with a reference for support).
+      const reference = reportClientError(error, {
+        module: 'Supply Chain',
+        action: editingOrderId ? 'Edit order' : status === 'submitted' ? 'Create and submit order' : 'Create order',
+        details: { requested_status: status, editing: Boolean(editingOrderId), order_type: orderType || null },
+      })
       toast({
         title: 'Order Not Saved',
-        description: 'An unexpected error occurred before the order was sent. Your form has been kept.',
+        description: `${error.message || 'An unexpected error occurred.'}${referenceSuffix(reference)}`,
         variant: 'destructive',
       })
     } finally {

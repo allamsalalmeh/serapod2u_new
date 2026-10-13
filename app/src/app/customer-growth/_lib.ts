@@ -1,13 +1,13 @@
 import 'server-only'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import { navActorFromProfile, resolveCustomerGrowthLandingAccess } from '@/lib/server/nav-access'
 
 /**
  * Server-only context helper for Customer & Growth pages.
  * Mirrors the Supply Chain pattern in src/app/supply-chain/_lib.ts.
  *
- * Customer & Growth is a domain grouping — accessible to all authenticated users.
- * Individual child modules (CRM, Marketing, Loyalty, Catalog) handle their own permissions.
+ * Customer & Growth is a domain grouping: visible to people who can open at least one of its child modules.
  */
 export async function getCustomerGrowthPageContext() {
     const supabase = await createClient()
@@ -52,9 +52,10 @@ export async function getCustomerGrowthPageContext() {
         roles
     }
 
-    // Customer & Growth is accessible to all authenticated users
-    // Individual child modules handle their own permission checks
-    const canViewCustomerGrowth = true
+    // The domain landing is reachable only when at least one child destination is (see nav-access.ts): a parent never
+    // opens without an accessible destination of its own (the shared Product Catalog alone counts only without Supply Chain work). Each child module, route and API still decides for itself.
+    const access = await resolveCustomerGrowthLandingAccess(navActorFromProfile(transformedUserProfile))
+    const canViewCustomerGrowth = access.state === 'allowed'
 
-    return { user, userProfile: transformedUserProfile, canViewCustomerGrowth }
+    return { user, userProfile: transformedUserProfile, canViewCustomerGrowth, accessState: access.state }
 }

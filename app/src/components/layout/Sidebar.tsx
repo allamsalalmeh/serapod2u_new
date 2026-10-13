@@ -5,8 +5,10 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { signOut } from "@/app/actions/auth";
 import { filterMenuItems, type MenuItem } from "@/lib/menu-access";
-import { usePermissions } from "@/hooks/usePermissions";
+import { clearNavAccessCache, useNavAccess } from "@/hooks/useNavAccess";
+import { customerGrowthVisible, financeModuleVisible, hrModuleVisible, productCatalogHome, reportingVisible, supplyChainModuleVisible } from "@/lib/security-access/nav-access";
 import { getAvatarSrc, cn } from "@/lib/utils";
+import { userSubtitle } from "@/lib/identity/display-label";
 import {
   Package,
   BarChart3,
@@ -48,6 +50,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useTranslation } from "@/lib/i18n/LanguageProvider";
 import { isSupplyChainViewId } from "@/modules/supply-chain/supplyChainNav";
+import { isCatalogViewId } from "@/modules/catalog/catalogNav";
 import { isCustomerGrowthViewId } from "@/modules/customer-growth/customerGrowthNav";
 
 interface SidebarProps {
@@ -73,16 +76,16 @@ const navigationItems: MenuItem[] = [
     label: "Reporting",
     icon: TrendingUp,
     description: "Executive reports & insights",
-    access: {
-      allowedOrgTypes: ["HQ", "DIST", "WH"], // Removed MFG/MANU
-      maxRoleLevel: 40, // Managers and above
-    },
+    // Visible exactly when the /reporting page guard allows it (reporting.analytics.view, Security & Access snapshot,
+    // see filteredNavigationItems). Its legacy rule is the permission's compatibility rule.
   },
   {
     id: "supply-chain",
     label: "Supply Chain",
     icon: Truck,
     description: "Products, orders, tracking & inventory",
+    // Visible exactly when the /supply-chain page guard allows the module entry (any Supply Chain permission, Security &
+    // Access snapshot, see filteredNavigationItems). A revoked grant removes it on the next snapshot refresh.
     // Supply Chain submenu moved to Supply Chain top-nav bar (src/modules/supply-chain/supplyChainNav.ts)
     // Sidebar now shows Supply Chain as a single module entry → navigates to /supply-chain
   },
@@ -91,9 +94,7 @@ const navigationItems: MenuItem[] = [
     label: "Customer & Growth",
     icon: UsersRound,
     description: "CRM, marketing, loyalty & product catalog",
-    access: {
-      allowedOrgTypes: ["HQ", "DIST", "WH", "SHOP"],
-    },
+    // Visible only when at least one child destination is accessible (Security & Access snapshot, see filteredNavigationItems).
     // Submenu moved to Customer & Growth top-nav bar (src/modules/customer-growth/customerGrowthNav.ts)
     // Sidebar now shows Customer & Growth as a single module entry → navigates to /customer-growth
   },
@@ -103,11 +104,8 @@ const navigationItems: MenuItem[] = [
     label: "HR",
     icon: Briefcase,
     description: "People & organization structure",
-    access: {
-      allowedOrgTypes: ["HQ", "DIST", "WH", "SHOP"],
-      requiredPermissionsAny: ["view_users", "view_settings"],
-      maxRoleLevel: 60,
-    },
+    // Visible only when at least one HR destination is accessible: My Workspace (Employee Self-Service), the staff
+    // organization chart or an administrative page (Security & Access snapshot, see filteredNavigationItems).
     // HR submenu moved to HR top-nav bar (src/modules/hr/hrNav.ts)
     // Sidebar now shows HR as a single module entry → navigates to /hr
   },
@@ -117,10 +115,8 @@ const navigationItems: MenuItem[] = [
     label: "Finance",
     icon: Calculator,
     description: "Finance & Accounting",
-    access: {
-      allowedOrgTypes: ["HQ", "DIST", "WH"],
-      maxRoleLevel: 40,
-    },
+    // Visible exactly when the /finance page guard allows the module entry (finance.module.view, Security & Access
+    // snapshot, see filteredNavigationItems) — never a legacy role-level check of its own.
     // Finance submenu moved to Finance top-nav bar (src/modules/finance/financeNav.ts)
     // Sidebar now shows Finance as a single module entry → navigates to /finance
   },
@@ -235,6 +231,20 @@ const SidebarNavItem = ({
   );
 };
 
+/** Placeholder for the access-dependent menu while the answers are unresolved (static: no animation, same row height). */
+function NavSkeleton({ rows, label }: { rows: number; label: string }) {
+  return (
+    <div role="status" aria-label={label} className="flex flex-col gap-[0.35rem]">
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} aria-hidden="true" className="flex h-[2.45rem] items-center gap-3 px-[0.85rem]">
+          <span className="h-[18px] w-[18px] shrink-0 rounded bg-[var(--sera-mist,#eef0f3)]" />
+          <span className="h-3 flex-1 rounded bg-[var(--sera-mist,#eef0f3)]" style={{ maxWidth: `${60 + ((i * 17) % 30)}%` }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function Sidebar({
   userProfile,
   currentView,
@@ -242,16 +252,11 @@ export default function Sidebar({
   onCollapseChange,
   initialCollapsed,
 }: SidebarProps) {
-  const {
-    hasPermission,
-    loading: permissionsLoading,
-    permissions,
-  } = usePermissions(
-    userProfile?.roles?.role_level,
-    userProfile?.role_code,
-    userProfile?.department_id,
-  );
   const { t } = useTranslation();
+  // ONE source for every access-dependent entry (HR, Customer & Growth, User Management, Security & Access): the
+  // per-user snapshot for this account and organization, decided on the server with the same rules as the pages. The
+  // menu is resolved together; until then a skeleton stands in (unresolved is neither allowed nor denied).
+  const nav = useNavAccess();
 
   // Translation map for sidebar navigation labels
   const labelMap: Record<string, string> = {
@@ -520,35 +525,42 @@ export default function Sidebar({
     }
   }, [currentView]);
 
-  // Filter menu items based on user role and organization
-  // While permissions are loading, use a permissive checker (returns true for all)
-  // so items appear immediately; once loaded, exact permissions apply.
-  const permissiveCheck = useMemo(() => () => true, []);
+  // The shared Product Catalog is highlighted under the module that offers it for this person.
+  const catalogHome = isCatalogViewId(currentView) ? productCatalogHome(nav.snapshot) : null;
 
-  const filteredNavigationItems = useMemo(() => {
-    const checker = permissionsLoading ? permissiveCheck : hasPermission;
-    const items = filterMenuItems(navigationItems, userProfile, checker);
-    return items;
-  }, [
-    userProfile,
-    qrTrackingVisibility,
-    hasPermission,
-    permissionsLoading,
-    permissions,
-    permissiveCheck,
-  ]);
+  const navLoading = nav.status === "loading";
+  const navFailed = !navLoading && nav.status !== "ready";
+  const navResolved = nav.status === "ready";
 
-  const filteredSecondaryItems = useMemo(() => {
-    const checker = permissionsLoading ? permissiveCheck : hasPermission;
-    const items = filterMenuItems(secondaryItems, userProfile, checker);
-    return items;
-  }, [
-    userProfile,
-    hasPermission,
-    permissionsLoading,
-    permissions,
-    permissiveCheck,
-  ]);
+  // Filter menu items based on user role/organization (known from the profile) and the resolved snapshot.
+  const sidebar = nav.snapshot?.sidebar;
+  const roleCheck = useMemo(
+    () => (permission: string) => (permission === "view_users" ? sidebar?.users === true : false),
+    [sidebar],
+  );
+
+  const filteredNavigationItems = useMemo(
+    () =>
+      filterMenuItems(navigationItems, userProfile, roleCheck).filter((item) => {
+        if (item.id === "hr") return hrModuleVisible(nav.snapshot);
+        if (item.id === "customer-growth") return customerGrowthVisible(nav.snapshot);
+        if (item.id === "finance") return financeModuleVisible(nav.snapshot);
+        if (item.id === "supply-chain") return supplyChainModuleVisible(nav.snapshot);
+        if (item.id === "reporting") return reportingVisible(nav.snapshot);
+        return true;
+      }),
+    [userProfile, qrTrackingVisibility, roleCheck, nav.snapshot],
+  );
+
+  const filteredSecondaryItems = useMemo(
+    () =>
+      secondaryItems.filter((item) => {
+        // Security & Access follows the engine's decision for its own page (a delegated administrator sees it too).
+        if (item.id === "security-access") return sidebar?.securityAccess === true;
+        return filterMenuItems([item], userProfile, roleCheck).length > 0;
+      }),
+    [userProfile, roleCheck, sidebar],
+  );
 
   const handleSignOut = async (e?: React.MouseEvent) => {
     // Prevent accidental clicks
@@ -563,6 +575,8 @@ export default function Sidebar({
     }
 
     setIsSigningOut(true);
+    // The next account starts from its own answers, never this one's.
+    clearNavAccessCache();
     try {
       // Use server action to properly clear cookies and session
       await signOut();
@@ -675,8 +689,12 @@ export default function Sidebar({
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
           <nav className="h-full min-h-full px-2.5 py-3 flex flex-col">
             {/* Main Navigation */}
-            <div className="sera-sidebar__nav-main">
-              {filteredNavigationItems.map((item: any) => {
+            <div
+              className="sera-sidebar__nav-main"
+              aria-busy={navLoading || undefined}
+            >
+              {navLoading && <NavSkeleton rows={7} label="Loading menu" />}
+              {navResolved && filteredNavigationItems.map((item: any) => {
                 // Check if current view matches any submenu or nested submenu
                 const isActive =
                   currentView === item.id ||
@@ -693,10 +711,12 @@ export default function Sidebar({
                     currentView.startsWith("settings/")) ||
                   // Supply Chain module: highlight when on any SC child view
                   (item.id === "supply-chain" &&
-                    isSupplyChainViewId(currentView)) ||
-                  // Customer & Growth domain: highlight when on any child module view
+                    (isSupplyChainViewId(currentView) || catalogHome === "supply-chain")) ||
+                  // Customer & Growth domain: highlight when on any child module view (the shared Product Catalog only
+                  // when it lives here; never both modules at once)
                   (item.id === "customer-growth" &&
-                    isCustomerGrowthViewId(currentView)) ||
+                    isCustomerGrowthViewId(currentView) &&
+                    !(isCatalogViewId(currentView) && catalogHome !== "customer-growth")) ||
                   item.submenu?.some(
                     (sub: any) =>
                       sub.id === currentView ||
@@ -827,9 +847,40 @@ export default function Sidebar({
               })}
             </div>
 
+            {/* A failed access check is not a denial: say so and let the person retry (no partial menu, no legacy fallback) */}
+            {navFailed && (
+              <div
+                role="alert"
+                className={cn(
+                  "mt-2 rounded-md border border-amber-200 bg-amber-50 text-xs text-amber-900",
+                  displayCollapsed ? "p-1.5" : "px-2.5 py-2",
+                )}
+              >
+                {!displayCollapsed && (
+                  <p>
+                    {nav.status === "signed_out"
+                      ? "Your session has expired. Sign in again to see your menu."
+                      : nav.status === "denied"
+                        ? "This account has no menu access."
+                        : "Couldn’t load your menu."}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={nav.refresh}
+                  title="Retry"
+                  aria-label="Retry loading the menu"
+                  className="mt-1 font-medium underline underline-offset-2"
+                >
+                  {displayCollapsed ? "↻" : "Retry"}
+                </button>
+              </div>
+            )}
+
             {/* Secondary Navigation — pinned near footer via margin-top:auto */}
-            <div className="sera-sidebar__nav-secondary">
-              {filteredSecondaryItems.map((item) => {
+            <div className="sera-sidebar__nav-secondary" aria-busy={navLoading || undefined}>
+              {navLoading && <NavSkeleton rows={3} label="Loading account menu" />}
+              {navResolved && filteredSecondaryItems.map((item) => {
                 const isActive = currentView === item.id;
 
                 return (
@@ -873,8 +924,12 @@ export default function Sidebar({
                     {userProfile?.full_name || userProfile?.email || "User"}
                   </p>
                   <p className="text-xs text-[var(--sera-muted)] truncate">
-                    {userProfile?.roles?.role_name || "Guest"} •{" "}
-                    {userProfile?.organizations?.org_name || "No Org"}
+                    {userSubtitle({
+                      orgTypeCode: userProfile?.organizations?.org_type_code,
+                      roleCode: userProfile?.role_code,
+                      roleName: userProfile?.roles?.role_name,
+                      organizationName: userProfile?.organizations?.org_name,
+                    })}
                   </p>
                 </div>
               </div>

@@ -160,6 +160,35 @@ export const customerGrowthNavGroups: CustomerGrowthNavGroup[] = [
     },
 ]
 
+// ── Access filtering ───────────────────────────────────────────
+
+/**
+ * The groups and children the person may open. `allows` answers from the per-user Security & Access snapshot (each child
+ * id is a destination in CUSTOMER_GROWTH_DESTINATIONS). A group is kept only when a child remains, and nothing is
+ * shown until the snapshot is ready. Navigation only: every module, route and API decides again on the server.
+ */
+export function filterCustomerGrowthNavGroups(allows: (destinationId: string) => boolean): CustomerGrowthNavGroup[] {
+    return customerGrowthNavGroups
+        .map((group) => ({ ...group, children: group.children.filter((child) => allows(child.id)) }))
+        .filter((group) => group.children.length > 0)
+}
+
+const GROUP_PHRASES: Record<string, string> = {
+    'cg-crm': 'customer conversations and activity',
+    'cg-marketing': 'marketing campaigns and field tours',
+    'cg-loyalty': 'loyalty programs',
+    'cg-catalog': 'the product catalog',
+    'cg-ecommerce': 'the online store',
+}
+
+/** Page copy that names only the functions the person can open ("Manage the product catalog." for a catalog-only user). */
+export function describeCustomerGrowthFunctions(groups: readonly { id: string }[]): string {
+    const phrases = groups.map((g) => GROUP_PHRASES[g.id]).filter(Boolean)
+    if (phrases.length === 0) return 'No Customer & Growth functions are available to you.'
+    const list = phrases.length === 1 ? phrases[0] : `${phrases.slice(0, -1).join(', ')} and ${phrases[phrases.length - 1]}`
+    return `Manage ${list}.`
+}
+
 // ── Helpers ────────────────────────────────────────────────────
 
 /** E-commerce view IDs */

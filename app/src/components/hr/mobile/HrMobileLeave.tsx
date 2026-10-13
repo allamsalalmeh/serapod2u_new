@@ -283,8 +283,9 @@ export default function HrMobileLeave() {
           <button
             key={t.key}
             onClick={() => setActiveTab(t.key)}
+            aria-pressed={activeTab === t.key}
             className={cn(
-              'flex-1 py-2 px-2 rounded-lg text-xs font-medium transition-colors',
+              'min-h-11 flex-1 py-2 px-2 rounded-lg text-xs font-medium transition-colors',
               activeTab === t.key
                 ? 'bg-card text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground',
@@ -459,12 +460,12 @@ export default function HrMobileLeave() {
           </div>
 
           {/* Half day */}
-          <label className="flex items-center gap-2">
+          <label className="flex min-h-11 items-center gap-3">
             <input
               type="checkbox"
               checked={formHalfDay}
               onChange={(e) => setFormHalfDay(e.target.checked)}
-              className="rounded border-border"
+              className="h-5 w-5 rounded border-border"
             />
             <span className="text-sm text-foreground">Half-day leave</span>
           </label>

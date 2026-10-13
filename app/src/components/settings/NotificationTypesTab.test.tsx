@@ -96,8 +96,8 @@ afterEach(cleanup)
 describe('NotificationTypesTab', () => {
   it('starts with only the three module headers, collapsed, with real counts', async () => {
     await renderTab()
-    expect(screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Supply Chain', 'Customer & Growth', 'Platform & Security'])
-    for (const name of ['Supply Chain', 'Customer & Growth', 'Platform & Security']) {
+    expect(screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Supply Chain', 'Customer & Growth', 'Platform & Settings'])
+    for (const name of ['Supply Chain', 'Customer & Growth', 'Platform & Settings']) {
       expect(moduleButton(name).getAttribute('aria-expanded')).toBe('false')
     }
     expect(moduleButton('Supply Chain').textContent).toContain('3 categories · 4/5 enabled')
@@ -116,7 +116,7 @@ describe('NotificationTypesTab', () => {
     const growth = screen.getByRole('region', { name: 'Customer & Growth' })
     expect(within(growth).getByText('QR & Consumer')).toBeTruthy()
     expect(within(growth).getByText('RoadTour')).toBeTruthy()
-    const platform = screen.getByRole('region', { name: 'Platform & Security' })
+    const platform = screen.getByRole('region', { name: 'Platform & Settings' })
     expect(within(platform).getByText('Delete Organization Masterdata')).toBeTruthy()
     expect(within(platform).getByText('User Account')).toBeTruthy()
     expect(screen.queryByRole('region', { name: 'Finance' })).toBeNull()
@@ -169,7 +169,7 @@ describe('NotificationTypesTab', () => {
 
   it('saves only the default and keeps overrides and disabled notifications', async () => {
     await renderTab()
-    await openModule('Platform & Security')
+    await openModule('Platform & Settings')
     await userEvent.selectOptions(screen.getByLabelText('User Account routing'), 'whatsapp_only')
     await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Default delivery' })).getByRole('radio', { name: 'Email' }))
     await userEvent.click(screen.getByRole('button', { name: /Save Changes/ }))
@@ -215,12 +215,12 @@ describe('NotificationTypesTab', () => {
     await renderTab()
     await openModule('Supply Chain')
     await userEvent.type(screen.getByLabelText('Search notifications'), 'verification code')
-    expect(moduleButton('Platform & Security').getAttribute('aria-expanded')).toBe('true')
+    expect(moduleButton('Platform & Settings').getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText('Delete Organization Verification Code')).toBeTruthy()
     expect(screen.queryByText('Order Status')).toBeNull()
     await userEvent.clear(screen.getByLabelText('Search notifications'))
     expect(screen.queryByText('Delete Organization Verification Code')).toBeNull()
-    expect(moduleButton('Platform & Security').getAttribute('aria-expanded')).toBe('false')
+    expect(moduleButton('Platform & Settings').getAttribute('aria-expanded')).toBe('false')
     expect(moduleButton('Supply Chain').getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText('Order Status')).toBeTruthy()
     expect(categoryButton('Order Status').getAttribute('aria-expanded')).toBe('false')
@@ -240,7 +240,7 @@ describe('NotificationTypesTab', () => {
     expect(screen.getByText('Order Submitted')).toBeTruthy()
     expect(screen.getByText('User Created')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /Collapse all/ }))
-    for (const name of ['Supply Chain', 'Customer & Growth', 'Platform & Security']) {
+    for (const name of ['Supply Chain', 'Customer & Growth', 'Platform & Settings']) {
       expect(moduleButton(name).getAttribute('aria-expanded')).toBe('false')
     }
     expect(screen.queryByText('Order Status')).toBeNull()
@@ -248,13 +248,13 @@ describe('NotificationTypesTab', () => {
 
   it('collapsing a module keeps unsaved edits and does not save', async () => {
     await renderTab()
-    await openCategory('Platform & Security', 'User Account')
+    await openCategory('Platform & Settings', 'User Account')
     await userEvent.selectOptions(screen.getByLabelText('User Account routing'), 'email_only')
     await userEvent.click(screen.getByLabelText('Enable User Created'))
-    await openModule('Platform & Security')
+    await openModule('Platform & Settings')
     expect(screen.queryByLabelText('User Account routing')).toBeNull()
     expect(screen.getByText('Unsaved changes')).toBeTruthy()
-    await openModule('Platform & Security')
+    await openModule('Platform & Settings')
     expect((screen.getByLabelText('User Account routing') as HTMLSelectElement).value).toBe('email_only')
     expect(screen.getByLabelText('Enable User Created').getAttribute('aria-checked')).toBe('false')
     expect(upsert).not.toHaveBeenCalled()
@@ -274,7 +274,7 @@ describe('NotificationTypesTab', () => {
 
   it('saves only after a change, and discard restores the saved state', async () => {
     await renderTab()
-    await openModule('Platform & Security')
+    await openModule('Platform & Settings')
     const save = screen.getByRole('button', { name: /Save Changes/ }) as HTMLButtonElement
     expect(save.disabled).toBe(true)
     const category = screen.getByLabelText('User Account routing') as HTMLSelectElement
@@ -298,7 +298,7 @@ describe('NotificationTypesTab', () => {
   it('keeps edits and shows an error when saving fails', async () => {
     upsertResult = { data: null, error: { message: 'permission denied' } }
     await renderTab()
-    await openModule('Platform & Security')
+    await openModule('Platform & Settings')
     const category = screen.getByLabelText('User Account routing') as HTMLSelectElement
     await userEvent.selectOptions(category, 'email_only')
     await userEvent.click(screen.getByRole('button', { name: /Save Changes/ }))

@@ -8,9 +8,9 @@
  * QR Tracking, Inventory, Quality & Returns) under a unified landing page.
  * All child routes are existing views — no new business logic.
  *
- * Access control: Each group and child can declare an `access` rule.
- * Components use `filterSupplyChainNavForUser()` to strip items
- * the current org-type / role-level should not see.
+ * Access control: Each group and child can declare an `access` rule (organization type / role level business
+ * boundaries). Components use `filterSupplyChainNavForUser()` with the Security & Access answer per view
+ * (supplyChainViewVisible, nav-access.ts) to strip items the person may not open.
  */
 
 import {
@@ -143,16 +143,29 @@ export const supplyChainNavGroups: SupplyChainNavGroup[] = [
     },
 ]
 
+// ── Shared Product Catalog ────────────────────────────────────────
+// The existing catalog page (/catalog/products) is shared with Customer & Growth. It is added to the Products group
+// at filter time, only for people whose catalog lives in Supply Chain; it is not part of the static tree so the
+// Supply Chain view detection and access rules stay unchanged. Offering it here grants nothing: the page and its APIs
+// decide with product.catalog.view.
+const SHARED_CATALOG_GROUP = 'sc-products'
+export const SHARED_PRODUCT_CATALOG_CHILD: SupplyChainNavChild = { id: 'product-catalog', label: 'Product Catalog', icon: ShoppingCart }
+
 // ── Access filtering ─────────────────────────────────────────────
 
-function matchesAccess(access: SCAccessRule | undefined, orgType?: string, roleLevel?: number): boolean {
+/**
+ * `permissionDecided`: the Security & Access answer for the view is available (viewAllowed). The role-level limits are
+ * the legacy rules that answer already applies in each permission's legacy modes, so they are not applied a second time
+ * (they would hide a function a Group Policy grants). Organization-type rules stay: they describe where a screen lives.
+ */
+function matchesAccess(access: SCAccessRule | undefined, orgType?: string, roleLevel?: number, permissionDecided = false): boolean {
     if (!access) return true
     const normalizedOrgType = orgType?.trim().toUpperCase()
     if (access.allowedOrgTypes && access.allowedOrgTypes.length > 0) {
         const allowedOrgTypes = access.allowedOrgTypes.map((type) => type.toUpperCase())
         if (!normalizedOrgType || !allowedOrgTypes.includes(normalizedOrgType)) return false
     }
-    if (access.maxRoleLevel !== undefined) {
+    if (access.maxRoleLevel !== undefined && !permissionDecided) {
         if (roleLevel === undefined) return false
         if (roleLevel > access.maxRoleLevel) return false
     }
@@ -166,12 +179,23 @@ function matchesAccess(access: SCAccessRule | undefined, orgType?: string, roleL
 export function filterSupplyChainNavForUser(
     orgType?: string,
     roleLevel?: number,
+    /** Offer the shared Product Catalog (see productCatalogHome in nav-access.ts): it lives in Supply Chain only for people who work here. */
+    includeProductCatalog = false,
+    /**
+     * The Security & Access answer per view (supplyChainViewVisible in nav-access.ts, from the navigation snapshot).
+     * Applied on top of the organization rules; a group without an allowed child is dropped. The shared catalog child is
+     * already decided by includeProductCatalog.
+     */
+    viewAllowed?: (viewId: string) => boolean,
 ): SupplyChainNavGroup[] {
     return supplyChainNavGroups
-        .filter((g) => matchesAccess(g.access, orgType, roleLevel))
+        .filter((g) => matchesAccess(g.access, orgType, roleLevel, Boolean(viewAllowed)))
         .map((g) => ({
             ...g,
-            children: g.children.filter((c) => matchesAccess(c.access, orgType, roleLevel)),
+            children: [
+                ...g.children.filter((c) => matchesAccess(c.access, orgType, roleLevel, Boolean(viewAllowed)) && (!viewAllowed || viewAllowed(c.id))),
+                ...(includeProductCatalog && g.id === SHARED_CATALOG_GROUP ? [SHARED_PRODUCT_CATALOG_CHILD] : []),
+            ],
         }))
         .filter((g) => g.children.length > 0)
 }
@@ -185,13 +209,18 @@ export function canAccessSupplyChainView(
      * level-40 rule). Omitted = the legacy rule. Replaces only the role level; organization rules stay.
      */
     orderEditorAllowed?: boolean,
+    /** The Security & Access answer for the view (supplyChainViewVisible); omitted = organization rules only. */
+    viewAllowed?: (viewId: string) => boolean,
 ): boolean {
+    if (viewAllowed && !viewAllowed(viewId)) return false
     if (viewId === 'supply-chain') return true
     if (viewId === 'create-order') return orderEditorAllowed ?? canOpenOrderEditor(roleLevel)
     if (viewId === 'distributor-order' && orderEditorAllowed !== undefined) {
         return ['HQ', 'DIST'].includes(String(orgType || '').trim().toUpperCase()) && orderEditorAllowed
     }
-    if (viewId === 'view-order' || viewId === 'track-order') return canOpenOrderEditor(roleLevel)
+    // Order Details: the S&A answer for supply-chain/view-order (View Orders, whose legacy rule is this same level-40
+    // rule) already decided above; without it, the legacy rule alone.
+    if (viewId === 'view-order' || viewId === 'track-order') return viewAllowed ? true : canOpenOrderEditor(roleLevel)
 
     // Product list actions render as internal views rather than top-nav items.
     // They inherit the Product List access rule so the guard does not reject
@@ -209,8 +238,8 @@ export function canAccessSupplyChainView(
         : viewId
 
     return supplyChainNavGroups.some((group) => {
-        if (!matchesAccess(group.access, orgType, roleLevel)) return false
-        return group.children.some((child) => child.id === accessViewId && matchesAccess(child.access, orgType, roleLevel))
+        if (!matchesAccess(group.access, orgType, roleLevel, Boolean(viewAllowed))) return false
+        return group.children.some((child) => child.id === accessViewId && matchesAccess(child.access, orgType, roleLevel, Boolean(viewAllowed)))
     })
 }
 
@@ -393,8 +422,16 @@ export function findSupplyChainGroupForView(viewId: string): SupplyChainNavGroup
 }
 
 /** Build breadcrumb segments from a view id, e.g. ['Supply Chain', 'Products', 'Product List'] */
-export function getSupplyChainBreadcrumb(viewId: string): { label: string; href?: string }[] {
+export function getSupplyChainBreadcrumb(rawViewId: string, includeProductCatalog = false): { label: string; href?: string }[] {
     const crumbs: { label: string; href?: string }[] = [{ label: 'Supply Chain', href: 'supply-chain' }]
+    // The Product Catalog landing ('catalog') and its page ('product-catalog') are one destination here.
+    const viewId = includeProductCatalog && rawViewId === 'catalog' ? SHARED_PRODUCT_CATALOG_CHILD.id : rawViewId
+    if (includeProductCatalog && viewId === SHARED_PRODUCT_CATALOG_CHILD.id) {
+        const products = supplyChainNavGroups.find((g) => g.id === SHARED_CATALOG_GROUP)
+        if (products) crumbs.push({ label: products.label })
+        crumbs.push({ label: SHARED_PRODUCT_CATALOG_CHILD.label, href: SHARED_PRODUCT_CATALOG_CHILD.id })
+        return crumbs
+    }
     const group = findSupplyChainGroupForView(viewId)
     if (group) {
         crumbs.push({ label: group.label })

@@ -70,26 +70,13 @@ export const canManageHr = async (ctx: HrAuthContext) => {
     return manageOrgChart.allowed || editOrgSettings.allowed
 }
 
+/**
+ * The historical HR module-entry rule (legacy evaluator for hr.module.view / hr.employee.view while they are on a legacy
+ * migration mode): an HR administrator or HR role, or any of the legacy directory/settings permissions. It is
+ * only a boolean now; the old role-level / reason strings were shown to people in a technical denial screen and are gone.
+ */
 export const getHrAccessDecision = async (ctx: HrAuthContext) => {
-    const isAdmin = isHrAdminRole(ctx)
-    const isHrRole = HR_ROLE_CODES.has(normalizeHrRoleCode(ctx.roleCode))
-    const roleLabel = `${ctx.roleCode ?? 'unknown'} Level ${ctx.roleLevel ?? 'unknown'}`
-
-    if (isAdmin || isHrRole) {
-        return {
-            allowed: true,
-            roleLabel,
-            reason: `Allowed by ${isAdmin ? 'admin role' : 'HR role'}`,
-            checks: {
-                isAdmin,
-                isHrRole,
-                viewUsers: false,
-                viewSettings: false,
-                manageOrgChart: false,
-                editOrgSettings: false,
-            }
-        }
-    }
+    if (isHrAdminRole(ctx) || HR_ROLE_CODES.has(normalizeHrRoleCode(ctx.roleCode))) return { allowed: true }
 
     const [viewUsers, viewSettings, manageOrgChart, editOrgSettings] = await Promise.all([
         checkPermissionForUser(ctx.userId, 'view_users'),
@@ -98,36 +85,7 @@ export const getHrAccessDecision = async (ctx: HrAuthContext) => {
         checkPermissionForUser(ctx.userId, 'edit_org_settings')
     ])
 
-    const allowed =
-        isAdmin ||
-        isHrRole ||
-        viewUsers.allowed ||
-        viewSettings.allowed ||
-        manageOrgChart.allowed ||
-        editOrgSettings.allowed
-
-    const reasons = [
-        viewUsers.allowed ? `view_users (${viewUsers.reason})` : null,
-        viewSettings.allowed ? `view_settings (${viewSettings.reason})` : null,
-        manageOrgChart.allowed ? `manage_org_chart (${manageOrgChart.reason})` : null,
-        editOrgSettings.allowed ? `edit_org_settings (${editOrgSettings.reason})` : null,
-    ].filter(Boolean)
-
-    return {
-        allowed,
-        roleLabel,
-        reason: allowed
-            ? `Allowed by ${reasons.join(', ')}`
-            : `${roleLabel} does not match HR admin roles and has no HR entry permissions.`,
-        checks: {
-            isAdmin,
-            isHrRole,
-            viewUsers: viewUsers.allowed,
-            viewSettings: viewSettings.allowed,
-            manageOrgChart: manageOrgChart.allowed,
-            editOrgSettings: editOrgSettings.allowed,
-        }
-    }
+    return { allowed: viewUsers.allowed || viewSettings.allowed || manageOrgChart.allowed || editOrgSettings.allowed }
 }
 
 /**

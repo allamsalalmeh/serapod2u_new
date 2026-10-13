@@ -27,6 +27,8 @@ import {
   ShoppingBag
 } from 'lucide-react'
 import SupplyChainPageHeader from '@/modules/supply-chain/components/SupplyChainPageHeader'
+import { useNavAccess } from '@/hooks/useNavAccess'
+import { productCatalogHome } from '@/lib/security-access/nav-access'
 
 interface Product {
   id: string
@@ -89,6 +91,9 @@ export default function ProductCatalogView({ userProfile, onViewChange }: Produc
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
 
   const { isReady, supabase } = useSupabaseAuth()
+  // The module that offers the catalog for this person (shared page, one home); blank until the answers are ready.
+  const catalogHome = productCatalogHome(useNavAccess().snapshot)
+  const catalogEyebrow = catalogHome === 'supply-chain' ? 'Supply Chain' : catalogHome === 'customer-growth' ? 'Customer & Growth' : ''
   const { toast } = useToast()
 
   // Check if user is independent (no organization)
@@ -212,7 +217,7 @@ export default function ProductCatalogView({ userProfile, onViewChange }: Produc
   return (
     <div className="sera-sc-page sera-page-enter">
       <SupplyChainPageHeader
-        eyebrow="Customer & Growth"
+        eyebrow={catalogEyebrow}
         title="Product Catalog"
         description={
           isIndependentUser

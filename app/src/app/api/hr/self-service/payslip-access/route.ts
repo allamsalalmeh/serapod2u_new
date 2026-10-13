@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { canManageHr, getHrAuthContext, hrCan } from '@/lib/server/hrAccess'
+import { getHrAuthContext, hrCan, hrSelfCan } from '@/lib/server/hrAccess'
 
 export async function GET() {
     try {
@@ -10,16 +10,25 @@ export async function GET() {
             return NextResponse.json({ success: false, error: ctxResult.error }, { status: 401 })
         }
 
-        const { organizationId } = ctxResult.data
+        const ctx = ctxResult.data
+        const { organizationId } = ctx
         if (!organizationId) {
             return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
         }
 
-        const { data, error } = await supabase
+        // The organization's access log is a payroll view; an employee sees only their own entries.
+        const isManager = await hrCan(ctx, 'hr.payroll.view')
+        if (!isManager && !(await hrSelfCan(ctx))) {
+            return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+        }
+
+        let query = supabase
             .from('hr_payslip_access_logs')
             .select('*')
             .eq('organization_id', organizationId)
             .order('accessed_at', { ascending: false })
+        if (!isManager) query = query.eq('employee_user_id', ctx.userId)
+        const { data, error } = await query
 
         if (error) {
             return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -52,7 +61,7 @@ export async function POST(request: NextRequest) {
         }
 
         const isManager = await hrCan(ctx, 'hr.payroll.view')
-        if (!isManager && employeeUserId !== ctx.userId) {
+        if (!isManager && (employeeUserId !== ctx.userId || !(await hrSelfCan(ctx)))) {
             return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
         }
 

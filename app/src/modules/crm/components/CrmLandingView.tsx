@@ -1,7 +1,8 @@
 'use client'
 
 import { ArrowRight } from 'lucide-react'
-import { crmNavGroups, type CrmNavGroup } from '@/modules/crm/crmNav'
+import { crmNavGroups as all_crmNavGroups, type CrmNavGroup } from '@/modules/crm/crmNav'
+import { useAccessibleNavGroups } from '@/hooks/useNavAccess'
 import CrmHeroBanner from './CrmHeroBanner'
 import ModuleLandingCard from '@/components/layout/ModuleLandingCard'
 import { crmLandingAccents, landingAccents, pickLandingAccent } from '@/lib/landing-accents'
@@ -17,6 +18,8 @@ interface CrmLandingViewProps {
 const defaultIconAccent = landingAccents.teal
 
 export default function CrmLandingView({ userName, bannerImageUrl, onViewChange, hideHeroBanner }: CrmLandingViewProps) {
+    // Only the functions this person may open (Security & Access snapshot); the server decides every page and API too.
+    const crmNavGroups = useAccessibleNavGroups(all_crmNavGroups)
     return (
         <div className="sera-module-landing">
             {!hideHeroBanner && <CrmHeroBanner userName={userName ?? null} bannerImageUrl={bannerImageUrl} />}

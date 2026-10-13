@@ -1,7 +1,8 @@
 'use client'
 
 import { ArrowRight } from 'lucide-react'
-import { loyaltyNavGroups, type LoyaltyNavGroup } from '@/modules/loyalty/loyaltyNav'
+import { loyaltyNavGroups as all_loyaltyNavGroups, type LoyaltyNavGroup } from '@/modules/loyalty/loyaltyNav'
+import { useAccessibleNavGroups } from '@/hooks/useNavAccess'
 import LoyaltyHeroBanner from './LoyaltyHeroBanner'
 import ModuleLandingCard from '@/components/layout/ModuleLandingCard'
 import { landingAccents, loyaltyLandingAccents, pickLandingAccent } from '@/lib/landing-accents'
@@ -17,6 +18,8 @@ interface LoyaltyLandingViewProps {
 const defaultIconAccent = landingAccents.amber
 
 export default function LoyaltyLandingView({ userName, bannerImageUrl, onViewChange, hideHeroBanner }: LoyaltyLandingViewProps) {
+    // Only the functions this person may open (Security & Access snapshot); the server decides every page and API too.
+    const loyaltyNavGroups = useAccessibleNavGroups(all_loyaltyNavGroups)
     return (
         <div className="sera-module-landing">
             {!hideHeroBanner && <LoyaltyHeroBanner userName={userName ?? null} bannerImageUrl={bannerImageUrl} />}

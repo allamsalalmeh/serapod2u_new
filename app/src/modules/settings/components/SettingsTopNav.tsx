@@ -4,13 +4,14 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { Settings, Search, ChevronRight, ChevronDown, X, Menu as MenuIcon } from 'lucide-react'
 import {
-    settingsNavGroups,
+    visibleSettingsGroups,
     getAllSettingsNavItems,
     getSettingsBreadcrumb,
     type SettingsNavGroup,
     type SettingsNavChild,
 } from '@/modules/settings/settingsNav'
 import { cn } from '@/lib/utils'
+import { useSystemLogsAccess } from '@/components/system-logs/useSystemLogsAccess'
 
 // ── Props ────────────────────────────────────────────────────────
 
@@ -37,15 +38,9 @@ export default function SettingsTopNav({ currentView, onNavigate, roleLevel }: S
     const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
     const [dropdownStyle, setDropdownStyle] = useState<{ left: number; top: number }>({ left: 0, top: 0 })
 
-    // Filter groups based on role level
-    const visibleGroups = useMemo(() => {
-        return settingsNavGroups.filter((group) => {
-            if (group.id === 'settings-authorization' || group.id === 'settings-danger-zone') {
-                return roleLevel != null && roleLevel === 1
-            }
-            return true
-        })
-    }, [roleLevel])
+    // Filter groups based on role level (and System Logs access for the System group)
+    const canViewSystemLogs = useSystemLogsAccess()
+    const visibleGroups = useMemo(() => visibleSettingsGroups({ roleLevel, canViewSystemLogs }), [roleLevel, canViewSystemLogs])
 
     // ── Active helpers ────────────────────────────────────────────
 
@@ -67,7 +62,10 @@ export default function SettingsTopNav({ currentView, onNavigate, roleLevel }: S
 
     // ── Search ────────────────────────────────────────────────────
 
-    const allItems = useMemo(() => getAllSettingsNavItems(), [])
+    const allItems = useMemo(
+        () => getAllSettingsNavItems().filter((item) => canViewSystemLogs || !item.id.startsWith('settings/system/')),
+        [canViewSystemLogs]
+    )
 
     const filteredItems = useMemo(() => {
         if (!searchQuery.trim()) return []

@@ -6,6 +6,8 @@ import SupplyChainHeroBanner from './SupplyChainHeroBanner'
 import ModuleLandingCard from '@/components/layout/ModuleLandingCard'
 import { landingAccents, pickLandingAccent, supplyChainLandingAccents } from '@/lib/landing-accents'
 import { Badge } from '@/components/ui/badge'
+import { useNavAccess } from '@/hooks/useNavAccess'
+import { productCatalogHome, supplyChainViewVisible } from '@/lib/security-access/nav-access'
 import { cn } from '@/lib/utils'
 
 interface SupplyChainLandingViewProps {
@@ -19,7 +21,11 @@ interface SupplyChainLandingViewProps {
 const defaultIconAccent = landingAccents.orange
 
 export default function SupplyChainLandingView({ userName, bannerImageUrl, onViewChange, orgTypeCode, roleLevel }: SupplyChainLandingViewProps) {
-    const filteredGroups = filterSupplyChainNavForUser(orgTypeCode, roleLevel)
+    const { snapshot } = useNavAccess()
+    // Only the cards the person may open: organization rules plus the Security & Access answer per view (same decision
+    // as the page guard of each /supply-chain/... route).
+    const filteredGroups = filterSupplyChainNavForUser(orgTypeCode, roleLevel, productCatalogHome(snapshot) === 'supply-chain',
+        (viewId) => supplyChainViewVisible(snapshot, viewId))
 
     return (
         <div className="sera-module-landing">

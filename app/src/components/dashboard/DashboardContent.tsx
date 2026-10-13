@@ -32,7 +32,7 @@ import DashboardOverview from '@/components/dashboard/DashboardOverview'
 import HrPeopleView from '@/components/hr/HrPeopleView'
 import HrOrgChartView from '@/components/hr/HrOrgChartView'
 import HrDepartmentsView from '@/components/hr/HrDepartmentsView'
-import HrPositionsView from '@/components/hr/HrPositionsView'
+import HrPositionManagementView from '@/components/hr/HrPositionManagementView'
 import HrSettingsView from '@/components/hr/HrSettingsView'
 import HrAttendanceClockView from '@/components/hr/modules/HrAttendanceClockView'
 import HrAttendanceTimesheetsView from '@/components/hr/modules/HrAttendanceTimesheetsView'
@@ -60,6 +60,7 @@ import ModuleAiAssistant, {
   customerGrowthAssistantConfig,
 } from '@/components/ai/ModuleAiAssistant'
 // Finance Module Components
+import { useSaCapability } from '@/hooks/useSaCapability'
 import FinanceTopNav from '@/modules/finance/components/FinanceTopNav'
 import FinanceLandingView from '@/modules/finance/components/FinanceLandingView'
 import FinanceConfigurationView from '@/modules/finance/components/FinanceConfigurationView'
@@ -100,6 +101,7 @@ import DocSequenceTab from '@/components/settings/DocSequenceTab'
 import AuthorizationTab from '@/components/settings/AuthorizationTab'
 import SecurityAccessView from '@/components/security-access/SecurityAccessView'
 import DangerZoneTab from '@/components/settings/DangerZoneTab'
+import SystemLogsView from '@/components/system-logs/SystemLogsView'
 import AiProviderSettingsCard from '@/modules/hr/components/AiProviderSettingsCard'
 import AiUsageDashboard from '@/modules/settings/components/AiUsageDashboard'
 import PaymentGatewaySettingsView from '@/modules/settings/components/PaymentGatewaySettingsView'
@@ -110,7 +112,6 @@ import QRBatchesView from '@/components/dashboard/views/qr-tracking/QRBatchesVie
 import ManufacturerScanView2 from '@/components/dashboard/views/qr-tracking/ManufacturerScanView2'
 import WarehouseReceiveView2 from '@/components/dashboard/views/qr-tracking/WarehouseReceiveView2'
 import WarehouseShipV2 from '@/components/dashboard/views/qr-tracking/WarehouseShipV2'
-import ConsumerScanView from '@/components/dashboard/views/qr-tracking/ConsumerScanView'
 
 import DistributorOrderView from '@/components/orders/DistributorOrderView'
 import ShopOrderView from '@/components/orders/ShopOrderView'
@@ -168,13 +169,24 @@ import { ShopDrilldownView } from '@/modules/roadtour/components/reporting/ShopD
 import { MonthlyKpiPerformanceReportView } from '@/modules/roadtour/components/analytics/MonthlyKpiPerformanceReportView'
 import { RoadtourKpiSettingsView } from '@/modules/roadtour/components/RoadtourKpiSettingsView'
 import RoadtourTopNav from '@/modules/roadtour/components/RoadtourTopNav'
+import EventManagementTopNav from '@/modules/event-management/components/EventManagementTopNav'
+import { EventManagementLoadingState } from '@/modules/event-management/components/EventManagementLoadingState'
+import { eventManagementHrefForView, isEventManagementViewId, shouldRenderServerContent } from '@/modules/event-management/eventManagementNav'
 import GlobalPageChrome from '@/components/layout/GlobalPageChrome'
 import { isRoadtourViewId, resolveRoadtourViewId, roadtourHrefForView } from '@/modules/roadtour/roadtourNav'
 import UserProfileWrapper from '@/components/users/UserProfileWrapper'
+import { NavAccessProvider, useNavAccess } from '@/hooks/useNavAccess'
+import { useOrderCreateAccess } from '@/modules/supply-chain/useOrderCreateAccess'
+import { productCatalogHome, supplyChainViewVisible } from '@/lib/security-access/nav-access'
+import HrMyWorkspaceView from '@/components/hr/workspace/HrMyWorkspaceView'
 import MarketingPage from '@/app/loyalty/marketing/page'
 import { AdminSupportInboxV2 } from '@/components/support/AdminSupportInboxV2'
 
-interface UserProfile {
+/**
+ * The shape the pages actually pass (a Supabase `users` row from `select *`):
+ * nullable organization/fields. Kept lenient so no page needs to change.
+ */
+interface UserProfileInput {
   id: string
   email: string
   full_name: string | null
@@ -191,6 +203,53 @@ interface UserProfile {
   last_login_ip: unknown
   created_at: string | null
   updated_at: string | null
+  address?: string | null
+  location?: string | null
+  shop_name?: string | null
+  bank_id?: string | null
+  bank_account_number?: string | null
+  bank_account_holder_name?: string | null
+  referral_phone?: string | null
+  organizations: {
+    id: string
+    org_name: string
+    org_type_code: string
+    org_code: string
+  }
+  roles: {
+    role_name: string
+    role_level: number
+  }
+}
+
+/**
+ * The shape the child view components expect: an authenticated account always
+ * has an organization, so the child views type `organization_id` as non-null.
+ */
+interface UserProfile {
+  id: string
+  email: string
+  full_name: string | null
+  phone: string | null
+  role_code: string
+  organization_id: string
+  avatar_url: string | null
+  signature_url: string | null
+  is_active: boolean
+  is_verified: boolean
+  email_verified_at: string | null
+  phone_verified_at: string | null
+  last_login_at: string | null
+  last_login_ip: string | null
+  created_at: string
+  updated_at: string
+  address: string | null
+  location: string | null
+  shop_name: string | null
+  bank_id: string | null
+  bank_account_number: string | null
+  bank_account_holder_name: string | null
+  referral_phone: string | null
   organizations: {
     id: string
     org_name: string
@@ -204,7 +263,7 @@ interface UserProfile {
 }
 
 interface DashboardContentProps {
-  userProfile: UserProfile
+  userProfile: UserProfileInput
   initialView?: string
   initialOrderId?: string
   initialTargetId?: string
@@ -215,7 +274,9 @@ interface DashboardContentProps {
   children?: ReactNode
 }
 
-export default function DashboardContent({ userProfile, initialView, initialOrderId, initialTargetId, initialOrgId, initialProductId, children }: DashboardContentProps) {
+function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId, initialTargetId, initialOrgId, initialProductId, children }: DashboardContentProps) {
+  // Authenticated accounts always have an organization; the child views treat it as non-null.
+  const userProfile = inputProfile as unknown as UserProfile
   const router = useRouter()
   const pathname = usePathname()
   const { hasPermission } = usePermissions(
@@ -224,18 +285,21 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
     (userProfile as any).department_id
   )
 
-  const canEditHr =
-    userProfile.roles.role_level <= 20 ||
-    hasPermission('manage_org_chart') ||
-    hasPermission('edit_org_settings')
+  // HR edit controls follow Security & Access (hr.employee.manage with the HR module entry); hidden until answered.
+  const navAccess = useNavAccess()
+  // Security & Access answer per Supply Chain view (module entry + the view's destination); not ready = not allowed.
+  const supplyChainViewAllowed = (viewId: string) => supplyChainViewVisible(navAccess.snapshot, viewId)
+  const canEditHr = navAccess.allows('hr:manage-people')
 
-  const canEditFinance =
-    userProfile.roles.role_level <= 20 ||
-    hasPermission('edit_org_settings') ||
-    hasPermission('view_settings')
+  // Finance Configuration edit controls show what the save route decides (finance.settings.manage; its legacy rule is
+  // role level 20), like the Currency settings screen.
+  const canEditFinance = useSaCapability('finance.settings.manage', userProfile.roles.role_level <= 20)
 
   const orgTypeCode = userProfile.organizations?.org_type_code
   const roleLevel = userProfile.roles?.role_level
+  // Order editors follow Security & Access once order creation is enforced (an Order Creator grant opens them).
+  const orderCreateAccess = useOrderCreateAccess(orgTypeCode, roleLevel, hasPermission('create_orders'))
+  const orderEditorAllowed = orderCreateAccess.loading ? undefined : orderCreateAccess.canOpenEditor
 
   // ── Sidebar collapse state (persisted in localStorage) ──────────
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -489,6 +553,12 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
       router.push('/security-access')
       return
     }
+    // The HR entry is decided on the server (administrative landing, or My Workspace for employees); never rendered
+    // client-side without that decision.
+    if (view === 'hr') {
+      router.push('/hr')
+      return
+    }
     if (view === 'user-profile') {
       const targetId =
         (typeof window !== 'undefined' ? sessionStorage.getItem('selectedUserId') : null) ||
@@ -504,6 +574,7 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
     // refresh + back/forward keep the active subpage. No UI/design changes.
     const moduleHref =
       roadtourHrefForView(view) ||
+      eventManagementHrefForView(view) ||
       crmHrefForView(view) ||
       marketingHrefForView(view) ||
       loyaltyHrefForView(view) ||
@@ -521,10 +592,17 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
 
   const renderCurrentView = () => {
     const viewId = String(currentView || '').replace(/^\//, '')
+    if (orderCreateAccess.loading && (viewId === 'create-order' || viewId === 'distributor-order')) {
+      return <div className="p-8 text-sm text-gray-500">Checking access…</div>
+    }
+    // Supply Chain views switched in the app (no server round trip) follow the page guards' S&A decision.
+    if (viewId !== 'supply-chain' && isSupplyChainViewId(viewId) && navAccess.status === 'loading') {
+      return <div className="p-8 text-sm text-gray-500">Checking access…</div>
+    }
     if (
       viewId !== 'supply-chain' &&
       isSupplyChainViewId(viewId) &&
-      !canAccessSupplyChainView(viewId, orgTypeCode, roleLevel)
+      !canAccessSupplyChainView(viewId, orgTypeCode, roleLevel, orderEditorAllowed, supplyChainViewAllowed)
     ) {
       return (
         <div className="p-8">
@@ -535,6 +613,11 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
         </div>
       )
     }
+
+    // Event Management content is rendered by its server pages (passed in as `children`), never here. Reaching this
+    // point with an Event Management view means its page has not arrived yet (navigation pending), so show the module's
+    // loading state; falling through to the default would substitute the general dashboard.
+    if (isEventManagementViewId(viewId)) return <EventManagementLoadingState />
 
     // Switched on the slash-normalized id so SerApp's routes resolve, and legacy
     // RoadTour Analytics view ids still resolve to the report that replaced
@@ -780,6 +863,8 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
             organizationId={userProfile.organizations.id}
           />
         )
+      case 'settings/system/logs':
+        return <SystemLogsView />
       case 'settings/danger-zone':
         return <DangerZoneTab userProfile={userProfile} />
       case 'settings/payment-gateway':
@@ -802,7 +887,7 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
         return <HrDepartmentsView userProfile={userProfile} />
       case 'hr-positions':
         return (
-          <HrPositionsView
+          <HrPositionManagementView
             organizationId={userProfile.organizations.id}
             canEdit={canEditHr}
           />
@@ -827,7 +912,7 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
         return <HrDepartmentsView userProfile={userProfile} />
       case 'hr/people/positions':
         return (
-          <HrPositionsView
+          <HrPositionManagementView
             organizationId={userProfile.organizations.id}
             canEdit={canEditHr}
           />
@@ -872,13 +957,13 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
         return <HrDepartmentsView userProfile={userProfile} />
       case 'hr/settings/positions':
         return (
-          <HrPositionsView
+          <HrPositionManagementView
             organizationId={userProfile.organizations.id}
             canEdit={canEditHr}
           />
         )
       case 'hr/settings/approval-rules':
-        return <HrSettingsApprovalRulesView />
+        return <HrSettingsApprovalRulesView organizationId={userProfile.organizations.id} canEdit={canEditHr} />
       case 'hr/settings/permissions':
         return <HrSettingsPermissionsView />
       case 'hr/settings/accounting':
@@ -896,6 +981,8 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
             onNavigate={handleViewChange}
           />
         )
+      case 'hr/my-workspace':
+        return <HrMyWorkspaceView userName={userProfile.full_name} />
       case 'hr':
         return <HrLandingView userName={userProfile.full_name} bannerImageUrl={moduleBannerUrls.hr} />
 
@@ -978,13 +1065,25 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
   const isFinanceView = currentView === 'finance' || currentView.startsWith('finance/')
   const isSettingsView = currentView === 'settings' || currentView.startsWith('settings/')
   const isNotificationsView = currentView === 'notifications' || currentView.startsWith('notifications/')
-  const isSupplyChainView = isSupplyChainViewId(currentView)
+  // The shared Product Catalog (same page, same permission) is presented under ONE module per person: Supply Chain for
+  // people who work there, Customer & Growth otherwise. Until the access answers are ready it has no module chrome, so
+  // nothing flips afterwards.
+  const isCatalogRoute = isCatalogViewId(currentView)
+  const catalogHome = isCatalogRoute ? productCatalogHome(navAccess.snapshot) : null
+  const catalogInSupplyChain = catalogHome === 'supply-chain'
+  const catalogInCustomerGrowth = catalogHome === 'customer-growth'
+  const isSupplyChainView = isSupplyChainViewId(currentView) || catalogInSupplyChain
   const isLoyaltyView = isLoyaltyViewId(currentView)
   const isCrmView = isCrmViewId(currentView)
-  const isMarketingView = isMarketingViewId(currentView)
-  const isCatalogView = isCatalogViewId(currentView)
-  const isCustomerGrowthView = isCustomerGrowthViewId(currentView)
+  // Event Management is its own module bar (like RoadTour), not the Marketing bar, though it lives under /marketing.
+  const isEventManagementView = isEventManagementViewId(currentView)
+  const isMarketingView = isMarketingViewId(currentView) && !isEventManagementView
+  const isCatalogView = catalogInCustomerGrowth
+  const isCustomerGrowthView = isCustomerGrowthViewId(currentView) && !(isCatalogRoute && !catalogInCustomerGrowth)
   const isRoadtourView = isRoadtourViewId(currentView)
+  // Server-rendered page content (`children`) belongs to `initialView`; handleViewChange moves `currentView` (and the
+  // module chrome) before the next page arrives. See shouldRenderServerContent.
+  const renderServerContent = shouldRenderServerContent({ hasServerContent: children != null, currentView, initialView })
   // Show Customer & Growth domain top-nav on ALL CG views (landing + child modules + sub-views)
   const showCustomerGrowthTopNav = isCustomerGrowthView
   const hasRenderedTopNav =
@@ -997,7 +1096,9 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
     isCrmView ||
     isMarketingView ||
     isCatalogView ||
+    isCatalogRoute ||
     isRoadtourView ||
+    isEventManagementView ||
     showCustomerGrowthTopNav
 
   const handleHrNavigate = (href: string) => {
@@ -1013,7 +1114,9 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
   }
 
   const handleSupplyChainNavigate = (viewId: string) => {
-    if (!canAccessSupplyChainView(viewId, orgTypeCode, roleLevel)) return
+    // The shared Product Catalog is offered in Supply Chain's Products group; the catalog route decides access itself.
+    if (isCatalogViewId(viewId) && catalogInSupplyChain) { handleViewChange(viewId); return }
+    if (!canAccessSupplyChainView(viewId, orgTypeCode, roleLevel, orderEditorAllowed, supplyChainViewAllowed)) return
     handleViewChange(viewId)
   }
 
@@ -1091,6 +1194,9 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
         {isRoadtourView && (
           <RoadtourTopNav currentView={currentView} onNavigate={handleViewChange} />
         )}
+        {isEventManagementView && (
+          <EventManagementTopNav currentView={currentView} onNavigate={handleViewChange} />
+        )}
         {!hasRenderedTopNav && (
           <GlobalPageChrome
             currentView={currentView}
@@ -1099,7 +1205,7 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
         )}
         </div>
         <main className="sera-main sera-main__scroll flex-1 min-h-0 overflow-y-auto overscroll-contain print:p-0 print:pt-0 print:overflow-visible print:h-auto">
-          {children ?? renderCurrentView()}
+          {renderServerContent ? children : renderCurrentView()}
         </main>
         {/* HR AI Assistant – floating button + chat drawer */}
         {isHrView && <HrAiAssistant />}
@@ -1111,5 +1217,18 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
         {isCustomerGrowthView && <ModuleAiAssistant config={customerGrowthAssistantConfig} />}
       </div>
     </div>
+  )
+}
+
+/**
+ * The signed-in shell. It owns the per-user navigation access (Security & Access) shared by the sidebar, the module top
+ * navigation, landing cards and in-page actions, so access is fetched once and bound to this account and organization.
+ */
+export default function DashboardContent(props: DashboardContentProps) {
+  const { userProfile } = props
+  return (
+    <NavAccessProvider userId={userProfile.id} organizationId={userProfile.organization_id ?? userProfile.organizations?.id ?? null}>
+      <DashboardShell {...props} />
+    </NavAccessProvider>
   )
 }

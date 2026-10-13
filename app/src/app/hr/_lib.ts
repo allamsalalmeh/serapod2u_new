@@ -1,20 +1,36 @@
 import 'server-only'
+import { createElement, type ReactElement } from 'react'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { getHrAccessDecision, hrCan } from '@/lib/server/hrAccess'
+import AccessState from '@/components/access/AccessState'
+import { loadNavActor, resolveDestinationAccess, type DestinationAccess, type NavActor } from '@/lib/server/nav-access'
 
-const shouldShowHrAccessDiagnostic = () => {
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_SITE_URL || ''
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-    return (
-        process.env.NODE_ENV !== 'production' ||
-        appUrl.includes('localhost') ||
-        appUrl.includes('stg.') ||
-        supabaseUrl.includes('stg')
-    )
+export const HR_WORKSPACE_HREF = '/hr/my-workspace'
+
+/**
+ * Where "back" goes from a denied HR page: My Workspace when the person holds Employee Self-Service, otherwise the
+ * dashboard. Decided only after a denial, with the same canonical evaluation.
+ */
+async function homeFor(actor: NavActor) {
+    const workspace = await resolveDestinationAccess(actor, 'hr/my-workspace')
+    return workspace.state === 'allowed'
+        ? { homeHref: HR_WORKSPACE_HREF, homeLabel: 'Back to My Workspace' }
+        : { homeHref: '/dashboard', homeLabel: 'Back to Dashboard' }
 }
 
-export async function getHrPageContext() {
+/**
+ * Server context for every desktop HR page.
+ *
+ * `destination` is the HR destination id (see HR_DESTINATIONS) or an ordered list of them (first allowed wins, e.g.
+ * the administrative chart before the staff chart). Access is decided per destination by the canonical Security &
+ * Access evaluation, not by a blanket "HR administrator" rule: Employee Self-Service destinations carry their own
+ * permission, administrative ones need the module entry plus their own permission.
+ *
+ * `gate` is a ready-to-return access state (denied / temporarily unavailable) that loads no protected data; when it is
+ * null the page may render. `access.destination` tells which of several destinations matched. An expired login
+ * redirects to /login and is never reported as a denial.
+ */
+export async function getHrPageContext(destination?: string | readonly string[]) {
     const supabase = await createClient()
 
     const { data: { user }, error } = await supabase.auth.getUser()
@@ -57,28 +73,27 @@ export async function getHrPageContext() {
         roles
     }
 
-    const hrCtx = {
+    const actor: NavActor = {
         userId: user.id,
         organizationId,
+        orgTypeCode: organization?.org_type_code ?? null,
         roleCode: userProfile.role_code ?? null,
         roleLevel: roles?.role_level ?? null,
     }
-    const legacyAccess = await getHrAccessDecision(hrCtx)
-    // Module entry is an S&A decision (hr.module.view); the historical HR
-    // entry rule is the legacy evaluator.
-    const allowed = await hrCan(hrCtx, 'hr.module.view', () => legacyAccess.allowed)
-    const hrAccess = { ...legacyAccess, allowed }
 
-    const hrUnauthorizedReason =
-        !hrAccess.allowed && shouldShowHrAccessDiagnostic()
-            ? `Your account role was detected as ${roles?.role_name ?? userProfile.role_code ?? 'Unknown'} Level ${roles?.role_level ?? 'unknown'}, but this route requires HR admin permission. ${hrAccess.reason}`
-            : null
-
-    return {
-        user,
-        userProfile: transformedUserProfile,
-        canViewHr: hrAccess.allowed,
-        hrAccess,
-        hrUnauthorizedReason,
+    let access: DestinationAccess = { state: 'allowed', destination: Array.isArray(destination) ? destination[0] : (destination as string | undefined) ?? '' }
+    let gate: ReactElement | null = null
+    if (destination !== undefined) {
+        access = await resolveDestinationAccess(actor, destination as string | string[])
+        if (access.state !== 'allowed') {
+            // Diagnostics stay on the server; the person sees the ordinary state only.
+            console.warn('[hr-access]', access.state, { userId: user.id, destination })
+            gate = createElement(AccessState, {
+                kind: access.state === 'unavailable' ? 'unavailable' : 'denied',
+                ...(await homeFor(actor)),
+            })
+        }
     }
+
+    return { user, userProfile: transformedUserProfile, actor, access, gate }
 }

@@ -1,5 +1,6 @@
 import { guardUserOperation, userAllowed } from '@/lib/security-access/operation'
 import { NextRequest, NextResponse } from 'next/server'
+import { referenceHeaders, reportServerError } from '@/lib/system-logs/server'
 import { createClient } from '@supabase/supabase-js'
 import { loadScopedShopUsers } from '../_user-management-scope'
 
@@ -8,6 +9,7 @@ import { loadScopedShopUsers } from '../_user-management-scope'
  * Returns non-shop consumer performance rows for the current company scope.
  */
 export async function GET(_request: NextRequest) {
+    let actorId: string | null = null
     try {
         const { createClient: createServerClient } = await import('@/lib/supabase/server')
         const supabase = await createServerClient()
@@ -16,6 +18,7 @@ export async function GET(_request: NextRequest) {
         if (authError || !user) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
+        actorId = user.id
         const saDenied = await guardUserOperation(user.id, 'customer.consumer.view')
         if (saDenied) return saDenied
 
@@ -70,6 +73,9 @@ export async function GET(_request: NextRequest) {
         return NextResponse.json({ success: true, data })
     } catch (err: any) {
         console.error('consumer-performance error:', err)
-        return NextResponse.json({ error: err.message }, { status: 500 })
+        // System Logs (Product Catalog): the browser's report of this failure links to this one via the returned reference.
+        const referenceId = await reportServerError({ error: err, status: 500, module: 'Product Catalog', action: 'Load consumer performance',
+            apiRoute: '/api/admin/consumer-performance', method: 'GET', actorId })
+        return NextResponse.json({ error: err.message, referenceId }, { status: 500, headers: referenceHeaders(referenceId) })
     }
 }

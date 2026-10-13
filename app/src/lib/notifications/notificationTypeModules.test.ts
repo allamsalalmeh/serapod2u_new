@@ -13,7 +13,7 @@ describe('groupByModule', () => {
   it('places every known category under its S&A module in S&A order', () => {
     const types = Object.keys(CATEGORY_MODULE).map((category) => type(category, `${category}_event`))
     const sections = groupByModule(types)
-    expect(sections.map((s) => s.name)).toEqual(['Supply Chain', 'Customer & Growth', 'Platform & Security'])
+    expect(sections.map((s) => s.name)).toEqual(['Supply Chain', 'Customer & Growth', 'Platform & Settings'])
     expect(sections[0].categories.map((c) => c.label)).toEqual(['Order Status', 'Order Document', 'Inventory & Stock', 'Return Product'])
     expect(sections[1].categories.map((c) => c.label)).toEqual(['QR & Consumer', 'RoadTour'])
     expect(sections[2].categories.map((c) => c.label)).toEqual(['Security & OTP', 'User Account', 'Delete Organization Masterdata', 'System Check'])

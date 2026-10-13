@@ -4,12 +4,14 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { UsersRound, ChevronDown, ChevronRight, Menu as MenuIcon } from 'lucide-react'
 import {
-    customerGrowthNavGroups,
+    filterCustomerGrowthNavGroups,
     getActiveCustomerGrowthGroup,
     type CustomerGrowthNavGroup,
     type CustomerGrowthNavChild,
 } from '@/modules/customer-growth/customerGrowthNav'
 import { cn } from '@/lib/utils'
+import { customerGrowthChildVisible } from '@/lib/security-access/nav-access'
+import { useNavAccess } from '@/hooks/useNavAccess'
 
 // ── Props ────────────────────────────────────────────────────────
 
@@ -24,6 +26,9 @@ interface CustomerGrowthTopNavProps {
 
 export default function CustomerGrowthTopNav({ currentView, onNavigate }: CustomerGrowthTopNavProps) {
     const router = useRouter()
+    // Only the destinations this person may open (Security & Access snapshot); the server decides every route and API too.
+    const { snapshot } = useNavAccess()
+    const customerGrowthNavGroups = useMemo(() => filterCustomerGrowthNavGroups(id => customerGrowthChildVisible(snapshot, id)), [snapshot]) // eslint-disable-line react-hooks/exhaustive-deps
     const [openGroupId, setOpenGroupId] = useState<string | null>(null)
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
     const dropdownRef = useRef<HTMLDivElement>(null)

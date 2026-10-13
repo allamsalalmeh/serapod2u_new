@@ -8,6 +8,8 @@ import {
     type SupplyChainNavGroup,
     type SupplyChainNavChild,
 } from '@/modules/supply-chain/supplyChainNav'
+import { useNavAccess } from '@/hooks/useNavAccess'
+import { productCatalogHome, supplyChainViewVisible } from '@/lib/security-access/nav-access'
 import { cn } from '@/lib/utils'
 
 // ── Props ────────────────────────────────────────────────────────
@@ -25,11 +27,16 @@ interface SupplyChainTopNavProps {
 
 // ── Component ────────────────────────────────────────────────────
 
-export default function SupplyChainTopNav({ currentView, onNavigate, orgTypeCode, roleLevel }: SupplyChainTopNavProps) {
-    // Filter nav groups based on user's org type and role level
+export default function SupplyChainTopNav({ currentView: rawView, onNavigate, orgTypeCode, roleLevel }: SupplyChainTopNavProps) {
+    // The shared Product Catalog is offered here only when it lives in Supply Chain for this person.
+    const { snapshot } = useNavAccess()
+    const includeProductCatalog = productCatalogHome(snapshot) === 'supply-chain'
+    // The catalog landing ('catalog') and its page ('product-catalog') are one destination in this navigation.
+    const currentView = includeProductCatalog && rawView === 'catalog' ? 'product-catalog' : rawView
+    // Filter nav groups: organization rules plus the Security & Access answer per view (the page guards' decision)
     const navGroups = useMemo(
-        () => filterSupplyChainNavForUser(orgTypeCode, roleLevel),
-        [orgTypeCode, roleLevel]
+        () => filterSupplyChainNavForUser(orgTypeCode, roleLevel, includeProductCatalog, (viewId) => supplyChainViewVisible(snapshot, viewId)),
+        [orgTypeCode, roleLevel, includeProductCatalog, snapshot]
     )
     const [openGroupId, setOpenGroupId] = useState<string | null>(null)
     const [searchQuery, setSearchQuery] = useState('')
@@ -57,7 +64,7 @@ export default function SupplyChainTopNav({ currentView, onNavigate, orgTypeCode
 
     // ── Breadcrumb ────────────────────────────────────────────────
 
-    const breadcrumbs = useMemo(() => getSupplyChainBreadcrumb(currentView), [currentView])
+    const breadcrumbs = useMemo(() => getSupplyChainBreadcrumb(currentView, includeProductCatalog), [currentView, includeProductCatalog])
 
     // ── Search ────────────────────────────────────────────────────
 

@@ -16,10 +16,10 @@ export const CATEGORY_MODULE: Record<string, string> = {
   return: 'supply_chain',
   qr: 'customer_growth',
   roadtour: 'customer_growth',
-  security: 'platform_security',
-  user: 'platform_security',
-  'Delete Organization Masterdata': 'platform_security',
-  system: 'platform_security',
+  security: 'platform_settings',
+  user: 'platform_settings',
+  'Delete Organization Masterdata': 'platform_settings',
+  system: 'platform_settings',
 }
 
 export const CATEGORY_LABELS: Record<string, string> = {

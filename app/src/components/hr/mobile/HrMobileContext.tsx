@@ -30,10 +30,12 @@ export interface HrUserProfile {
 
 interface HrMobileContextType {
   userProfile: HrUserProfile
-  /** Manager-level: role_level ≤ 50 (WH_MANAGER, SHOP_MANAGER, admins) */
+  /** May approve leave (Security & Access: hr.leave.approve with the HR module entry). Not a legacy role level. */
   isManager: boolean
-  /** Admin / HR admin: role_level ≤ 30 */
+  /** Holds HR administration (Security & Access: hr.module.view). Not a legacy role level. */
   isAdmin: boolean
+  /** May open the read-only staff organization chart (Security & Access). */
+  canViewOrgChart: boolean
   organizationId: string
 }
 
@@ -53,20 +55,25 @@ export function useHrMobile() {
 
 export function HrMobileProvider({
   userProfile,
+  canApproveLeave = false,
+  canAdministerHr = false,
+  canViewOrgChart = false,
   children,
 }: {
   userProfile: HrUserProfile
+  canApproveLeave?: boolean
+  canAdministerHr?: boolean
+  canViewOrgChart?: boolean
   children: ReactNode
 }) {
-  const roleLevel = userProfile.roles?.role_level ?? 70
-  const isAdmin = roleLevel <= 30
-  const isManager = roleLevel <= 50
+  const isAdmin = canAdministerHr
+  const isManager = canApproveLeave
   const organizationId =
     userProfile.organization_id ?? userProfile.organizations?.id ?? ''
 
   return (
     <HrMobileContext.Provider
-      value={{ userProfile, isManager, isAdmin, organizationId }}
+      value={{ userProfile, isManager, isAdmin, canViewOrgChart, organizationId }}
     >
       {children}
     </HrMobileContext.Provider>

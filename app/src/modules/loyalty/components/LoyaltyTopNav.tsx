@@ -3,12 +3,13 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Gift, Search, ChevronRight, ChevronDown, X, Menu as MenuIcon } from 'lucide-react'
 import {
-    loyaltyNavGroups,
+    loyaltyNavGroups as all_loyaltyNavGroups,
     getAllLoyaltyNavItems,
     getLoyaltyBreadcrumb,
     type LoyaltyNavGroup,
     type LoyaltyNavChild,
 } from '@/modules/loyalty/loyaltyNav'
+import { useAccessibleNavGroups } from '@/hooks/useNavAccess'
 import { cn } from '@/lib/utils'
 
 // ── Props ────────────────────────────────────────────────────────
@@ -23,6 +24,8 @@ interface LoyaltyTopNavProps {
 // ── Component ────────────────────────────────────────────────────
 
 export default function LoyaltyTopNav({ currentView, onNavigate }: LoyaltyTopNavProps) {
+    // Only the functions this person may open (Security & Access snapshot); the server decides every page and API too.
+    const loyaltyNavGroups = useAccessibleNavGroups(all_loyaltyNavGroups)
     const [openGroupId, setOpenGroupId] = useState<string | null>(null)
     const [searchQuery, setSearchQuery] = useState('')
     const [searchOpen, setSearchOpen] = useState(false)

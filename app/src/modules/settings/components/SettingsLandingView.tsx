@@ -2,7 +2,8 @@
 
 import { useRouter } from 'next/navigation'
 import { ArrowRight } from 'lucide-react'
-import { settingsNavGroups, type SettingsNavGroup } from '@/modules/settings/settingsNav'
+import { visibleSettingsGroups, type SettingsNavGroup } from '@/modules/settings/settingsNav'
+import { useSystemLogsAccess } from '@/components/system-logs/useSystemLogsAccess'
 import SettingsHeroBanner from './SettingsHeroBanner'
 import ModuleLandingCard from '@/components/layout/ModuleLandingCard'
 import { landingAccents, pickLandingAccent, settingsLandingAccents } from '@/lib/landing-accents'
@@ -19,12 +20,8 @@ interface SettingsLandingViewProps {
 export default function SettingsLandingView({ userName, roleLevel, bannerImageUrl }: SettingsLandingViewProps) {
     const router = useRouter()
 
-    const visibleGroups = settingsNavGroups.filter((group) => {
-        if (group.id === 'settings-authorization' || group.id === 'settings-danger-zone') {
-            return roleLevel != null && roleLevel === 1
-        }
-        return true
-    })
+    const canViewSystemLogs = useSystemLogsAccess()
+    const visibleGroups = visibleSettingsGroups({ roleLevel, canViewSystemLogs })
 
     return (
         <div className="sera-module-landing">

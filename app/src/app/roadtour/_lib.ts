@@ -1,6 +1,7 @@
 import 'server-only'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import { navActorFromProfile, resolveDestinationAccess } from '@/lib/server/nav-access'
 
 export async function getRoadtourPageContext() {
     const supabase = await createClient()
@@ -21,5 +22,8 @@ export async function getRoadtourPageContext() {
     if (!organizationId) redirect('/login')
 
     const transformedUserProfile = { ...userProfile, organization_id: organizationId, organizations: organization, roles }
-    return { user, userProfile: transformedUserProfile }
+    // RoadTour pages need a RoadTour permission (any of campaign / visit / report / KPI management). Every RoadTour API
+    // keeps its own check; this decides whether the screens open at all.
+    const access = await resolveDestinationAccess(navActorFromProfile(transformedUserProfile), 'roadtour')
+    return { user, userProfile: transformedUserProfile, canViewRoadtour: access.state === 'allowed', accessState: access.state }
 }

@@ -51,19 +51,10 @@ export interface FinanceNavGroup {
     children: FinanceNavChild[]
 }
 
-export interface FinanceNavAccess {
-    requiredPermissionsAny: string[]
-    maxRoleLevel: number
-    allowedOrgTypes: string[]
-}
-
 // ── Access rule ──────────────────────────────────────────────────
-
-export const financeAccess: FinanceNavAccess = {
-    requiredPermissionsAny: ['view_settings'],
-    maxRoleLevel: 40,
-    allowedOrgTypes: ['HQ', 'DIST', 'WH'],
-}
+// Who may open each entry is decided by Security & Access: FINANCE_DESTINATIONS in
+// src/lib/security-access/nav-access.ts (same ids as below), the one table the sidebar, these menus and the
+// /finance page guards share. There is no role-level rule here.
 
 // ── Helper ───────────────────────────────────────────────────────
 
@@ -144,6 +135,16 @@ export const financeNavGroups: FinanceNavGroup[] = [
         ],
     },
 ]
+
+/**
+ * The groups and entries this person may open (`allows`: the navigation snapshot's destination answer). A group
+ * without an allowed entry is dropped. Navigation only: every page and API decides again on the server.
+ */
+export function filterFinanceNavGroups(allows: (destinationId: string) => boolean): FinanceNavGroup[] {
+    return financeNavGroups
+        .map((group) => ({ ...group, children: group.children.filter((child) => allows(child.id)) }))
+        .filter((group) => group.children.length > 0)
+}
 
 // ── Flat list helpers ────────────────────────────────────────────
 

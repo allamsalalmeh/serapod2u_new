@@ -7,10 +7,11 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
+import { referenceSuffix, reportClientError } from '@/lib/system-logs/client'
 import { formatNumber } from '@/lib/utils/formatters'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useSaCapability } from '@/hooks/useSaCapability'
-import { canCreateH2MOrder } from '@/modules/supply-chain/h2m-access'
+import { useOrderCreateAccess } from '@/modules/supply-chain/useOrderCreateAccess'
 import { queryByIdChunks } from '@/lib/orders/chunked-id-query'
 import { getOrderDisplayOrgName, orderMatchesSearch } from '@/lib/orders/order-search'
 import { calculateOrderTotal, sortOrders } from '@/lib/orders/order-list-sort'
@@ -200,16 +201,13 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
     userProfile.role_code,
     userProfile.department_id
   )
-  const canCreateOrders = hasPermission('create_orders')
-  const canCreateH2M = canCreateH2MOrder(userProfile.organizations.org_type_code, userProfile.roles.role_level)
-
-  // Debug: Log permission state
-  console.log('[OrdersView] Permission check:', {
-    roleLevel: userProfile.roles.role_level,
-    permissionsLoading,
-    canCreateOrders,
-    hasCreateOrderPermission: hasPermission('create_orders')
-  })
+  // Create Order follows Security & Access (supply_chain.order.create) once it is enforced; the legacy create_orders
+  // and level-40 H2M rules decide only before that. Manufacturers never create orders; H2M stays HQ-only.
+  const { canCreateOrders, canCreateH2M } = useOrderCreateAccess(
+    userProfile.organizations.org_type_code,
+    userProfile.roles.role_level,
+    !permissionsLoading && hasPermission('create_orders'),
+  )
 
   // Extract unique sellers from orders
   const uniqueSellers = orders.reduce((acc, order) => {
@@ -624,9 +622,16 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
         description = 'Unable to reach the server. Please check your connection and try again.'
       }
 
+      // System Logs: the same safe fields, sanitized server-side; an empty PostgREST error is a network failure.
+      const emptyError = !error || (typeof error === 'object' && Object.keys(error).length === 0)
+      const reference = reportClientError(emptyError ? { name: 'TypeError', message: 'Failed to fetch (empty error from PostgREST)' } : error, {
+        module: 'Supply Chain', action: 'Cancel order', code, status: typeof status === 'number' ? status : undefined,
+        details: { order_no: orderNo, details, hint },
+      })
+
       toast({
         title: 'Cancellation Failed',
-        description,
+        description: `${description}${referenceSuffix(reference)}`,
         variant: 'destructive'
       })
     } finally {
@@ -826,7 +831,7 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
     // If H2M filter is selected, go directly to H2M order creation
     if (typeFilter === 'H2M') {
       if (!canCreateH2M) {
-        toast({ title: 'Unauthorized', description: 'H2M orders can only be created by Headquarters users with access level 40 or higher.', variant: 'destructive' })
+        toast({ title: 'Unauthorized', description: 'You do not have access to create H2M orders. Ask your administrator for the Order Creator policy.', variant: 'destructive' })
         return
       }
       if (onViewChange) {

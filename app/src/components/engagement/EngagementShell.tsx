@@ -3,6 +3,7 @@
 import { ReactNode } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Sidebar from '@/components/layout/Sidebar'
+import { NavAccessProvider } from '@/hooks/useNavAccess'
 import type { UserProfileWithRelations } from '@/lib/server/get-user-profile'
 
 interface EngagementShellProps {
@@ -78,6 +79,7 @@ export function EngagementShell({ userProfile, activeView = 'point-catalog', chi
   }
 
   return (
+    <NavAccessProvider userId={userProfile.id} organizationId={userProfile.organization_id ?? userProfile.organizations?.id ?? null}>
     <div className="h-[100dvh] max-h-[100dvh] overflow-hidden bg-background flex sera-shell">
       <div className="print:hidden w-0 min-w-0 overflow-visible shrink-0 lg:w-auto lg:sticky lg:top-0 lg:h-[100dvh] lg:self-start">
         <Sidebar userProfile={userProfile} currentView={activeView} onViewChange={handleNavigate} />
@@ -94,5 +96,6 @@ export function EngagementShell({ userProfile, activeView = 'point-catalog', chi
         </main>
       </div>
     </div>
+    </NavAccessProvider>
   )
 }

@@ -149,7 +149,7 @@ const SEGMENT_ICONS: Partial<Record<RoutingPreset, LucideIcon>> = {
 
 const MODULE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   supply_chain: Truck, customer_growth: HeartHandshake, hr_payroll: Briefcase,
-  finance: Landmark, platform_security: ShieldCheck, reporting: BarChart3,
+  finance: Landmark, security_access: ShieldCheck, platform_settings: Settings, reporting: BarChart3,
 }
 
 const SELECT_CLASS = 'h-9 w-full min-w-0 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none focus-visible:border-[var(--sera-orange)] focus-visible:ring-2 focus-visible:ring-[var(--sera-orange)]/25 disabled:cursor-not-allowed disabled:border-slate-100 disabled:bg-slate-50 disabled:text-slate-400'

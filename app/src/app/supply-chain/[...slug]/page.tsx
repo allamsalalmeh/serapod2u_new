@@ -2,15 +2,18 @@ import { authorizeOperation, organizationResource } from '@/lib/security-access/
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { getSupplyChainPageContext } from '@/app/supply-chain/_lib'
 import { resolveSupplyChainSlug } from '@/modules/supply-chain/supplyChainNav'
+import { supplyChainDestinationForView } from '@/lib/security-access/nav-access'
+import AccessState from '@/components/access/AccessState'
 
 interface SupplyChainSubPageProps {
     params: Promise<{ slug?: string[] }>
 }
 
 export default async function SupplyChainSubPage({ params }: SupplyChainSubPageProps) {
-    const { userProfile, canViewSupplyChain } = await getSupplyChainPageContext()
     const { slug = [] } = await params
     const { initialView, initialOrgId, initialOrderId, initialProductId } = resolveSupplyChainSlug(slug)
+    // A direct URL needs the same S&A decision as its menu entry (module entry + the view's own destination).
+    const { userProfile, canViewSupplyChain, accessState } = await getSupplyChainPageContext(supplyChainDestinationForView(initialView))
 
     const orgType = userProfile.organizations?.org_type_code
     const roleLevel = userProfile.roles?.role_level
@@ -29,10 +32,7 @@ export default async function SupplyChainSubPage({ params }: SupplyChainSubPageP
 
     if (!canViewSupplyChain || !canManageInventorySettings) {
         return (
-            <div className="p-8">
-                <h2 className="text-xl font-semibold">Unauthorized</h2>
-                <p>You do not have permission to view this Supply Chain page.</p>
-            </div>
+            <AccessState kind={accessState === 'unavailable' ? 'unavailable' : 'denied'} />
         )
     }
 

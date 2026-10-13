@@ -16,12 +16,18 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { userCategoryLabel } from '@/lib/identity/display-label'
 
 export default function HrMobileProfile() {
   const router = useRouter()
   const { userProfile, isAdmin, organizationId } = useHrMobile()
   const supabase = createClient()
   const { toast } = useToast()
+  const categoryLabel = userCategoryLabel({
+    orgTypeCode: userProfile.organizations?.org_type_code,
+    roleCode: userProfile.role_code,
+    roleName: userProfile.roles?.role_name,
+  })
 
   /* ── Logout ─────────────────────────────────────────────────── */
 
@@ -71,7 +77,7 @@ export default function HrMobileProfile() {
             {userProfile.full_name || 'Unknown'}
           </h2>
           <p className="text-sm text-muted-foreground">
-            {userProfile.roles?.role_name || userProfile.role_code}
+            {categoryLabel}
           </p>
         </div>
       </div>
@@ -91,13 +97,8 @@ export default function HrMobileProfile() {
         />
         <InfoRow
           icon={Briefcase}
-          label="Role"
-          value={userProfile.roles?.role_name || userProfile.role_code}
-        />
-        <InfoRow
-          icon={Shield}
-          label="Role Level"
-          value={String(userProfile.roles?.role_level ?? '—')}
+          label="Account type"
+          value={categoryLabel}
         />
       </div>
 

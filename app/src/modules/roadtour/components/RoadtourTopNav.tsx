@@ -3,13 +3,14 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Map, ChevronDown, ChevronRight, Menu as MenuIcon } from 'lucide-react'
 import {
-  roadtourNavGroups,
+  filterRoadtourNavGroups,
   findRoadtourGroupForView,
   resolveRoadtourViewId,
   type RoadtourNavGroup,
   type RoadtourNavChild,
 } from '@/modules/roadtour/roadtourNav'
 import { cn } from '@/lib/utils'
+import { useNavAccess } from '@/hooks/useNavAccess'
 
 interface RoadtourTopNavProps {
   currentView: string
@@ -17,6 +18,9 @@ interface RoadtourTopNavProps {
 }
 
 export default function RoadtourTopNav({ currentView, onNavigate }: RoadtourTopNavProps) {
+  // Only the sections this person may open (Security & Access snapshot); the server decides every page and API too.
+  const { snapshot, allows } = useNavAccess()
+  const roadtourNavGroups = useMemo(() => filterRoadtourNavGroups(allows), [snapshot]) // eslint-disable-line react-hooks/exhaustive-deps
   const [openGroupId, setOpenGroupId] = useState<string | null>(null)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)

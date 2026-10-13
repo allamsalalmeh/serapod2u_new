@@ -3,9 +3,9 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { Calculator, Search, ChevronRight, ChevronDown, X, Menu as MenuIcon } from 'lucide-react'
+import { useNavAccess } from '@/hooks/useNavAccess'
 import {
-    financeNavGroups,
-    getAllFinanceNavItems,
+    filterFinanceNavGroups,
     getFinanceBreadcrumb,
     type FinanceNavGroup,
     type FinanceNavChild,
@@ -25,6 +25,9 @@ interface FinanceTopNavProps {
 
 export default function FinanceTopNav({ currentView, onNavigate }: FinanceTopNavProps) {
     const router = useRouter()
+    // Only the sections this person may open (Security & Access snapshot); nothing while it loads or is unavailable.
+    const { snapshot, allows } = useNavAccess()
+    const financeNavGroups = useMemo(() => filterFinanceNavGroups(allows), [snapshot]) // eslint-disable-line react-hooks/exhaustive-deps
     const [openGroupId, setOpenGroupId] = useState<string | null>(null)
     const [searchQuery, setSearchQuery] = useState('')
     const [searchOpen, setSearchOpen] = useState(false)
@@ -55,7 +58,7 @@ export default function FinanceTopNav({ currentView, onNavigate }: FinanceTopNav
 
     // ── Search ────────────────────────────────────────────────────
 
-    const allItems = useMemo(() => getAllFinanceNavItems(), [])
+    const allItems = useMemo(() => financeNavGroups.flatMap((g) => g.children), [financeNavGroups])
 
     const filteredItems = useMemo(() => {
         if (!searchQuery.trim()) return []

@@ -1,7 +1,9 @@
 'use client'
 
 import { ArrowRight } from 'lucide-react'
-import { roadtourNavGroups } from '../roadtourNav'
+import { useMemo } from 'react'
+import { filterRoadtourNavGroups } from '../roadtourNav'
+import { useNavAccess } from '@/hooks/useNavAccess'
 import ModuleLightHeader from '@/components/layout/ModuleLightHeader'
 import ModuleLandingCard from '@/components/layout/ModuleLandingCard'
 import { landingAccents, pickLandingAccent, roadtourLandingAccents } from '@/lib/landing-accents'
@@ -15,6 +17,9 @@ interface RoadtourLandingViewProps {
 const defaultAccent = landingAccents.orange
 
 export function RoadtourLandingView({ onViewChange }: RoadtourLandingViewProps) {
+    // Only the sections this person may open (Security & Access snapshot); the server decides every page and API too.
+    const { snapshot, allows } = useNavAccess()
+    const roadtourNavGroups = useMemo(() => filterRoadtourNavGroups(allows), [snapshot]) // eslint-disable-line react-hooks/exhaustive-deps
     return (
         <div className="sera-module-landing">
             <ModuleLightHeader

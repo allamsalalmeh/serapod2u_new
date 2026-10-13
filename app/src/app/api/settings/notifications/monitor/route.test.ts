@@ -81,7 +81,7 @@ describe('GET /api/settings/notifications/monitor', () => {
     expect(body.matchingBeforeStatus).toBe(2)
     expect(body.statuses).not.toContain('read')
     expect(body.capabilityNote).toMatch(/delivery report/)
-    expect(body.facets.modules.map((m: any) => m.label)).toEqual(['Platform & Security', 'Supply Chain', 'Other / Unmapped'])
+    expect(body.facets.modules.map((m: any) => m.label)).toEqual(['Platform & Settings', 'Supply Chain', 'Other / Unmapped'])
   })
 
   it('keeps historical unmapped events reachable', async () => {

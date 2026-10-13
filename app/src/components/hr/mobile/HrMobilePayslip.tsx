@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { useHrMobile } from './HrMobileContext'
-import { createClient } from '@/lib/supabase/client'
 import {
   FileText,
   Download,
@@ -63,8 +62,6 @@ const months = [
 /* ─── Component ───────────────────────────────────────────────────── */
 
 export default function HrMobilePayslip() {
-  const { userProfile, organizationId } = useHrMobile()
-  const supabase = createClient()
   const { toast } = useToast()
 
   const now = new Date()
@@ -88,33 +85,13 @@ export default function HrMobilePayslip() {
       const lastDay = new Date(selectedYear, selectedMonth + 1, 0).getDate()
       const periodEnd = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}-${lastDay}`
 
-      // Try to find a payroll run item for this user in this period
-      const { data } = await supabase
-        .from('hr_payroll_run_items')
-        .select(
-          `
-          id,
-          basic_salary,
-          gross_amount,
-          deductions_amount,
-          net_amount,
-          allowances_amount,
-          other_allowances,
-          epf_employee,
-          socso_employee,
-          eis_employee,
-          pcb_amount,
-          hr_payroll_runs!inner(
-            id, period_start, period_end, status
-          )
-        `,
-        )
-        .eq('employee_user_id', userProfile.id)
-        .gte('hr_payroll_runs.period_start', periodStart)
-        .lte('hr_payroll_runs.period_end', periodEnd)
-        .in('hr_payroll_runs.status', ['calculated', 'approved', 'posted'])
-        .order('created_at', { ascending: false })
-        .limit(1)
+      // Own, published payslips only: the server resolves the employee from the signed-in account (no employee id is
+      // sent) and returns items of final payroll runs (approved/posted) only.
+      const res = await fetch(
+        `/api/hr/self-service/payslips?periodStart=${periodStart}&periodEnd=${periodEnd}`,
+        { cache: 'no-store' },
+      )
+      const data = res.ok ? ((await res.json())?.data as any[] | undefined) ?? [] : []
 
       if (data && data.length > 0) {
         const item = data[0] as any
@@ -198,7 +175,8 @@ export default function HrMobilePayslip() {
       <div className="flex items-center justify-between bg-card rounded-2xl border border-border p-3">
         <button
           onClick={prevMonth}
-          className="p-2 rounded-lg hover:bg-accent transition-colors"
+          aria-label="Previous month"
+          className="flex h-11 w-11 items-center justify-center rounded-lg hover:bg-accent transition-colors"
         >
           <ChevronLeft className="h-5 w-5 text-foreground" />
         </button>
@@ -211,8 +189,9 @@ export default function HrMobilePayslip() {
         <button
           onClick={nextMonth}
           disabled={isCurrentMonth}
+          aria-label="Next month"
           className={cn(
-            'p-2 rounded-lg transition-colors',
+            'flex h-11 w-11 items-center justify-center rounded-lg transition-colors',
             isCurrentMonth
               ? 'opacity-30 cursor-not-allowed'
               : 'hover:bg-accent',
@@ -230,7 +209,7 @@ export default function HrMobilePayslip() {
       ) : payslip ? (
         <>
           {/* Summary cards */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 gap-3 min-[460px]:grid-cols-3">
             <SummaryCard
               icon={TrendingUp}
               label="Gross"
@@ -307,7 +286,8 @@ export default function HrMobilePayslip() {
               size="sm"
               variant="outline"
               onClick={handleDownload}
-              className="gap-1.5"
+              aria-label="Download PDF payslip (not available yet)"
+              className="min-h-11 gap-1.5"
             >
               <Download className="h-3.5 w-3.5" />
               PDF
@@ -365,7 +345,7 @@ function SummaryCard({
     >
       <Icon className={cn('h-5 w-5', fg[color])} />
       <p className="text-[10px] text-muted-foreground">{label}</p>
-      <p className={cn('text-sm font-bold', fg[color])}>
+      <p className={cn('max-w-full break-words text-center text-sm font-bold', fg[color])}>
         {formatCurrency(amount)}
       </p>
     </div>

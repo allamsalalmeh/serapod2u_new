@@ -1,5 +1,6 @@
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { getEcommercePageContext } from '@/app/ecommerce/_lib'
+import AccessState from '@/components/access/AccessState'
 
 /**
  * /ecommerce — E-commerce module landing page.
@@ -7,14 +8,11 @@ import { getEcommercePageContext } from '@/app/ecommerce/_lib'
  * Part of the Customer & Growth domain.
  */
 export default async function EcommercePage() {
-    const { userProfile, canViewEcommerce } = await getEcommercePageContext()
+    const { userProfile, canViewEcommerce, accessState } = await getEcommercePageContext()
 
     if (!canViewEcommerce) {
         return (
-            <div className="p-8">
-                <h2 className="text-xl font-semibold">Unauthorized</h2>
-                <p>You do not have permission to view E-commerce management.</p>
-            </div>
+            <AccessState kind={accessState === 'unavailable' ? 'unavailable' : 'denied'} />
         )
     }
 

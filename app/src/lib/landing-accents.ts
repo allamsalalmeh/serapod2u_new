@@ -98,5 +98,6 @@ export const settingsLandingAccents: Record<string, LandingAccent> = {
   'settings-preferences': landingAccents.teal,
   'settings-authorization': landingAccents.indigo,
   'settings-ai': landingAccents.amber,
+  'settings-system': landingAccents.slate,
   'settings-danger-zone': landingAccents.rose,
 }

@@ -1,7 +1,8 @@
 'use client'
 
 import { ArrowRight } from 'lucide-react'
-import { catalogNavGroups, type CatalogNavGroup } from '@/modules/catalog/catalogNav'
+import { catalogNavGroups as all_catalogNavGroups, type CatalogNavGroup } from '@/modules/catalog/catalogNav'
+import { useAccessibleNavGroups } from '@/hooks/useNavAccess'
 import CatalogHeroBanner from './CatalogHeroBanner'
 import ModuleLandingCard from '@/components/layout/ModuleLandingCard'
 import { catalogLandingAccents, landingAccents, pickLandingAccent } from '@/lib/landing-accents'
@@ -17,6 +18,8 @@ interface CatalogLandingViewProps {
 const defaultIconAccent = landingAccents.indigo
 
 export default function CatalogLandingView({ userName, bannerImageUrl, onViewChange, hideHeroBanner }: CatalogLandingViewProps) {
+    // Only the functions this person may open (Security & Access snapshot); the server decides every page and API too.
+    const catalogNavGroups = useAccessibleNavGroups(all_catalogNavGroups)
     return (
         <div className="sera-module-landing">
             {!hideHeroBanner && <CatalogHeroBanner userName={userName ?? null} bannerImageUrl={bannerImageUrl} />}

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { getHrAuthContext, hrSelfCan } from '@/lib/server/hrAccess'
+import { getHrAuthContext, hrCan, hrSelfCan } from '@/lib/server/hrAccess'
 
 export async function GET() {
     try {
@@ -10,16 +10,25 @@ export async function GET() {
             return NextResponse.json({ success: false, error: ctxResult.error }, { status: 401 })
         }
 
-        const { organizationId } = ctxResult.data
+        const ctx = ctxResult.data
+        const { organizationId } = ctx
         if (!organizationId) {
             return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
         }
 
-        const { data, error } = await supabase
+        // HR administrators see the organization's requests; an employee sees only their own (the verified account).
+        const isManager = await hrCan(ctx, 'hr.employee.manage')
+        if (!isManager && !(await hrSelfCan(ctx))) {
+            return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+        }
+
+        let query = supabase
             .from('hr_document_requests')
             .select('*')
             .eq('organization_id', organizationId)
             .order('requested_at', { ascending: false })
+        if (!isManager) query = query.eq('employee_user_id', ctx.userId)
+        const { data, error } = await query
 
         if (error) {
             return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -49,7 +58,9 @@ export async function POST(request: NextRequest) {
         }
 
         const body = await request.json()
-        const employeeUserId = String(body.employee_user_id || ctx.userId || '').trim()
+        // The requester is the authenticated account; only HR administrators may file on someone else's behalf.
+        const isManager = await hrCan(ctx, 'hr.employee.manage')
+        const employeeUserId = String((isManager && body.employee_user_id) || ctx.userId || '').trim()
         const documentType = String(body.document_type || '').trim()
         if (!employeeUserId || !documentType) {
             return NextResponse.json({ success: false, error: 'Employee and document type are required' }, { status: 400 })
@@ -61,9 +72,9 @@ export async function POST(request: NextRequest) {
                 organization_id: ctx.organizationId,
                 employee_user_id: employeeUserId,
                 document_type: documentType,
-                status: body.status || 'pending',
-                fulfilled_at: body.fulfilled_at || null,
-                fulfilled_by: body.fulfilled_by || null
+                status: isManager ? body.status || 'pending' : 'pending',
+                fulfilled_at: isManager ? body.fulfilled_at || null : null,
+                fulfilled_by: isManager ? body.fulfilled_by || null : null
             })
             .select('*')
             .single()

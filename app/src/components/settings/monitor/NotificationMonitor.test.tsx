@@ -14,7 +14,7 @@ function response(params: URLSearchParams) {
     reference: { kind: 'order', label: 'ORD26000001' }, notificationName: name, moduleId, moduleName, errorMessage: status === 'failed' ? 'Gateway timeout' : null,
     action: { phone: '+60123456789', suggestedTemplateKey: 'recovery_notice', suggestedMessagePreview: 'Hi' },
   })
-  const rows = [row('a', 'failed', 'order_submitted', 'supply_chain', 'Supply Chain', 'Order Submitted'), row('b', 'sent', 'user_created_shop', 'platform_security', 'Platform & Security', 'User Create New Shop')]
+  const rows = [row('a', 'failed', 'order_submitted', 'supply_chain', 'Supply Chain', 'Order Submitted'), row('b', 'sent', 'user_created_shop', 'platform_settings', 'Platform & Settings', 'User Create New Shop')]
   return {
     rows: params.get('status') === 'failed' ? rows.slice(0, 1) : rows,
     total: params.get('status') === 'failed' ? 1 : 2,
@@ -23,10 +23,10 @@ function response(params: URLSearchParams) {
     kindCounts: { original: 2, recovery: 3 },
     matchingBeforeStatus: 2,
     facets: {
-      modules: [{ value: 'platform_security', label: 'Platform & Security', count: 1 }, { value: 'supply_chain', label: 'Supply Chain', count: 1 }, { value: 'unmapped', label: 'Other / Unmapped', count: 0 }],
+      modules: [{ value: 'platform_settings', label: 'Platform & Settings', count: 1 }, { value: 'supply_chain', label: 'Supply Chain', count: 1 }, { value: 'unmapped', label: 'Other / Unmapped', count: 0 }],
       types: [
         { value: 'order_submitted', label: 'Order Submitted', count: 1, moduleId: 'supply_chain' },
-        { value: 'user_created_shop', label: 'User Create New Shop', count: 1, moduleId: 'platform_security' },
+        { value: 'user_created_shop', label: 'User Create New Shop', count: 1, moduleId: 'platform_settings' },
       ],
       providers: [{ value: 'local_my', label: 'local_my', count: 2 }],
     },
@@ -74,9 +74,9 @@ describe('NotificationMonitor', () => {
     await userEvent.selectOptions(screen.getByLabelText('Module'), 'supply_chain')
     expect(typeSelect.value).toBe('order_submitted')
     expect(Array.from(typeSelect.options).map((o) => o.value)).toEqual(['all', 'order_submitted'])
-    await userEvent.selectOptions(screen.getByLabelText('Module'), 'platform_security')
+    await userEvent.selectOptions(screen.getByLabelText('Module'), 'platform_settings')
     expect(typeSelect.value).toBe('all')
-    await waitFor(() => expect(Object.fromEntries(lastMonitorParams())).toMatchObject({ module: 'platform_security' }))
+    await waitFor(() => expect(Object.fromEntries(lastMonitorParams())).toMatchObject({ module: 'platform_settings' }))
     expect(lastMonitorParams().get('type')).toBeNull()
     expect(screen.getByRole('option', { name: 'Other / Unmapped (0)' })).toBeTruthy()
   })

@@ -79,7 +79,7 @@ describe('applyMonitorQuery', () => {
 
     it('narrows type choices by module through the facets and keeps unmapped events reachable', () => {
         const result = applyMonitorQuery(dataset(), filters({ pageSize: 50 }))
-        expect(result.facets.modules.map((m) => m.value)).toEqual(['customer_growth', 'platform_security', 'supply_chain', UNMAPPED_MODULE_ID])
+        expect(result.facets.modules.map((m) => m.value)).toEqual(['customer_growth', 'platform_settings', 'supply_chain', UNMAPPED_MODULE_ID])
         expect(result.facets.modules.at(-1)?.label).toBe('Other / Unmapped')
         const supplyTypes = result.facets.types.filter((t) => t.moduleId === 'supply_chain').map((t) => t.value)
         expect(supplyTypes.sort()).toEqual(['order_approved', 'order_submitted'])
