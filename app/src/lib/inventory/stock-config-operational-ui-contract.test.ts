@@ -23,9 +23,9 @@ describe('stock configuration operational UI contracts', () => {
     expect(order).toContain('item.variant?.product_code')
   })
 
-  it('shows the exact ORD destination and receipt history configuration', () => {
-    expect(receive).toContain('Inventory destination:')
-    expect(receive).toContain('destination_stock_config.stock_sku')
+  it('shows the receipt history configuration', () => {
+    // The per-line "Inventory destination:" label was removed on purpose (2ddf7e85, simplified receive labels); the
+    // destination data stays in the API — ReceiveItemLabel.test.tsx asserts both.
     expect(receive).toContain('Inventory Destination')
     expect(receive).toContain('Legacy / Unclassified')
   })
