@@ -32,6 +32,10 @@ vi.mock('@/lib/supabase/admin', () => ({
       if (table === 'sa_root_access_grants') {
         return { select: () => ({ eq: () => ({ eq: async () => ({ data: rootGrantError ? null : rootGrantRows, error: rootGrantError }) }) }) }
       }
+      if (table === 'organizations') {
+        // Add User reads the organization's STORED type (ESS intent, HQ-only employment/reference fields).
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { org_type_code: 'HQ' }, error: null }) }) }) }
+      }
       if (table !== 'users') throw new Error(`Unexpected table: ${table}`)
       return {
         update: usersUpdate,
