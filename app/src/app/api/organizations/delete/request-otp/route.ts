@@ -1,4 +1,5 @@
 import { guardUserOperation } from '@/lib/security-access/operation'
+import { authorizeOrganizationIdentityRemoval } from '@/lib/identity/removal-authorization'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { createClient } from '@/lib/supabase/server'
@@ -119,6 +120,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: dependencyCheck?.error || 'Organization has blocking dependencies and cannot be deleted.' },
         { status: 400 },
+      )
+    }
+
+    // Its member identities are deleted with it: refuse before sending a code
+    // when any of them may not be removed by this administrator (re-decided
+    // at verify-and-delete).
+    const memberRemoval = await authorizeOrganizationIdentityRemoval(user.id, orgId)
+    if (!memberRemoval.ok) {
+      if (memberRemoval.status === 403) {
+        await logOrganizationDeletionAudit(admin, {
+          operation: 'delete_organization_otp_request',
+          userId: user.id,
+          userEmail: user.email || null,
+          allowed: false,
+          reason: memberRemoval.auditReason,
+          ip,
+        })
+      }
+      return NextResponse.json(
+        { error: memberRemoval.error, code: memberRemoval.code, ...(memberRemoval.decisionId ? { decisionId: memberRemoval.decisionId } : {}) },
+        { status: memberRemoval.status },
       )
     }
 

@@ -40,6 +40,12 @@ export interface ProvisionIdentityInput {
   expectedPrincipalType?: HumanPrincipalType
   /** Legacy compatibility role. Omit for the baseline; anything else is access administration. */
   legacyRoleCode?: string | null
+  /**
+   * Create the account with the no-authority compatibility classification (GUEST) instead of the staff-level USER baseline.
+   * Mutually exclusive with `legacyRoleCode`. Requires the `identity_provision_capabilities` database support; when that is
+   * missing the request fails closed BEFORE any login or profile is created (never a silent USER default).
+   */
+  noLegacyAccess?: boolean
   authorizingPermission?: 'platform.user.manage' | 'hr.employee.manage'
   /** Administrator-chosen password; otherwise a strong temporary password is generated. */
   password?: string | null
@@ -50,12 +56,23 @@ export interface ProvisionIdentityInput {
     employmentType?: string | null
     joinDate?: string | null
   }
-  initialAccess?: { roleId: string; scopeIds?: string[]; reason: string }
-  /** Several Access Profiles, each with its own explicit scope. Assigned all-or-nothing inside the provisioning transaction. */
-  initialProfiles?: Array<{ roleId: string; scopeIds: string[]; reason?: string }>
+  initialAccess?: { roleId: string; scopeIds?: string[] }
+  /** Several Group Policies, each with its own explicit scope. Assigned all-or-nothing inside the provisioning transaction. */
+  initialProfiles?: Array<{ roleId: string; scopeIds: string[] }>
   source: IdentitySource
   reason?: string
+  /**
+   * Add User guard: when the email/phone already resolve to an account (that has a profile) and no link was chosen,
+   * stop instead of silently reusing it. An authentication login without a profile (a retry after a failed create)
+   * is still completed, so retries never create a second account.
+   */
+  requireNewIdentity?: boolean
+  /** Add User: the existing identity the administrator explicitly linked; the resolved identity must be exactly this one. */
+  linkUserId?: string | null
 }
+
+/** Server-generated audit context for Group Policies assigned while a user is created (no administrator-typed reason). */
+export const INITIAL_POLICY_AUDIT_REASON = 'Group Policy assigned during user creation.'
 
 export type IdentityErrorCode =
   | IdentityBlockCode
@@ -94,17 +111,21 @@ const DB_ERROR_MAP: Array<[RegExp, IdentityErrorCode, number, string]> = [
   [/sa_authorization_required|sa_actor_inactive|sa_actor_required|identity_self_/, 'FORBIDDEN', 403,
     'You are not authorized to perform this identity or access change.'],
   [/sa_profile_not_applicable/, 'ROLE_GRANT_NOT_ALLOWED', 400,
-    'One of the selected Access Profiles does not apply to this organization or account type. Nothing was created; choose a suitable profile.'],
+    'One of the selected Group Policies does not apply to this organization or account type. Nothing was created; choose a suitable policy.'],
   [/sa_profile_sensitive_not_initial/, 'ROLE_GRANT_NOT_ALLOWED', 400,
-    'Administrative or reset profiles cannot be assigned while creating a user. Create the user first, then assign them in Security & Access → People & Access. Nothing was created.'],
+    'Administrative or reset policies cannot be assigned while creating a user until the database update that aligns Add User with Grant Policy is applied. Create the user first, then assign them in Security & Access → People & Access. Nothing was created.'],
+  [/sa_grant_beyond_authority|sa_grant_scope_beyond_authority/, 'ROLE_GRANT_NOT_ALLOWED', 403,
+    'You can only grant access within your own grant authority. Nothing was created.'],
   [/sa_scope_required|sa_scope_outside_membership/, 'INVALID_INPUT', 400,
-    'Each Access Profile needs its own scope inside this person\'s organization. Nothing was created.'],
+    'Each Group Policy needs its own scope inside this person\'s organization. Nothing was created.'],
   [/sa_initial_access_duplicate|sa_initial_access_invalid/, 'INVALID_INPUT', 400,
-    'The Access Profile selection is not valid (each profile once, at most ten). Nothing was created.'],
+    'The Group Policy selection is not valid (each policy once, at most ten). Nothing was created.'],
   [/identity_consumer_cannot_receive_business_role|sa_self_assignment_prohibited|sod_violation|sa_role_not_assignable|sa_scope_/, 'FORBIDDEN', 403,
     'The requested initial access cannot be granted to this person. Nothing was created.'],
   [/identity_organization_unknown|identity_organization_required|identity_hr_reference_outside_organization|identity_principal_type_mismatch|identity_hr_requires_enterprise/, 'INVALID_ORGANIZATION', 400,
     'The organization, department, position or manager does not fit this person.'],
+  [/identity_legacy_role_conflict|identity_no_legacy_role_unavailable/, 'INVALID_INPUT', 400,
+    'A legacy role or level cannot be set while creating a user. Nothing was created.'],
   [/identity_email_invalid|identity_phone_invalid|identity_account_scope_invalid|identity_authorizing_permission_invalid/, 'INVALID_INPUT', 400,
     'The email or phone number is not valid.'],
 ]
@@ -133,6 +154,15 @@ export async function provisionIdentity(input: ProvisionIdentityInput): Promise<
 
   const admin = createAdminClient() as any
 
+  if (input.noLegacyAccess) {
+    if (input.legacyRoleCode) return { ok: false, code: 'INVALID_INPUT', status: 400, message: 'A legacy role or level cannot be set while creating a user. Nothing was created.' }
+    // Fail closed: without the database support the omitted legacy role would silently become the staff-level USER baseline.
+    const { data: capabilities, error: capabilityError } = await admin.rpc('identity_provision_capabilities')
+    if (capabilityError || capabilities?.no_legacy_access !== true) {
+      return { ok: false, code: 'PROVISIONING_FAILED', status: 503, message: 'Creating a user without a legacy level needs a pending database update that is not installed yet. Nothing was created.' }
+    }
+  }
+
   // 1. Resolve before touching the auth service.
   const { data: resolved, error: resolveError } = await admin.rpc('identity_resolve', { p_email: email, p_phone: phone })
   if (resolveError) return mapIdentityDbError(resolveError)
@@ -146,6 +176,12 @@ export async function provisionIdentity(input: ProvisionIdentityInput): Promise<
       p_source: input.source, p_actor: input.actorId, p_details: { stage: 'resolve' },
     })
     return blocked(resolution.outcome, resolution.matchedUserIds)
+  }
+
+  if (input.linkUserId) {
+    if (resolution.outcome !== 'MATCH' || resolution.userId !== input.linkUserId) return blocked('IDENTITY_LINK_MISMATCH')
+  } else if (input.requireNewIdentity && resolution.outcome === 'MATCH' && resolution.hasProfile !== false) {
+    return blocked('IDENTITY_ALREADY_EXISTS')
   }
 
   // 2. Create the login only when no identity exists.
@@ -185,6 +221,7 @@ export async function provisionIdentity(input: ProvisionIdentityInput): Promise<
     account_scope: input.accountScope ?? (input.organizationId ? 'portal' : 'store'),
     expected_principal_type: input.expectedPrincipalType ?? null,
     legacy_role_code: input.legacyRoleCode || null,
+    ...(input.noLegacyAccess ? { no_legacy_access: true } : {}),
     authorizing_permission: input.authorizingPermission ?? 'platform.user.manage',
     created_identity: created,
     source: input.source,
@@ -196,8 +233,9 @@ export async function provisionIdentity(input: ProvisionIdentityInput): Promise<
     join_date: input.hr?.joinDate || null,
     initial_role_id: input.initialAccess?.roleId ?? null,
     initial_scope_ids: input.initialAccess?.scopeIds ?? [],
-    initial_reason: input.initialAccess?.reason ?? null,
-    initial_access: (input.initialProfiles ?? []).map(p => ({ role_id: p.roleId, scope_ids: p.scopeIds, reason: p.reason ?? null })),
+    // The audit context of an ordinary initial assignment is generated here, never taken from the client.
+    initial_reason: input.initialAccess ? INITIAL_POLICY_AUDIT_REASON : null,
+    initial_access: (input.initialProfiles ?? []).map(p => ({ role_id: p.roleId, scope_ids: p.scopeIds, reason: INITIAL_POLICY_AUDIT_REASON })),
   }
   let data: any
   try {

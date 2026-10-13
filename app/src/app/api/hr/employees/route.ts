@@ -29,6 +29,14 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
         }
 
+        // The employee directory (emails, phones, employment) is an HR view, not something every member of the
+        // organization may list. Staff who only need names/titles use /api/hr/org-chart/staff.
+        let directoryLevel = 99
+        if (caller.roles) directoryLevel = (Array.isArray(caller.roles) ? caller.roles[0] : caller.roles)?.role_level ?? 99
+        if (!(await hrCan({ userId: user.id, organizationId: caller.organization_id, roleCode: null, roleLevel: directoryLevel }, 'hr.employee.view'))) {
+            return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+        }
+
         const url = new URL(request.url)
         const search = url.searchParams.get('search') || ''
         const department_id = url.searchParams.get('department_id')

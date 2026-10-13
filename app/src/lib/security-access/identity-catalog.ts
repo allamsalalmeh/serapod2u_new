@@ -30,3 +30,9 @@ export const IDENTITY_ENFORCEMENT_READY: readonly string[] = [
   'platform.identity.disable',
   'platform.identity_access.manage',
 ]
+
+/**
+ * Archive Identities, registered by 20261023100000_sa_identity_delete_enforcement_ready.sql once every removal path
+ * decides it for the target's organization (lib/identity/removal-authorization.ts).
+ */
+export const IDENTITY_ARCHIVE_ENFORCEMENT_READY: readonly string[] = ['platform.identity.delete']

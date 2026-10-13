@@ -1,11 +1,13 @@
 import { STAGE2D_PERMISSION_KEYS } from './stage2d-catalog'
 import { HR_DATA_PERMISSION_KEYS } from './hr-data-catalog'
+import { USER_ADMIN_ENFORCEMENT_READY } from './user-admin-catalog'
+import { SYSTEM_LOGS_ENFORCEMENT_READY } from './system-logs-catalog'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { FINAL_WAVE_PERMISSION_KEYS, compatGrants } from './catalog'
-import { IDENTITY_CATALOG, IDENTITY_ENFORCEMENT_READY, IDENTITY_PERMISSION_KEYS } from './identity-catalog'
-import { ALL_ENFORCEMENT_READY_PERMISSIONS, ENFORCEMENT_READY_PERMISSIONS } from './readiness'
+import { IDENTITY_ARCHIVE_ENFORCEMENT_READY, IDENTITY_CATALOG, IDENTITY_ENFORCEMENT_READY, IDENTITY_PERMISSION_KEYS } from './identity-catalog'
+import { ALL_ENFORCEMENT_READY_PERMISSIONS, ENFORCEMENT_READY_PERMISSIONS, STOCK_COUNT_ENFORCEMENT_READY } from './readiness'
 import { permissionLabel } from './labels'
 
 const migrations = resolve(process.cwd(), '..', 'supabase', 'migrations')
@@ -38,7 +40,7 @@ describe('Identity catalog ↔ migration lock-step', () => {
     const seg = foundation.slice(foundation.indexOf('insert into public.sa_enforcement_readiness'), foundation.indexOf('insert into public.sa_business_roles'))
     const keys = [...seg.matchAll(/^ \('([a-z_.]+)'/gm)].map(m => m[1]).sort()
     expect(keys).toEqual([...IDENTITY_ENFORCEMENT_READY].sort())
-    expect(ALL_ENFORCEMENT_READY_PERMISSIONS).toEqual([...ENFORCEMENT_READY_PERMISSIONS, ...IDENTITY_ENFORCEMENT_READY, ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS])
+    expect(ALL_ENFORCEMENT_READY_PERMISSIONS).toEqual([...ENFORCEMENT_READY_PERMISSIONS, ...IDENTITY_ENFORCEMENT_READY, ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS, ...USER_ADMIN_ENFORCEMENT_READY, ...SYSTEM_LOGS_ENFORCEMENT_READY, ...STOCK_COUNT_ENFORCEMENT_READY, ...IDENTITY_ARCHIVE_ENFORCEMENT_READY])
   })
 
   it('does not duplicate an existing Final Wave key (platform.user.manage stays identity-manage)', () => {

@@ -26,6 +26,10 @@ export type IdentityBlockCode =
   | 'IDENTITY_INACTIVE'
   | 'IDENTITY_PRINCIPAL_UPGRADE_REQUIRED'
   | 'IDENTITY_ORG_MOVE_REQUIRED'
+  /** Add User: the email/phone already belong to an account and no HR link to it was chosen. Nothing is created. */
+  | 'IDENTITY_ALREADY_EXISTS'
+  /** Add User: the chosen employee link no longer matches the identity the email/phone resolve to. */
+  | 'IDENTITY_LINK_MISMATCH'
 
 export const HUMAN_PRINCIPAL_TYPES = [
   'INTERNAL_EMPLOYEE',
@@ -86,6 +90,10 @@ export const IDENTITY_BLOCK_MESSAGES: Record<IdentityBlockCode, string> = {
     'This person already has a consumer account. Converting a consumer into an enterprise user is an access-administration step and was not done automatically.',
   IDENTITY_ORG_MOVE_REQUIRED:
     'This person already has an account in another organization. Moving them is an access-administration step and was not done automatically.',
+  IDENTITY_ALREADY_EXISTS:
+    'An account already exists for this email or phone number, so no second account was created. Open the existing user instead.',
+  IDENTITY_LINK_MISMATCH:
+    'The email or phone number no longer matches the linked employee. Nothing was created; review the employee link and try again.',
 }
 
 export function isIdentityBlockCode(code: unknown): code is IdentityBlockCode {

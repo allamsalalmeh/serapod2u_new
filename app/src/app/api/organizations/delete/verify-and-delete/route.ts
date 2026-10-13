@@ -1,4 +1,5 @@
 import { guardUserOperation } from '@/lib/security-access/operation'
+import { authorizeOrganizationIdentityRemoval } from '@/lib/identity/removal-authorization'
 import { NextRequest, NextResponse } from 'next/server'
 
 import { createClient } from '@/lib/supabase/server'
@@ -73,6 +74,27 @@ export async function POST(request: NextRequest) {
 
     if (orgId === profile?.organization_id) {
       return NextResponse.json({ error: 'Cannot delete your current organization.' }, { status: 400 })
+    }
+
+    // Deleting the organization deletes its member identities: each one is
+    // Archive Identities (platform.identity.delete) with target protection,
+    // decided now (at submission) before the code is checked or consumed.
+    const memberRemoval = await authorizeOrganizationIdentityRemoval(user.id, orgId)
+    if (!memberRemoval.ok) {
+      if (memberRemoval.status === 403) {
+        await logOrganizationDeletionAudit(admin, {
+          operation: 'delete_organization_execute',
+          userId: user.id,
+          userEmail: user.email || null,
+          allowed: false,
+          reason: memberRemoval.auditReason,
+          ip,
+        })
+      }
+      return NextResponse.json(
+        { error: memberRemoval.error, code: memberRemoval.code, ...(memberRemoval.decisionId ? { decisionId: memberRemoval.decisionId } : {}) },
+        { status: memberRemoval.status },
+      )
     }
 
     const { data: codeRow } = await db

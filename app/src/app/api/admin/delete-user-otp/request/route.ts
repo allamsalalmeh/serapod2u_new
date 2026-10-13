@@ -1,5 +1,5 @@
 import { guardUserOperation } from '@/lib/security-access/operation'
-import { targetProtectionAllows } from '@/lib/security-access/scope'
+import { authorizeIdentityRemoval } from '@/lib/identity/removal-authorization'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -59,40 +59,30 @@ export async function POST(request: NextRequest) {
         const saDenied = await guardUserOperation(user.id, 'platform.data.destructive')
         if (saDenied) return saDenied
 
-        const { data: profile } = await supabase
-            .from('users')
-            .select('role_code, organization_id, roles(role_level)')
-            .eq('id', user.id)
-            .single()
+        const { targetUserId } = await request.json().catch(() => ({}))
 
-        const roleLevel = (profile as any)?.roles?.role_level
-        // Deleting an identity is an S&A decision (platform.identity.delete);
-        // the historical HQ Admin / Super Admin rule is the legacy evaluator.
-        const identityDenied = await guardUserOperation(user.id, 'platform.identity.delete', {
-            legacy: () => typeof roleLevel === 'number' && roleLevel <= 10,
-        })
-        if (identityDenied) {
-            await logDeletionAudit(admin, {
-                operation: 'delete_user_otp_request',
-                userId: user.id,
-                userEmail: user.email || null,
-                allowed: false,
-                reason: `Security & Access denied platform.identity.delete (legacy role_level=${roleLevel})`,
-                ip,
-            })
-            return identityDenied
+        // Archive Identities (platform.identity.delete), decided for the
+        // target's organization, with self and target protection; the
+        // historical HQ Admin / Super Admin rule is the legacy evaluator.
+        const removal = await authorizeIdentityRemoval(user.id, targetUserId)
+        if (!removal.ok) {
+            if (removal.status === 403) {
+                await logDeletionAudit(admin, {
+                    operation: 'delete_user_otp_request',
+                    userId: user.id,
+                    userEmail: user.email || null,
+                    allowed: false,
+                    reason: removal.auditReason,
+                    ip,
+                })
+            }
+            return NextResponse.json(
+                { success: false, error: removal.error, code: removal.code, ...(removal.decisionId ? { decisionId: removal.decisionId } : {}) },
+                { status: removal.status }
+            )
         }
 
-        const { targetUserId } = await request.json()
-        if (!targetUserId) {
-            return NextResponse.json({ error: 'targetUserId is required' }, { status: 400 })
-        }
-
-        if (targetUserId === user.id) {
-            return NextResponse.json({ error: 'Cannot delete your own account' }, { status: 400 })
-        }
-
-        const orgId = profile?.organization_id
+        const orgId = removal.actorOrganizationId
         if (!orgId) {
             return NextResponse.json(
                 { error: 'No organization found. OTP cannot be sent.' },
@@ -158,36 +148,7 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        const { data: targetUser } = await admin
-            .from('users')
-            .select('full_name, email, phone, role_code, roles:role_code(role_level)')
-            .eq('id', targetUserId)
-            .single()
-
-        if (!targetUser) {
-            return NextResponse.json({ error: 'Target user not found' }, { status: 404 })
-        }
-
-        const targetRoleLevel = (targetUser as any)?.roles?.role_level
-        // Target protection: once platform.identity.delete is enforced the actor
-        // must hold every grant the target holds (sa_actor_dominates); until
-        // then the historical "not a higher legacy role" rule decides.
-        if (!(await targetProtectionAllows(user.id, targetUserId, 'platform.identity.delete',
-            () => !(typeof targetRoleLevel === 'number' && targetRoleLevel < roleLevel)))) {
-            await logDeletionAudit(admin, {
-                operation: 'delete_user_otp_request',
-                userId: user.id,
-                userEmail: user.email || null,
-                allowed: false,
-                reason: `Target has higher privilege (target role_level=${targetRoleLevel}, requester role_level=${roleLevel})`,
-                ip,
-            })
-            return NextResponse.json(
-                { error: 'You cannot delete a user with higher privileges than your own.' },
-                { status: 403 }
-            )
-        }
-
+        const targetUser = removal.target
         const removalMode = await getUserRemovalMode(admin, targetUserId)
         const targetLabel = targetUser.full_name || targetUser.email || targetUserId
 

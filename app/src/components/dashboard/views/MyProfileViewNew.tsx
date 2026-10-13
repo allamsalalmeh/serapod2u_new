@@ -27,6 +27,8 @@ import { ReferencePicker, type ReferenceUser } from '@/components/ui/reference-p
 import { ShopPicker, type ShopResult } from '@/components/ui/shop-picker'
 import { ShopRequestDialog } from '@/components/shop-requests/ShopRequestDialog'
 import ModuleLightHeader from '@/components/layout/ModuleLightHeader'
+import { userCategoryLabel } from '@/lib/identity/display-label'
+import { useNavAccess } from '@/hooks/useNavAccess'
 
 interface UserProfile {
   id: string
@@ -115,6 +117,13 @@ export default function MyProfileViewNew({ userProfile: initialProfile }: MyProf
   const [pendingShopRequestName, setPendingShopRequestName] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [userProfile, setUserProfile] = useState<UserProfile>(initialProfile)
+  // Ordinary presentation: a staff/category label and the assigned Group Policies, not the legacy role level.
+  const categoryLabel = userCategoryLabel({
+    orgTypeCode: userProfile.organizations?.org_type_code,
+    roleCode: userProfile.role_code,
+    roleName: userProfile.roles?.role_name,
+  })
+  const assignedPolicies = useNavAccess().snapshot?.policies ?? []
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null)
   const [sourceAvatarFile, setSourceAvatarFile] = useState<File | null>(null)
@@ -1113,9 +1122,9 @@ export default function MyProfileViewNew({ userProfile: initialProfile }: MyProf
                   {userProfile.full_name || userProfile.email?.split('@')[0] || 'User'}
                 </h2>
                 <p className="mt-0.5 text-sm text-[var(--sera-muted)]">{userProfile.email}</p>
-                {(userProfile.roles?.role_name || userProfile.role_code) && (
+                {categoryLabel && (
                   <span className="mt-3 inline-flex items-center rounded-full border border-[var(--sera-orange)]/20 bg-[var(--sera-orange)]/[0.06] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--sera-orange-deep)]">
-                    {userProfile.roles?.role_name || userProfile.role_code}
+                    {categoryLabel}
                   </span>
                 )}
                 {avatarFile && (
@@ -1521,13 +1530,13 @@ export default function MyProfileViewNew({ userProfile: initialProfile }: MyProf
             <div className="flex items-start gap-3 text-[var(--sera-ink-soft)]">
               <Shield className="h-5 w-5 text-[var(--sera-muted)]/70 mt-0.5" />
               <div className="flex-1">
-                <p className="text-sm text-[var(--sera-muted)] font-medium">Role</p>
-                <p className="text-base font-medium text-[var(--sera-ink)] mt-1">
-                  {userProfile.roles?.role_name || userProfile.role_code}
-                </p>
-                <p className="text-xs text-[var(--sera-muted)] mt-1">
-                  Level: {userProfile.roles?.role_level || 'Unknown'}
-                </p>
+                <p className="text-sm text-[var(--sera-muted)] font-medium">Account type</p>
+                <p className="text-base font-medium text-[var(--sera-ink)] mt-1">{categoryLabel}</p>
+                {assignedPolicies.length > 0 && (
+                  <p className="text-xs text-[var(--sera-muted)] mt-1">
+                    Access: {assignedPolicies.join(', ')}
+                  </p>
+                )}
               </div>
             </div>
 

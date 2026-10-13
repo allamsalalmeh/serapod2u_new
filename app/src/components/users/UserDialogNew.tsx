@@ -1,6 +1,17 @@
 'use client'
 
-import AccessProfileSelector, { type AccessMode, type ProfileChoice, type SelectableProfile, type SelectableScope } from './AccessProfileSelector'
+import { MAX_POLICY_SCOPE_PAIRS, missingScopeMessage, pruneSelections } from '@/lib/security-access/group-policy-picker'
+import AccessProfileSelector, { scopesForPolicy, type AccessMode, type ProfileChoice, type SelectableProfile, type SelectableScope } from './AccessProfileSelector'
+import { IdentityMatchNotice, lookupBlocker, useIdentityLookup, type EmployeeLink } from './IdentityMatch'
+import { InfoPopover, FOCUS } from '@/components/security-access/ui'
+import { scopeLabels } from '@/lib/security-access/scope-labels'
+import { isHqOrgType } from '@/lib/security-access/ess-eligibility'
+import UserEditAccess, { useEditAccess } from './UserEditAccess'
+import { applyPlan, computePlan, initialItems, moverImpact, type ApplyOutcome } from '@/lib/users/edit-access'
+import { callApi } from '@/components/security-access/client-api'
+import { useSaCapability } from '@/hooks/useSaCapability'
+import { employmentAllowedForOrgType } from '@/lib/users/employment-eligibility'
+import { referenceAllowedForOrgType } from '@/lib/users/reference-eligibility'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getOrgTypeName } from '@/lib/utils/orgHierarchy'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -16,14 +27,11 @@ import {
   AlertCircle,
   ArrowLeft,
   ArrowRight,
-  Banknote,
-  Briefcase,
   Building2,
   Camera,
   Check,
   CheckCircle2,
   CreditCard,
-  Crown,
   Eye,
   EyeOff,
   Factory,
@@ -37,9 +45,7 @@ import {
   Upload,
   User as UserIcon,
   UserPlus,
-  Users,
   X,
-  Zap,
 } from 'lucide-react'
 import { User, Role, Organization } from '@/types/user'
 import { useSupabaseAuth } from '@/lib/hooks/useSupabaseAuth'
@@ -76,7 +82,7 @@ interface PositionOption {
   is_active: boolean
 }
 
-type WizardStep = 'basic' | 'access' | 'business' | 'banking' | 'review'
+type WizardStep = 'basic' | 'access' | 'review'
 export type OrganizationType = 'HQ' | 'MFG' | 'DIST' | 'SHOP'
 
 type WizardUser = Partial<User> & {
@@ -100,12 +106,24 @@ type WizardUser = Partial<User> & {
 export function ReferenceCheckbox({
   checked,
   disabled = false,
+  compact = false,
   onCheckedChange,
 }: {
   checked: boolean
   disabled?: boolean
+  /** Moves the explanatory sentence into the shared information popover. */
+  compact?: boolean
   onCheckedChange: (checked: boolean) => void
 }) {
+  if (compact) {
+    return (
+      <div className="flex items-center gap-2 text-sm">
+        <Checkbox id="can-be-reference" checked={checked} onCheckedChange={value => onCheckedChange(value === true)} disabled={disabled} />
+        <Label htmlFor="can-be-reference" className="cursor-pointer text-sm font-medium text-gray-900">Reference</Label>
+        <InfoPopover label="About the Reference setting"><p>Allow this user to be selected as a Reference in RoadTour campaigns.</p></InfoPopover>
+      </div>
+    )
+  }
   return (
     <div className="flex items-start gap-3">
       <Checkbox
@@ -129,9 +147,13 @@ interface UserDialogNewProps {
   user: User | null
   roles: Role[]
   organizations: Organization[]
+  /** False until the organization list has loaded successfully; gates the single-HQ auto-select. Defaults to true. */
+  organizationsLoaded?: boolean
   open: boolean
   isSaving?: boolean
   currentUserRoleLevel?: number
+  /** Root Access (server answer): the legacy role-level ceiling on assignable roles does not apply. Display only. */
+  rootAccess?: boolean
   lockOrganization?: boolean
   defaultValues?: {
     organization_id?: string
@@ -139,16 +161,22 @@ interface UserDialogNewProps {
     role_code?: string
   }
   onOpenChange: (open: boolean) => void
-  onSave: (userData: Partial<User>, avatarFile?: File | null, resetPassword?: { password: string }) => void | Promise<void>
+  /** Add User: open an existing account found by the identity check (the host closes this dialog). */
+  onOpenExistingUser?: (userId: string) => void
+  /** Seam for previews and tests; defaults to the server action. */
+  accessOptionsLoader?: (organizationId: string | null) => Promise<any>
+  /**
+   * Add User: the new account. Edit User: the profile changes plus, when Group Policy changes are pending, a way to apply
+   * them AFTER the profile is saved (a failure there is reported, never swallowed). A password reset is never part of a save.
+   */
+  onSave: (userData: Partial<User>, avatarFile?: File | null, access?: EditAccessSubmission) => void | Promise<void>
 }
 
-const STEP_LABELS: Record<WizardStep, string> = {
-  basic: 'Basic Info',
-  access: 'Role & Access',
-  business: 'Business',
-  banking: 'Banking',
-  review: 'Review',
-}
+export interface EditAccessSubmission { apply: () => Promise<ApplyOutcome> }
+
+const WIZARD_STEPS: WizardStep[] = ['basic', 'access', 'review']
+
+const STEP_LABELS: Record<WizardStep, string> = { basic: 'Basic details', access: 'Organization & access', review: 'Review' }
 
 export const USER_ORGANIZATION_TYPES: Array<{ value: OrganizationType; label: string; icon: typeof Building2 }> = [
   { value: 'HQ', label: 'HQ', icon: Building2 },
@@ -156,14 +184,6 @@ export const USER_ORGANIZATION_TYPES: Array<{ value: OrganizationType; label: st
   { value: 'DIST', label: 'Distributor', icon: Store },
   { value: 'SHOP', label: 'Shop', icon: Store },
 ]
-
-const ROLE_ICONS: Record<number, typeof Crown> = {
-  10: Crown,
-  20: Zap,
-  30: Briefcase,
-  40: UserIcon,
-  50: Users,
-}
 
 const desiredRoleLabel = (role: Role) => {
   const labels: Record<number, string> = {
@@ -257,16 +277,58 @@ const compressImage = (file: File, cropPosition = { x: 50, y: 50 }): Promise<Fil
   })
 }
 
+/**
+ * Edit User → Advanced: the stored legacy compatibility level. It is preserved on every save and never reset or promoted
+ * automatically. The control exists only for someone with access-administration authority (the same decision the server
+ * takes for a role change); everyone else keeps the stored value untouched and does not see it.
+ */
+function LegacyCompatibilitySection({ storedRole, value, roles, currentUserRoleLevel, organizationId, disabled, onChange }: {
+  storedRole: Role | null
+  value: string
+  roles: Role[]
+  currentUserRoleLevel: number
+  organizationId: string | null
+  disabled: boolean
+  onChange: (roleCode: string) => void
+}) {
+  const allowed = useSaCapability('platform.identity_access.manage', currentUserRoleLevel <= 10, organizationId)
+  if (!allowed) return null
+  const options = storedRole && !roles.some(r => r.role_code === storedRole.role_code) ? [storedRole, ...roles] : roles
+  return (
+    <details className="rounded-lg border border-gray-200">
+      <summary className={`cursor-pointer rounded-lg px-3 py-2 text-sm font-semibold text-gray-950 ${FOCUS}`}>Advanced <span className="text-xs font-normal text-gray-500">(legacy compatibility)</span></summary>
+      <div className="space-y-2 border-t border-gray-100 p-3">
+        <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-600">
+          <span>Stored level: <strong className="text-gray-900">{storedRole ? `${desiredRoleLabel(storedRole)} (Level ${storedRole.role_level})` : '—'}</strong></span>
+          <InfoPopover label="About the legacy compatibility level">
+            <p>A compatibility field for features still moving to Security &amp; Access. It is kept as it is on every save and is never reset or promoted automatically; business access comes from Group Policies.</p>
+            <p>Changing it needs access-administration authority, and the server checks that again when you save.</p>
+          </InfoPopover>
+        </div>
+        <Label htmlFor="user-dialog-legacy-level" className="text-sm">Change legacy level</Label>
+        <Select value={value} onValueChange={onChange} disabled={disabled}>
+          <SelectTrigger id="user-dialog-legacy-level" className="h-9 rounded-lg"><SelectValue placeholder="Keep the stored level" /></SelectTrigger>
+          <SelectContent>{options.map(role => <SelectItem key={role.role_code} value={role.role_code}>{desiredRoleLabel(role)} (Level {role.role_level})</SelectItem>)}</SelectContent>
+        </Select>
+      </div>
+    </details>
+  )
+}
+
 export default function UserDialogNew({
   user,
   roles,
   organizations,
+  organizationsLoaded = true,
   open,
   isSaving = false,
   currentUserRoleLevel = 100,
+  rootAccess = false,
   lockOrganization = false,
   defaultValues,
   onOpenChange,
+  onOpenExistingUser,
+  accessOptionsLoader = listInitialAccessRoles,
   onSave,
 }: UserDialogNewProps) {
   const { supabase } = useSupabaseAuth()
@@ -301,10 +363,10 @@ export default function UserDialogNew({
   const saving = isSaving || localSaving
   const availableRoles = useMemo(() => {
     return roles
-      .filter(role => role.role_level >= currentUserRoleLevel)
+      .filter(role => rootAccess || role.role_level >= currentUserRoleLevel)
       .filter(role => [10, 20, 30, 40, 50].includes(role.role_level))
       .sort((a, b) => a.role_level - b.role_level)
-  }, [currentUserRoleLevel, roles])
+  }, [currentUserRoleLevel, rootAccess, roles])
 
   const selectedRole = roles.find(r => r.role_code === formData.role_code)
   const selectedRoleLevel = selectedRole?.role_level
@@ -313,7 +375,9 @@ export default function UserDialogNew({
   const selectedDepartment = departments.find(dept => dept.id === formData.department_id)
   const selectedPosition = positions.find(position => position.id === formData.position_id)
   const selectedManager = orgUsers.find(orgUser => orgUser.id === formData.manager_user_id)
-  const isGuest = selectedRoleLevel === 50
+  // Creating a user no longer selects a legacy level, so the Guest (organization-less) shortcut exists only when editing.
+  // The legacy GUEST level alone does not make an independent guest: see isGuest below (account organization + S&A memberships).
+  const legacyGuest = Boolean(user) && selectedRoleLevel === 50
   // Optional initial Security & Access business role (create mode only; the
   // list is empty unless the administrator may assign roles in that org).
   const [initialRoles, setInitialRoles] = useState<Array<{ id: string; name: string; description: string | null }>>([])
@@ -321,42 +385,163 @@ export default function UserDialogNew({
   // legacyReadOnly: legacy role codes no longer grant access here, so a new
   // user without a business role can use only employee self-service.
   const [accessInfo, setAccessInfo] = useState<{ canAssign: boolean; legacyReadOnly: boolean } | null>(null)
-  // Access Profiles offered for the chosen organization (applicable, non-administrative) and the scopes
+  // Group Policies offered for the chosen organization (applicable, non-administrative) and the scopes
   // that may be chosen for each. Falls back to the plain role list before the profile migration.
   const [initialProfiles, setInitialProfiles] = useState<SelectableProfile[]>([])
+  const [deferredProfiles, setDeferredProfiles] = useState<Array<{ id: string; name: string }>>([])
+  const [ineligibleProfiles, setIneligibleProfiles] = useState<Array<{ id: string; name: string; message: string }>>([])
   const [initialScopes, setInitialScopes] = useState<SelectableScope[]>([])
+  const [canOpenGroupPolicies, setCanOpenGroupPolicies] = useState(false)
   const [accessOrg, setAccessOrg] = useState<{ name: string | null; typeCode: string | null } | null>(null)
+  const [orgNames, setOrgNames] = useState<Record<string, string>>({})
+  // Visible, dismissible explanations of selections the form removed or reset (organization / email / phone changed).
+  const [notices, setNotices] = useState<string[]>([])
+  const [employeeLink, setEmployeeLink] = useState<EmployeeLink | null>(null)
+  const [pendingFocus, setPendingFocus] = useState<string | null>(null)
+  const submitLock = useRef(false)
+  const [linkedOnSuccess, setLinkedOnSuccess] = useState(false)
+  const formRef = useRef<WizardUser>({})
+  formRef.current = formData
+  const addNotice = (message: string) => setNotices(prev => (prev.includes(message) ? prev : [...prev, message]))
+  const selectedOrgIsHq = isHqOrgType(selectedOrg?.org_type_code)
+  const isCreate = !user
+  const editOrgChanged = Boolean(user) && (formData.organization_id || '') !== (user?.organization_id || '')
+
+  // ── Edit User: current Group Policy access, the draft, and what a save would change ──────────────────────────
+  // Loaded for every edited person: memberships are the real Security & Access data (a legacy GUEST can be an HQ member).
+  const editAccess = useEditAccess({ enabled: open && Boolean(user), userId: user?.id, organizationId: user?.organization_id ?? null, loader: accessOptionsLoader })
+  const activeMemberships = (editAccess.snapshot?.memberships ?? []).filter(m => m.status === 'active')
+  // An independent guest: legacy GUEST with no organization on the account and no active organization membership.
+  // A GUEST with an organization or an active membership is managed like any member (organization, Group Policies).
+  const isGuest = legacyGuest && !user?.organization_id && activeMemberships.length === 0
+  const [accessDraft, setAccessDraft] = useState<ProfileChoice[]>([])
+  const [accessReason, setAccessReason] = useState('')
+  const [moverAck, setMoverAck] = useState(false)
+  // The draft restarts from what is stored after every load (open, retry, after a save attempt); closing discards it.
+  useEffect(() => { setAccessDraft(editAccess.classified ? initialItems(editAccess.classified) : []) }, [editAccess.version]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!open) { setAccessDraft([]); setAccessReason(''); setMoverAck(false) } }, [open])
+  const accessPlan = editAccess.classified && !editOrgChanged && Boolean(editAccess.options?.canAssign) ? computePlan(editAccess.classified, accessDraft) : null
+  const moverEffect = editOrgChanged && editAccess.snapshot ? moverImpact(editAccess.snapshot, formData.organization_id || null) : null
+  // Moving the person ends the memberships that follow their organization (and every grant on them): always acknowledged first.
+  const orgMoveNeedsAck = editOrgChanged && (!editAccess.snapshot || Boolean(moverEffect && (moverEffect.assignments.length || moverEffect.memberships.length)))
+
+  // What the assignment-permission check said for the CURRENT organization. Never carried over from another organization.
+  const [accessCheck, setAccessCheck] = useState<'idle' | 'checking' | 'authorized' | 'denied' | 'failed'>('idle')
+  const [accessDenial, setAccessDenial] = useState<{ reason: string; cannotCreate: boolean } | null>(null)
+  const [accessAttempt, setAccessAttempt] = useState(0)
+  // Which stage of the check failed: the authorization decision itself, or the policy/scope lists loaded after it.
+  const [accessFailedStage, setAccessFailedStage] = useState<string | null>(null)
   useEffect(() => {
-    if (user || !open || isGuest || !formData.organization_id) { setInitialRoles([]); setInitialProfiles([]); setInitialScopes([]); setAccessOrg(null); setAccessInfo(null); return }
+    const reset = () => { setAccessFailedStage(null); setInitialRoles([]); setInitialProfiles([]); setDeferredProfiles([]); setIneligibleProfiles([]); setInitialScopes([]); setAccessOrg(null); setAccessInfo(null); setAccessDenial(null) }
+    reset()
+    if (user || !open || isGuest || !formData.organization_id) { setAccessCheck('idle'); return }
+    setAccessCheck('checking')
     let cancelled = false
-    listInitialAccessRoles(formData.organization_id).then(r => {
+    accessOptionsLoader(formData.organization_id).then((r: any) => {
       if (cancelled) return
+      if (!r?.success) { setAccessFailedStage(((r as any)?.failedStage as string | undefined) ?? null); setAccessCheck('failed'); return }
+      setAccessDenial((r as any).denial ? { reason: (r as any).denial.reason, cannotCreate: Boolean((r as any).denial.cannotCreate) } : null)
+      const profiles: SelectableProfile[] = ((r as any).profiles as SelectableProfile[] | undefined) ?? (r.roles || [])
+      const scopes: SelectableScope[] = ((r as any).scopes as SelectableScope[] | undefined) ?? []
       setInitialRoles(r.roles || [])
-      setInitialProfiles(((r as any).profiles as SelectableProfile[] | undefined) ?? (r.roles || []))
-      setInitialScopes(((r as any).scopes as SelectableScope[] | undefined) ?? [])
+      setInitialProfiles(profiles)
+      setDeferredProfiles(((r as any).deferredProfiles as Array<{ id: string; name: string }> | undefined) ?? [])
+      setIneligibleProfiles(((r as any).ineligibleProfiles as Array<{ id: string; name: string; message: string }> | undefined) ?? [])
+      setInitialScopes(scopes)
+      setOrgNames(((r as any).orgNames as Record<string, string> | undefined) ?? {})
       setAccessOrg((r as any).organization ?? null)
+      setCanOpenGroupPolicies(Boolean((r as any).canOpenGroupPolicies))
       setAccessInfo({ canAssign: Boolean((r as any).canAssign), legacyReadOnly: Boolean((r as any).legacyReadOnly) })
-      // A change of organization invalidates profile/scope choices made for another one.
-      setFormData(prev => ((prev as any).initial_profiles?.length ? ({ ...prev, initial_profiles: [] } as any) : prev))
-    }).catch(() => undefined)
+      setAccessCheck(r.canAssign ? 'authorized' : 'denied')
+      // A change of organization revalidates earlier choices: what no longer applies is removed AND explained, never kept silently.
+      const current = formRef.current as any
+      const picked: ProfileChoice[] = current.initial_profiles || []
+      const { kept, removed } = pruneSelections({ profiles, scopes }, picked)
+      const next: Record<string, unknown> = {}
+      // ESS exclusion needs assignment authority and an HQ organization; it never survives a switch to anything else.
+      if ((current as any).ess_excluded && (!r.canAssign || !(r as any).essAllowed)) {
+        next.ess_excluded = false
+        addNotice(!(r as any).essAllowed ? 'Employee Self Service is available to HQ users only, so the exclusion was cleared.' : 'The Employee Self Service exclusion was cleared because you cannot assign access in this organization.')
+      }
+      if (!r.canAssign) {
+        if (picked.length || current.initial_role_id === 'profiles') { next.initial_profiles = []; next.initial_role_id = ''; addNotice('Group Policies were cleared because you cannot assign them in this organization.') }
+      } else if (removed > 0) {
+        next.initial_profiles = kept
+        addNotice(`${removed} selected Group Policy ${removed === 1 ? 'selection does' : 'selections do'} not apply to this organization and ${removed === 1 ? 'was' : 'were'} removed. Review the list below.`)
+      }
+      if (current.initial_role_id === 'self' && !(r as any).essAllowed) {
+        // 'self' is the HQ "no additional policy" state; a non-HQ organization asks for its own explicit choice.
+        next.initial_role_id = ''
+        addNotice('Employee Self Service is available to HQ users only, so it was removed. Choose Group Policies or “No Group Policy for now”.')
+      } else if (current.initial_role_id === 'profiles' && (r as any).essAllowed && !((next.initial_profiles ?? picked) as ProfileChoice[]).length) {
+        next.initial_role_id = 'self'
+      }
+      if (Object.keys(next).length) setFormData(prev => ({ ...prev, ...next } as any))
+    }).catch(() => { if (!cancelled) setAccessCheck('failed') })
     return () => { cancelled = true }
-  }, [user, open, isGuest, formData.organization_id])
+  }, [user, open, isGuest, formData.organization_id, accessAttempt])
   // Business access must be an explicit choice when it can be granted here.
-  const accessChoiceRequired = !user && !isGuest && Boolean(accessInfo?.canAssign) && initialRoles.length > 0
+  const accessChoiceRequired = !user && !isGuest && accessCheck === 'authorized' && initialRoles.length > 0 && !selectedOrgIsHq
+  // HQ staff hold Employee Self Service by default; additional Group Policies are optional, so no explicit choice is required.
+  const hqEssSelector = !user && !isGuest && accessCheck === 'authorized' && selectedOrgIsHq
+  const essExcluded = Boolean((formData as any).ess_excluded) && hqEssSelector
   const showBusinessStep = organizationType === 'SHOP' || selectedOrgIsShop
+  // Employment details are HQ-only (judged on the organization's stored type; the server checks it again on create).
   const showHrFields = Boolean(
     formData.organization_id &&
     selectedOrg &&
-    [1, 10, 20, 30, 40].includes(selectedRoleLevel || 0)
+    selectedOrgIsHq &&
+    // Create has no legacy level: eligibility is the organization's stored type alone. Editing keeps its level rule.
+    (!user || [1, 10, 20, 30, 40].includes(selectedRoleLevel || 0))
   )
-  // Identity onboarding (create) does not collect banking: payee details
-  // belong to an employee/vendor/beneficiary domain. Existing banking data is
-  // still shown and editable on an existing user.
-  const showBankingStep = Boolean(user)
-  const steps = useMemo<WizardStep[]>(() => {
-    return ['basic', 'access', ...(showBusinessStep ? ['business' as WizardStep] : []), ...(showBankingStep ? ['banking' as WizardStep] : []), 'review']
-  }, [showBusinessStep, showBankingStep])
+  // Identity onboarding (create) does not collect banking: payee details belong to an employee/vendor/beneficiary domain.
+  // Existing banking data is shown and editable on an existing user (see bankingAvailable).
+  // Banking details are shown (and sent) only when the record the administrator was given carries them: never invented or cleared.
+  const bankingAvailable = Boolean(user) && ['bank_id', 'bank_account_number', 'bank_account_holder_name'].some(k => k in (user as object))
+  // Adding and editing a user share the same three steps: Basic details → Organization & access → Review.
+  const steps = WIZARD_STEPS
+  const lookup = useIdentityLookup({ email: formData.email, phone: formData.phone, organizationId: formData.organization_id, enabled: open && isCreate && !isGuest })
+  const lookupKey = `${(formData.email || '').trim().toLowerCase()}|${(formData.phone || '').trim()}|${formData.organization_id || ''}`
+  // The link belongs to one email / phone / organization combination; any change drops it and the lookup offers it again if it still matches.
+  useEffect(() => {
+    if (!employeeLink || employeeLink.key === lookupKey) return
+    const orgChanged = employeeLink.key.split('|')[2] !== (formData.organization_id || '')
+    setEmployeeLink(null)
+    addNotice(orgChanged && !selectedOrgIsHq
+      ? 'Employee Self Service is available to HQ users only, so the HR employee link was removed.'
+      : 'The HR employee link was removed because the email, phone or organization changed. Check the match again.')
+  }, [lookupKey])
+  // Reference is HQ-only. A pending value is cleared when the organization is not HQ (never restored on switching back).
+  // An existing user's stored value is left alone: it is simply not editable while the organization is non-HQ.
+  const referenceAllowed = referenceAllowedForOrgType(selectedOrg?.org_type_code)
+  useEffect(() => {
+    if (referenceAllowed || user || !formData.can_be_reference) return
+    setFormData(prev => ({ ...prev, can_be_reference: false }))
+  }, [referenceAllowed, user, formData.can_be_reference])
+  // Employment details are HQ-only. On a new account, pending values are cleared when the organization is not HQ and are
+  // never restored on switching back. An existing user's stored values are left alone (the section is just not shown).
+  useEffect(() => {
+    if (user || !formData.organization_id || employmentAllowedForOrgType(selectedOrg?.org_type_code)) return
+    const f = formRef.current as any
+    const pending = ['department_id', 'manager_user_id', 'position_id', 'employment_type', 'join_date'].some(k => Boolean(f[k])) || (f.employment_status && f.employment_status !== 'active')
+    if (!pending) return
+    setFormData(prev => ({ ...prev, department_id: '', manager_user_id: '', position_id: '', employment_type: '', join_date: '', employment_status: 'active' }))
+    addNotice('Employment details are available for HQ accounts only, so the pending employment selections were cleared.')
+  }, [selectedOrg?.org_type_code, formData.organization_id, user])
   const filteredOrganizations = filterOrganizationsForType(organizations, organizationType, organizationSearch)
+  // Add User: when exactly one HQ organization is available, select it as a manual pick would (the existing
+  // organization_id effects then load policies and scopes). Only for an empty HQ selection on the access step.
+  const singleHqOrg = (() => {
+    if (user || isGuest || lockOrganization || !organizationsLoaded || organizationType !== 'HQ') return null
+    const hq = filterOrganizationsForType(organizations, 'HQ')
+    return hq.length === 1 ? hq[0] : null
+  })()
+  useEffect(() => {
+    if (!open || currentStep !== 'access' || !singleHqOrg || formData.organization_id) return
+    setFormData(prev => prev.organization_id ? prev : { ...prev, organization_id: singleHqOrg.id, department_id: '', manager_user_id: '', position_id: '' })
+    clearFieldError('organization_id')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, currentStep, singleHqOrg?.id, formData.organization_id])
 
   useEffect(() => {
     if (!open) return
@@ -395,7 +580,7 @@ export default function UserDialogNew({
         phone: '',
         password: '',
         confirmPassword: '',
-        role_code: defaultValues?.role_code || '',
+        role_code: '', // creating a user never carries a legacy level
         organization_id: defaultValues?.organization_id || '',
         is_active: true,
         avatar_url: null,
@@ -440,7 +625,11 @@ export default function UserDialogNew({
     setShowPassword(false)
     setShowConfirmPassword(false)
     setOrganizationSearch('')
-  }, [defaultValues?.department_id, defaultValues?.organization_id, defaultValues?.role_code, open, organizations, user])
+    setNotices([])
+    setEmployeeLink(null)
+    setLinkedOnSuccess(false)
+    submitLock.current = false
+  }, [defaultValues?.department_id, defaultValues?.organization_id, open, organizations, user])
 
   useEffect(() => {
     if (!open) return
@@ -495,10 +684,9 @@ export default function UserDialogNew({
       setEmailCheckStatus('idle')
       return
     }
+    // A registered email is not an input error by itself: the identity check below offers to link an eligible HQ employee,
+    // otherwise it explains that no second account is created. Creating is blocked either way (client and server).
     setEmailCheckStatus(data && data.length > 0 ? 'taken' : 'available')
-    if (data && data.length > 0) {
-      setErrors(prev => ({ ...prev, email: 'This email address is already registered. Please use a different email.' }))
-    }
   }
 
   const checkPhoneAvailability = async (phone: string) => {
@@ -533,9 +721,6 @@ export default function UserDialogNew({
       return
     }
     setPhoneCheckStatus(exists ? 'taken' : 'available')
-    if (exists) {
-      setErrors(prev => ({ ...prev, phone: 'This phone number is already registered to another user.' }))
-    }
   }
 
   const getInitials = (name: string | null | undefined) => {
@@ -578,17 +763,6 @@ export default function UserDialogNew({
       if (phoneCheckTimeoutRef.current) clearTimeout(phoneCheckTimeoutRef.current)
       phoneCheckTimeoutRef.current = setTimeout(() => checkPhoneAvailability(newValue), 500)
     }
-  }
-
-  const selectRole = (role: Role) => {
-    setFormData(prev => ({
-      ...prev,
-      role_code: role.role_code,
-      organization_id: role.role_level === 50 ? '' : prev.organization_id,
-    }))
-    if (role.role_level === 10) setOrganizationType('HQ')
-    clearFieldError('role_code')
-    clearFieldError('organization_id')
   }
 
   const selectOrganizationType = (type: OrganizationType) => {
@@ -700,36 +874,48 @@ export default function UserDialogNew({
     if (!formData.full_name?.trim()) next.full_name = 'Full name is required'
     if (!formData.email?.trim()) next.email = 'Email is required'
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) next.email = 'Invalid email format'
-    else if (emailCheckStatus === 'taken') next.email = 'This email address is already registered. Please use a different email.'
     if (!formData.phone?.trim()) next.phone = 'Phone number is required'
     else {
       const validation = validatePhoneNumber(formData.phone)
       if (!validation.isValid) next.phone = validation.error || 'Invalid phone number format'
-      else if (phoneCheckStatus === 'taken') next.phone = 'This phone number is already registered to another user.'
     }
-    if (!user && !formData.password) next.password = 'Password is required'
-    else if (!user && formData.password && formData.password.length < 6) next.password = 'Password must be at least 6 characters'
-    if (!user && !formData.confirmPassword) next.confirmPassword = 'Please confirm your password'
-    else if (!user && formData.password !== formData.confirmPassword) next.confirmPassword = 'Passwords do not match'
+    // An existing person keeps their login: a password is only needed for a brand-new account.
+    const existingPerson = emailCheckStatus === 'taken' || phoneCheckStatus === 'taken' || Boolean(employeeLink)
+    if (!user && !existingPerson) {
+      if (!formData.password) next.password = 'Password is required'
+      else if (formData.password.length < 6) next.password = 'Password must be at least 6 characters'
+      if (!formData.confirmPassword) next.confirmPassword = 'Please confirm your password'
+      else if (formData.password !== formData.confirmPassword) next.confirmPassword = 'Passwords do not match'
+    }
     return next
   }
 
   const validateAccess = () => {
     const next: Record<string, string> = {}
-    if (!formData.role_code) next.role_code = 'Legacy level is required'
-    if (accessChoiceRequired) {
-      const choice = (formData as any).initial_role_id
-      if (!choice) next.initial_role_id = 'Choose the business access for this person (or employee self-service only)'
-      else if (choice === 'profiles') {
-        const picked: ProfileChoice[] = (formData as any).initial_profiles || []
-        if (picked.length === 0 || picked.some(p => !p.roleId)) next.initial_profiles = 'Choose an Access Profile in every row (or remove the empty row).'
-        else if (picked.some(p => !p.scopeId)) next.initial_profiles = 'Each Access Profile needs its own scope.'
-        else if (new Set(picked.map(p => p.roleId)).size !== picked.length) next.initial_profiles = 'Each Access Profile can be assigned once.'
-        if (((formData as any).initial_access_reason || '').trim().length < 5) next.initial_access_reason = 'A reason is required (at least 5 characters)'
-      } else if (choice !== 'self' && ((formData as any).initial_access_reason || '').trim().length < 5) next.initial_access_reason = 'A reason is required (at least 5 characters)'
-    }
+    // Keys are added in screen order: the first one is focused when validation fails.
     if (!isGuest && !formData.organization_id) {
       next.organization_id = `${organizationType === 'HQ' ? 'HQ' : getOrgTypeName(organizationType)} organization is required`
+    }
+    if (isCreate && !isGuest && formData.organization_id) {
+      // Nothing is assigned unchecked: the permission check must have completed, and creating users here must be allowed.
+      if (accessCheck === 'checking') next.access_authority = 'Assignment permissions are still being checked.'
+      else if (accessCheck === 'failed') next.access_authority = 'Unable to check assignment permissions. Retry before continuing.'
+      else if (accessCheck === 'denied' && accessDenial?.cannotCreate) next.access_authority = accessDenial.reason
+      const blocker = lookupBlocker(lookup, Boolean(employeeLink))
+      if (blocker) next.identity = blocker
+    }
+    if (accessChoiceRequired || hqEssSelector) {
+      const picked: ProfileChoice[] = (formData as any).initial_profiles || []
+      const choice = hqEssSelector ? (picked.length ? 'profiles' : 'self') : (formData as any).initial_role_id
+      if (!choice) next.initial_role_id = 'Choose the business access for this person: Group Policies, or none for now.'
+      else if (choice === 'profiles') {
+        if (picked.length === 0) next.initial_profiles = 'Select at least one Group Policy (or choose “No Group Policy for now”).'
+        else if (picked.length > MAX_POLICY_SCOPE_PAIRS) next.initial_profiles = `At most ${MAX_POLICY_SCOPE_PAIRS} policy and scope selections can be made at once.`
+        else if (picked.some(p => !p.roleId)) next.initial_profiles = 'A selected Group Policy is not valid. Untick it and choose again.'
+        else if (picked.some(p => !p.scopeId)) next.initial_profiles = missingScopeMessage({ profiles: initialProfiles, scopes: initialScopes }, picked) ?? 'Each Group Policy needs its own scope.'
+        else if (new Set(picked.map(p => `${p.roleId}:${p.scopeId}`)).size !== picked.length) next.initial_profiles = 'The same Group Policy and scope were added twice.'
+        else if (picked.some(p => !initialProfiles.some(x => x.id === p.roleId) || !scopesForPolicy(initialProfiles.find(x => x.id === p.roleId), initialScopes).some(x => x.id === p.scopeId))) next.initial_profiles = 'A selected Group Policy or scope does not apply to this organization. Remove it and choose again.'
+      } else if (choice !== 'self') next.initial_role_id = 'Choose the business access for this person.'
     }
     return next
   }
@@ -763,28 +949,57 @@ export default function UserDialogNew({
     return next
   }
 
+  // Edit User: what a save would change must be complete before it is submitted (never a broader grant, never an unexplained one).
+  const validateEditReview = () => {
+    const next: Record<string, string> = {}
+    if (!user) return next
+    if (accessPlan?.incomplete) next.initial_profiles = accessPlan.incomplete
+    if (accessPlan && !accessPlan.empty && accessReason.trim().length < 5) next.access_reason = 'Enter a reason of at least 5 characters for the Group Policy changes (it is recorded in the access change log).'
+    if (orgMoveNeedsAck && !moverAck) next.org_move = 'Confirm that you understand what moving this person ends.'
+    return next
+  }
+
+  const FIELD_ORDER = ['full_name', 'email', 'phone', 'password', 'confirmPassword', 'bank_account_number', 'organization_id', 'access_authority', 'identity', 'initial_role_id', 'initial_profiles', 'access_reason', 'org_move'] as const
+  const FIELD_STEP: Record<string, WizardStep> = { full_name: 'basic', email: 'basic', phone: 'basic', password: 'basic', confirmPassword: 'basic', organization_id: 'access', access_authority: 'access', identity: 'access', initial_role_id: 'access', initial_profiles: 'access', bank_account_number: 'basic', access_reason: 'review', org_move: 'review' }
+  const FIELD_ID: Record<string, string> = { full_name: 'user-dialog-full-name', email: 'user-dialog-email', phone: 'user-dialog-phone', password: 'user-dialog-password', confirmPassword: 'user-dialog-confirm-password', organization_id: 'user-dialog-organization', access_authority: 'user-dialog-access-status', identity: 'user-dialog-identity', initial_role_id: 'user-dialog-access', initial_profiles: 'user-dialog-access', bank_account_number: 'user-dialog-bank-account', access_reason: 'user-dialog-access-reason', org_move: 'user-dialog-org-move' }
+  const firstInvalid = (errs: Record<string, string>) => FIELD_ORDER.find(k => errs[k])
+
   const validateStep = (step: WizardStep) => {
     const next = {
-      ...(step === 'basic' ? validateBasic() : {}),
-      ...(step === 'access' ? validateAccess() : {}),
-      ...(step === 'banking' ? validateBanking() : {}),
+      ...(step === 'basic' ? { ...validateBasic(), ...(bankingAvailable ? validateBanking() : {}) } : {}),
+      ...(step === 'access' ? { ...validateAccess(), ...(user && validateEditReview().initial_profiles ? { initial_profiles: validateEditReview().initial_profiles } : {}) } : {}),
     }
     setErrors(prev => ({ ...prev, ...next }))
+    const first = firstInvalid(next)
+    if (first) {
+      setPendingFocus(first)
+    }
     return Object.keys(next).length === 0
   }
 
   const validateAll = () => {
-    const next = { ...validateBasic(), ...validateAccess(), ...(showBankingStep ? validateBanking() : {}) }
+    const next = { ...validateBasic(), ...(bankingAvailable ? validateBanking() : {}), ...validateAccess(), ...validateEditReview() }
     setErrors(next)
-    if (Object.keys(next).length > 0) {
-      const first = Object.keys(next)[0]
-      if (['full_name', 'email', 'phone', 'password', 'confirmPassword'].includes(first)) setCurrentStep('basic')
-      else if (['role_code', 'organization_id', 'initial_role_id', 'initial_profiles', 'initial_access_reason'].includes(first)) setCurrentStep('access')
-      else setCurrentStep('banking')
+    const first = firstInvalid(next)
+    if (first) {
+      setCurrentStep(FIELD_STEP[first] ?? 'basic')
+      setPendingFocus(first)
       return false
     }
     return true
   }
+
+  // Focus the first invalid field once the step containing it is on screen.
+  useEffect(() => {
+    if (!pendingFocus) return
+    const frame = requestAnimationFrame(() => {
+      const el = document.getElementById(FIELD_ID[pendingFocus] ?? '')
+      if (el) { el.focus(); el.scrollIntoView?.({ block: 'center' }) }
+      setPendingFocus(null)
+    })
+    return () => cancelAnimationFrame(frame)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingFocus, currentStep])
 
   const goNext = () => {
     if (!validateStep(currentStep)) return
@@ -798,7 +1013,9 @@ export default function UserDialogNew({
   }
 
   const handleSubmit = async () => {
+    if (submitLock.current) return
     if (!validateAll()) return
+    submitLock.current = true
     setSubmitError(null)
     setLocalSaving(true)
     try {
@@ -809,16 +1026,54 @@ export default function UserDialogNew({
           : formData.bank_account_number,
       }
       const { confirmPassword, notes, ...dataToSave } = sanitizedFormData
+      // A password is only ever set when creating; editing never carries one (a reset is its own action).
+      if (user) delete (dataToSave as any).password
+      // A new user is always created Active: never trust a stale form value (the Active control exists only when editing).
+      if (!user) dataToSave.is_active = true
+      if (!referenceAllowed) {
+        // HQ-only: a new non-HQ account never carries Reference; an edit leaves the stored value untouched.
+        if (user) delete (dataToSave as any).can_be_reference
+        else (dataToSave as any).can_be_reference = false
+      }
+      // Employee Self Service: sent only for HQ (default = included; an explicit exclusion travels as false). The server re-judges it.
+      delete (dataToSave as any).ess_excluded
+      if (!user) {
+        if (hqEssSelector) (dataToSave as any).include_ess = !essExcluded
+        else delete (dataToSave as any).include_ess
+      }
+      if (employeeLink) {
+        // Linking an existing employee keeps their login: no password travels with the request.
+        (dataToSave as any).linked_user_id = employeeLink.userId
+        delete (dataToSave as any).password
+      }
       const finalAvatarFile = sourceAvatarFile
         ? await compressImage(sourceAvatarFile, avatarCropPosition)
         : avatarFile
-      await onSave(dataToSave as Partial<User>, finalAvatarFile)
+      if (user && !bankingAvailable) {
+        // Banking was not part of the record this administrator received: it is neither shown nor sent (nothing is cleared).
+        for (const key of ['bank_id', 'bank_account_number', 'bank_account_holder_name']) delete (dataToSave as any)[key]
+      }
+      const plan = user && accessPlan && !accessPlan.empty ? accessPlan : null
+      const access: EditAccessSubmission | undefined = user && plan ? {
+        apply: async () => {
+          const outcome = await applyPlan(plan, {
+            userId: user.id, organizationId: user.organization_id as string, reason: accessReason.trim(),
+            names: id => editAccess.options?.profiles.find(p => p.id === id)?.name ?? 'a policy',
+          }, callApi)
+          // What is stored now is the new starting point, whether everything or only part was applied.
+          editAccess.refresh()
+          return outcome
+        },
+      } : undefined
+      await onSave(dataToSave as Partial<User>, finalAvatarFile, access)
       if (!user) {
+        setLinkedOnSuccess(Boolean(employeeLink))
         setSuccess(true)
       }
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : 'Failed to save user')
     } finally {
+      submitLock.current = false
       setLocalSaving(false)
     }
   }
@@ -832,6 +1087,10 @@ export default function UserDialogNew({
 
   const handleAddAnother = () => {
     setSuccess(false)
+    setLinkedOnSuccess(false)
+    setEmployeeLink(null)
+    setNotices([])
+    submitLock.current = false
     setCurrentStep('basic')
     setFormData({
       email: '',
@@ -840,7 +1099,7 @@ export default function UserDialogNew({
       phone: '',
       password: '',
       confirmPassword: '',
-      role_code: defaultValues?.role_code || '',
+      role_code: '', // creating a user never carries a legacy level
       organization_id: defaultValues?.organization_id || '',
       is_active: true,
       avatar_url: null,
@@ -863,30 +1122,40 @@ export default function UserDialogNew({
   if (!open) return null
 
   const renderFieldError = (field: string) => errors[field] ? <p className="text-xs text-red-500">{errors[field]}</p> : null
-  const inputClass = (field: string, extra = '') => `h-11 rounded-lg border-[var(--sera-line)] text-sm ${errors[field] ? 'border-red-500 focus-visible:ring-red-200' : ''} ${extra}`
-
-  const sectionHeader = (icon: React.ReactNode, title: string, description: string) => (
-    <div className="flex items-start gap-3">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--sera-orange)]/[0.06] text-[var(--sera-orange)]">
-        {icon}
-      </div>
-      <div>
-        <h3 className="text-base font-semibold text-gray-950">{title}</h3>
-        <p className="text-sm text-[var(--sera-muted)]">{description}</p>
-      </div>
-    </div>
-  )
+  const inputClass = (field: string, extra = '') => `h-9 rounded-lg border-[var(--sera-line)] text-sm ${errors[field] ? 'border-red-500 focus-visible:ring-red-200' : ''} ${extra}`
 
   const summaryValue = (value?: string | null) => value?.trim() || '-'
 
+  const identityNotice = (
+    <IdentityMatchNotice
+      state={lookup}
+      link={employeeLink}
+      currentName={formData.full_name || ''}
+      disabled={saving}
+      onLink={(replaceName) => {
+        if (lookup.phase !== 'done' || lookup.result.status !== 'employee') return
+        const r = lookup.result
+        setEmployeeLink({ userId: r.userId, name: r.name, organizationName: r.organizationName, employeeNo: r.employeeNo, key: lookupKey })
+        if (replaceName && r.name) handleInputChange('full_name', r.name)
+        clearFieldError('identity')
+      }}
+      onUnlink={() => setEmployeeLink(null)}
+      onOpenUser={onOpenExistingUser}
+    />
+  )
+
   const renderBasicStep = () => (
-    <div className="sera-sc-page space-y-6">
-      {sectionHeader(<UserIcon className="h-5 w-5" />, 'Basic Information', "Enter the user's basic details to get started.")}
-      <div className="grid gap-6 lg:grid-cols-[120px_1fr]">
-        <div className="flex flex-col items-center gap-3">
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-gray-950">Basic details</h3>
+        <p className="text-xs text-gray-500">{isCreate ? 'Who is this person? Their login is created from the email and password.' : 'Who is this person? The login email is fixed; resetting the password is a separate action below.'}</p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-[88px_1fr]">
+        <div className="flex flex-row items-center gap-3 sm:flex-col sm:items-center">
           <div
             role="button"
             tabIndex={0}
+            aria-label={avatarPreview ? 'Profile photo (drag to reposition)' : 'Upload profile photo'}
             onClick={() => {
               if (avatarSuppressClickRef.current) {
                 avatarSuppressClickRef.current = false
@@ -904,7 +1173,7 @@ export default function UserDialogNew({
             onMouseMove={handleAvatarMouseMove}
             onMouseUp={handleAvatarMouseUp}
             onMouseLeave={handleAvatarMouseUp}
-            className={`group flex h-28 w-28 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-[var(--sera-orange)] to-[var(--sera-orange-deep)] text-white shadow-sm ring-4 ring-[var(--sera-orange)]/10 ${saving ? 'pointer-events-none opacity-70' : avatarPreview ? 'cursor-move' : 'cursor-pointer'}`}
+            className={`group flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-[var(--sera-orange)] to-[var(--sera-orange-deep)] text-white shadow-sm ring-2 ring-[var(--sera-orange)]/10 ${saving ? 'pointer-events-none opacity-70' : avatarPreview ? 'cursor-move' : 'cursor-pointer'}`}
             title={avatarPreview ? 'Drag to reposition image' : 'Upload photo'}
           >
             {avatarPreview ? (
@@ -916,211 +1185,98 @@ export default function UserDialogNew({
                 style={{ objectPosition: `${avatarCropPosition.x}% ${avatarCropPosition.y}%` }}
               />
             ) : (
-              <div className="relative flex h-full w-full items-center justify-center bg-gray-200 text-2xl font-medium text-[var(--sera-ink)]/80">
+              <div className="relative flex h-full w-full items-center justify-center bg-gray-200 text-lg font-medium text-[var(--sera-ink)]/80">
                 {getInitials(formData.full_name)}
-                <span className="absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-full bg-[var(--sera-orange)] text-white shadow-sm">
-                  <Camera className="h-4 w-4" />
+                <span className="absolute bottom-0.5 right-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[var(--sera-orange)] text-white shadow-sm">
+                  <Camera className="h-3.5 w-3.5" />
                 </span>
               </div>
             )}
           </div>
           <input ref={fileInputRef} type="file" accept="image/jpeg,image/jpg,image/png,image/gif,image/webp" onChange={handleAvatarChange} className="hidden" />
-          <Button type="button" variant="ghost" size="sm" onClick={() => fileInputRef.current?.click()} disabled={saving} className="h-8 text-[var(--sera-orange)]">
-            <Upload className="mr-1.5 h-4 w-4" />
-            Upload Photo
-          </Button>
-          <p className="text-center text-xs text-[var(--sera-muted)]/70">JPG, PNG (Max 2MB)</p>
-          {avatarPreview ? (
-            <p className="text-center text-xs text-[var(--sera-muted)]/70">Drag image to reposition</p>
-          ) : null}
-          {avatarFile || avatarPreview ? (
-            <Button type="button" variant="ghost" size="sm" onClick={resetAvatarUpload} disabled={saving} className="h-7 text-xs text-red-500">
-              Remove
+          <div className="flex flex-col items-start gap-0.5 sm:items-center">
+            <Button type="button" variant="ghost" size="sm" onClick={() => fileInputRef.current?.click()} disabled={saving} className="h-7 px-2 text-xs text-[var(--sera-orange)]">
+              <Upload className="mr-1 h-3.5 w-3.5" />
+              {avatarPreview ? 'Change' : 'Upload'}
             </Button>
-          ) : null}
+            {avatarFile || avatarPreview ? (
+              <Button type="button" variant="ghost" size="sm" onClick={resetAvatarUpload} disabled={saving} className="h-6 px-2 text-xs text-red-500">
+                Remove
+              </Button>
+            ) : null}
+          </div>
           {renderFieldError('avatar')}
         </div>
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-2">
-            <Label>Full Name <span className="text-red-500">*</span></Label>
-            <Input value={formData.full_name || ''} onChange={e => handleInputChange('full_name', e.target.value)} disabled={saving} placeholder="Enter full name" className={inputClass('full_name')} />
+        <div className="grid gap-x-4 gap-y-3 md:grid-cols-2">
+          <div className="space-y-1">
+            <Label htmlFor="user-dialog-full-name" className="text-sm">Full Name <span className="text-red-500" aria-hidden>*</span></Label>
+            <Input id="user-dialog-full-name" name="user_dialog_full_name" autoComplete="off" aria-invalid={Boolean(errors.full_name)} aria-required value={formData.full_name || ''} onChange={e => handleInputChange('full_name', e.target.value)} disabled={saving} placeholder="Enter full name" className={inputClass('full_name')} />
             {renderFieldError('full_name')}
           </div>
-          <div className="space-y-2">
-            <Label>Call Name <span className="font-normal text-[var(--sera-muted)]/70">(Optional)</span></Label>
-            <Input value={formData.call_name || ''} onChange={e => handleInputChange('call_name', e.target.value)} disabled={saving} placeholder="Short name / preferred name" className={inputClass('call_name')} />
+          <div className="space-y-1">
+            <Label htmlFor="user-dialog-call-name" className="text-sm">Call Name <span className="font-normal text-[var(--sera-muted)]/70">(Optional)</span></Label>
+            <Input id="user-dialog-call-name" name="user_dialog_call_name" autoComplete="off" value={formData.call_name || ''} onChange={e => handleInputChange('call_name', e.target.value)} disabled={saving} placeholder="Short name / preferred name" className={inputClass('call_name')} />
           </div>
-          <div className="space-y-2">
-            <Label>Email <span className="text-red-500">*</span></Label>
+          <div className="space-y-1">
+            <Label htmlFor="user-dialog-email" className="text-sm">Email <span className="text-red-500" aria-hidden>*</span></Label>
             <div className="relative">
-              <Mail className="absolute left-3 top-3.5 h-4 w-4 text-[var(--sera-muted)]/70" />
-              <Input type="email" value={formData.email || ''} onChange={e => handleInputChange('email', e.target.value)} disabled={saving || !!user} placeholder="Enter email address" className={inputClass('email', 'pl-9')} />
-              {emailCheckStatus === 'checking' ? <Loader2 className="absolute right-3 top-3.5 h-4 w-4 animate-spin text-[var(--sera-muted)]/70" /> : null}
-              {emailCheckStatus === 'available' ? <CheckCircle2 className="absolute right-3 top-3.5 h-4 w-4 text-green-500" /> : null}
+              <Mail className="absolute left-3 top-2.5 h-4 w-4 text-[var(--sera-muted)]/70" />
+              <Input id="user-dialog-email" name="user_dialog_email" type="email" inputMode="email" autoComplete="off" aria-invalid={Boolean(errors.email)} aria-required value={formData.email || ''} onChange={e => handleInputChange('email', e.target.value)} disabled={saving || !!user} placeholder="Enter email address" className={inputClass('email', 'pl-9')} />
+              {emailCheckStatus === 'checking' ? <Loader2 className="absolute right-3 top-2.5 h-4 w-4 animate-spin text-[var(--sera-muted)]/70" /> : null}
+              {emailCheckStatus === 'available' ? <CheckCircle2 className="absolute right-3 top-2.5 h-4 w-4 text-green-500" /> : null}
             </div>
-            {renderFieldError('email')}
+            {renderFieldError('email') || (isCreate && emailCheckStatus === 'taken' ? <p className="text-xs text-amber-700">This email is already registered. Continue to Organization &amp; access to check whether the person can be linked.</p> : null)}
           </div>
-          <div className="space-y-2">
-            <Label>Phone Number <span className="text-red-500">*</span></Label>
+          <div className="space-y-1">
+            <Label htmlFor="user-dialog-phone" className="text-sm">Phone Number <span className="text-red-500" aria-hidden>*</span></Label>
             <div className="relative">
-              <Phone className="absolute left-3 top-3.5 h-4 w-4 text-[var(--sera-muted)]/70" />
-              <Input value={formData.phone || ''} onChange={e => handleInputChange('phone', e.target.value)} disabled={saving} placeholder="e.g. 0123456789 (MY) or 13800138000 (CN)" className={inputClass('phone', 'pl-9')} />
-              {phoneCheckStatus === 'checking' ? <Loader2 className="absolute right-3 top-3.5 h-4 w-4 animate-spin text-[var(--sera-muted)]/70" /> : null}
-              {phoneCheckStatus === 'available' ? <CheckCircle2 className="absolute right-3 top-3.5 h-4 w-4 text-green-500" /> : null}
+              <Phone className="absolute left-3 top-2.5 h-4 w-4 text-[var(--sera-muted)]/70" />
+              {/* A telephone field of the person being edited/created, never the signed-in administrator's login: not a username, no browser autofill. */}
+              <Input id="user-dialog-phone" name="user_dialog_phone" type="tel" inputMode="tel" autoComplete="off" aria-invalid={Boolean(errors.phone)} aria-required value={formData.phone || ''} onChange={e => handleInputChange('phone', e.target.value)} disabled={saving} placeholder="Enter your phone number" className={inputClass('phone', 'pl-9')} />
+              {phoneCheckStatus === 'checking' ? <Loader2 className="absolute right-3 top-2.5 h-4 w-4 animate-spin text-[var(--sera-muted)]/70" /> : null}
+              {phoneCheckStatus === 'available' ? <CheckCircle2 className="absolute right-3 top-2.5 h-4 w-4 text-green-500" /> : null}
             </div>
-            {renderFieldError('phone') || <p className="text-xs text-[var(--sera-muted)]/70">{phoneCheckStatus === 'available' ? 'Phone number is available' : 'Malaysia (+60) or China (+86)'}</p>}
+            {renderFieldError('phone') || (isCreate && phoneCheckStatus === 'taken'
+              ? <p className="text-xs text-amber-700">This phone number is already registered. Continue to Organization &amp; access to check whether the person can be linked.</p>
+              : <p className="text-xs text-[var(--sera-muted)]/70">{phoneCheckStatus === 'available' ? 'Phone number is available' : 'Malaysia (+60) or China (+86)'}</p>)}
           </div>
           {!user ? (
-            <>
-              <div className="space-y-2">
-                <Label>Password <span className="text-red-500">*</span></Label>
-                <div className="relative">
-                  <Input type={showPassword ? 'text' : 'password'} value={formData.password || ''} onChange={e => handleInputChange('password', e.target.value)} disabled={saving} placeholder="Min. 6 characters" className={inputClass('password', 'pr-10')} />
-                  <button type="button" onClick={() => setShowPassword(v => !v)} className="absolute right-3 top-3.5 text-[var(--sera-muted)]/70">
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-                {renderFieldError('password')}
-              </div>
-              <div className="space-y-2">
-                <Label>Confirm Password <span className="text-red-500">*</span></Label>
-                <div className="relative">
-                  <Input type={showConfirmPassword ? 'text' : 'password'} value={formData.confirmPassword || ''} onChange={e => handleInputChange('confirmPassword', e.target.value)} disabled={saving} placeholder="Re-enter password" className={inputClass('confirmPassword', 'pr-10')} />
-                  <button type="button" onClick={() => setShowConfirmPassword(v => !v)} className="absolute right-3 top-3.5 text-[var(--sera-muted)]/70">
-                    {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-                {renderFieldError('confirmPassword')}
-              </div>
-            </>
+            // One grid so the two visibility buttons can follow BOTH inputs in the DOM (Password → Confirm Password → eye buttons)
+            // while sitting visually inside their own input. Rows: label / input / error; columns stack on small screens.
+            <div className="grid gap-x-4 gap-y-1 md:col-span-2 md:grid-cols-2">
+              <Label htmlFor="user-dialog-password" className="row-start-1 text-sm md:col-start-1">Password <span className="text-red-500" aria-hidden>*</span></Label>
+              <Input id="user-dialog-password" name="user_dialog_new_password" type={showPassword ? 'text' : 'password'} autoComplete="new-password" aria-invalid={Boolean(errors.password)} aria-required value={formData.password || ''} onChange={e => handleInputChange('password', e.target.value)} disabled={saving} placeholder="Min. 6 characters" className={inputClass('password', 'row-start-2 pr-10 md:col-start-1')} />
+              <div className="row-start-3 md:col-start-1">{renderFieldError('password')}</div>
+              <Label htmlFor="user-dialog-confirm-password" className="row-start-4 text-sm md:col-start-2 md:row-start-1">Confirm Password <span className="text-red-500" aria-hidden>*</span></Label>
+              <Input id="user-dialog-confirm-password" name="user_dialog_confirm_password" type={showConfirmPassword ? 'text' : 'password'} autoComplete="new-password" aria-invalid={Boolean(errors.confirmPassword)} aria-required value={formData.confirmPassword || ''} onChange={e => handleInputChange('confirmPassword', e.target.value)} disabled={saving} placeholder="Re-enter password" className={inputClass('confirmPassword', 'row-start-5 pr-10 md:col-start-2 md:row-start-2')} />
+              <div className="row-start-6 md:col-start-2 md:row-start-3">{renderFieldError('confirmPassword')}</div>
+              <button type="button" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} aria-controls="user-dialog-password" disabled={saving}
+                className="row-start-2 mr-3 self-center justify-self-end text-[var(--sera-muted)]/70 md:col-start-1">
+                {showPassword ? <EyeOff className="h-4 w-4" aria-hidden /> : <Eye className="h-4 w-4" aria-hidden />}
+              </button>
+              <button type="button" onClick={() => setShowConfirmPassword(v => !v)} aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'} aria-pressed={showConfirmPassword} aria-controls="user-dialog-confirm-password" disabled={saving}
+                className="row-start-5 mr-3 self-center justify-self-end text-[var(--sera-muted)]/70 md:col-start-2 md:row-start-2">
+                {showConfirmPassword ? <EyeOff className="h-4 w-4" aria-hidden /> : <Eye className="h-4 w-4" aria-hidden />}
+              </button>
+            </div>
           ) : null}
+          {isCreate && formData.organization_id ? <div className="md:col-span-2">{identityNotice}</div> : null}
         </div>
       </div>
-    </div>
-  )
-
-  const renderAccessStep = () => (
-    <div className="sera-sc-page space-y-6">
-      {sectionHeader(<Shield className="h-5 w-5" />, 'Role & Access', "Choose the organization and the business access this person gets.")}
-      <div className="space-y-3">
-        <Label>Legacy level (compatibility) <span className="text-red-500">*</span></Label>
-        <p className="text-xs text-[var(--sera-muted)]">
-          {!accessInfo
-            ? 'Compatibility level for features still being moved to Security & Access. Business access is chosen after the organization.'
-            : accessInfo.legacyReadOnly
-              ? 'Used only by features still being moved to Security & Access. It does not grant access by itself; business access is chosen below.'
-              : 'Still decides access for features not yet moved to Security & Access. Business roles below are the new access model.'}
-        </p>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-          {availableRoles.map(role => {
-            const active = formData.role_code === role.role_code
-            const Icon = ROLE_ICONS[role.role_level] || Shield
-            return (
-              <button
-                key={role.role_code}
-                type="button"
-                onClick={() => selectRole(role)}
-                disabled={saving}
-                className={`relative rounded-lg border bg-white p-4 text-center shadow-sm transition hover:border-[var(--sera-orange)]/30 hover:bg-[var(--sera-orange)]/[0.06]/40 ${active ? 'border-[var(--sera-orange)] ring-2 ring-[var(--sera-orange)]/15' : 'border-[var(--sera-line)]'}`}
-              >
-                {active ? <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-[var(--sera-orange)] text-white"><Check className="h-3.5 w-3.5" /></span> : null}
-                <Icon className={`mx-auto mb-3 h-8 w-8 ${active ? 'text-[var(--sera-orange)]' : 'text-[var(--sera-ink)]/80'}`} />
-                <div className="text-sm font-semibold text-[var(--sera-ink)]">{desiredRoleLabel(role)}</div>
-                <div className="text-xs text-[var(--sera-muted)]">Level {role.role_level}</div>
-              </button>
-            )
-          })}
-        </div>
-        {renderFieldError('role_code')}
-      </div>
-      <div className="space-y-3">
-        <Label>Organization Type</Label>
-        <div className="grid gap-3 md:grid-cols-4">
-          {USER_ORGANIZATION_TYPES.map(type => {
-            const Icon = type.icon
-            const active = organizationType === type.value
-            return (
-              <button
-                key={type.value}
-                type="button"
-                onClick={() => selectOrganizationType(type.value)}
-                disabled={saving || lockOrganization || isGuest}
-                className={`flex h-12 items-center justify-center gap-2 rounded-lg border text-sm font-semibold transition ${active ? 'border-[var(--sera-orange)] bg-[var(--sera-orange)]/[0.06] text-[var(--sera-orange-deep)]' : 'border-[var(--sera-line)] bg-white text-[var(--sera-ink)]/80 hover:border-[var(--sera-orange)]/20'}`}
-              >
-                <Icon className="h-4 w-4" />
-                {type.label}
-              </button>
-            )
-          })}
-        </div>
-        {isGuest ? <p className="text-xs text-[var(--sera-muted)]">Guest users can be independent unless an organization is selected later by an admin.</p> : null}
-      </div>
-      <div className="space-y-2">
-        <Label>Organization {!isGuest ? <span className="text-red-500">*</span> : null}</Label>
-        <Select
-          value={formData.organization_id || ''}
-          onValueChange={(value) => {
-            handleInputChange('organization_id', value)
-            setFormData(prev => ({ ...prev, organization_id: value, department_id: '', manager_user_id: '', position_id: '' }))
-          }}
-          disabled={saving || lockOrganization || isGuest}
-        >
-          <SelectTrigger className={`h-11 rounded-lg ${errors.organization_id ? 'border-red-500' : ''}`}>
-            <SelectValue placeholder={isGuest ? 'Independent guest' : 'Search organization...'} />
-          </SelectTrigger>
-          <SelectContent className="max-h-[260px]">
-            <div className="sticky top-0 z-10 bg-white p-2">
-              <Input
-                value={organizationSearch}
-                onChange={(event) => setOrganizationSearch(event.target.value)}
-                onKeyDown={(event) => event.stopPropagation()}
-                placeholder="Search organization..."
-                className="h-9"
-              />
-            </div>
-            {filteredOrganizations.map(org => (
-              <SelectItem key={org.id} value={org.id}>
-                {org.org_name} ({org.org_code})
-              </SelectItem>
-            ))}
-            {filteredOrganizations.length === 0 ? <p className="px-3 py-2 text-xs text-[var(--sera-muted)]">No matching organizations.</p> : null}
-          </SelectContent>
-        </Select>
-        {renderFieldError('organization_id')}
-      </div>
-      <div className="rounded-lg border border-[var(--sera-line)] bg-white p-4">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <span className={`flex h-8 w-8 items-center justify-center rounded-full ${formData.is_active ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-[var(--sera-muted)]'}`}>
-              <CheckCircle2 className="h-4 w-4" />
-            </span>
-            <div>
-              <div className="text-sm font-semibold text-[var(--sera-ink)]">Active</div>
-              <p className="text-xs text-[var(--sera-muted)]">User can log in to the system</p>
-            </div>
-          </div>
-          <Switch checked={Boolean(formData.is_active)} onCheckedChange={checked => handleInputChange('is_active', checked)} disabled={saving} />
-        </div>
-      </div>
-      <ReferenceCheckbox
-        checked={Boolean(formData.can_be_reference)}
-        onCheckedChange={checked => handleInputChange('can_be_reference', checked)}
-        disabled={saving}
-      />
       {user ? (
         <UserPasswordResetSection
           targetUserId={user.id}
           targetUserName={getDisplayName(user)}
           targetUserEmail={user.email}
           currentUserRoleLevel={currentUserRoleLevel}
+          targetOrganizationId={user.organization_id ?? null}
         />
       ) : null}
-      {showHrFields ? (
-        <div className="space-y-4 rounded-lg border border-[var(--sera-orange)]/15 bg-[var(--sera-orange)]/[0.06]/40 p-4">
-          <div>
-            <div className="text-sm font-semibold text-[var(--sera-ink)]">HR Configuration</div>
-            <p className="text-xs text-[var(--sera-muted)]">Link this user to department, reporting line, and employment details.</p>
-          </div>
+      {!isCreate && bankingAvailable ? renderBankingDetails() : null}
+    </div>
+  )
+
+  const renderHrFields = () => (
           <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2">
             <Label>Department</Label>
@@ -1172,47 +1328,10 @@ export default function UserDialogNew({
             </Select>
           </div>
           </div>
-        </div>
-      ) : null}
-      {user ? (
-        <div role="note" className="rounded-lg border border-[var(--sera-line)] p-4 text-xs text-[var(--sera-muted)]">
-          Business access for an existing person is managed with Access Profiles in{' '}
-          <a href="/security-access" className="font-medium text-[var(--sera-orange)] underline">Security &amp; Access → People &amp; Access</a>
-          {' '}(grants, scopes, revocation and audit use the same authorization rules). The legacy level above is a compatibility field only.
-        </div>
-      ) : null}
-      {!user && !isGuest && formData.organization_id && accessInfo ? (
-        accessChoiceRequired ? (
-          <>
-            <AccessProfileSelector
-              disabled={saving}
-              organizationName={accessOrg?.name ?? selectedOrg?.org_name ?? null}
-              organizationTypeCode={accessOrg?.typeCode ?? selectedOrg?.org_type_code ?? null}
-              profiles={initialProfiles}
-              scopes={initialScopes}
-              mode={(((formData as any).initial_role_id as string) || '') as AccessMode}
-              items={((formData as any).initial_profiles as ProfileChoice[]) || []}
-              reason={(formData as any).initial_access_reason || ''}
-              legacyLevelLabel={availableRoles.find(r => r.role_code === formData.role_code) ? `Level ${availableRoles.find(r => r.role_code === formData.role_code)!.role_level} — ${availableRoles.find(r => r.role_code === formData.role_code)!.role_name}` : null}
-              legacyReadOnly={accessInfo.legacyReadOnly}
-              errors={{ mode: errors.initial_role_id, items: errors.initial_profiles, reason: errors.initial_access_reason }}
-              onMode={m => { setFormData(prev => ({ ...prev, initial_role_id: m, ...(m === 'self' ? { initial_profiles: [] } : {}) } as any)); clearFieldError('initial_role_id') }}
-              onItems={items => { setFormData(prev => ({ ...prev, initial_profiles: items } as any)); clearFieldError('initial_profiles') }}
-              onReason={v => { setFormData(prev => ({ ...prev, initial_access_reason: v } as any)); clearFieldError('initial_access_reason') }}
-            />
-          </>
-        ) : !accessInfo.canAssign ? (
-          <div role="note" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900">
-            You cannot grant business access in this organization.{accessInfo.legacyReadOnly ? ' The new user will only have employee self-service until' : ' Ask'} a Security &amp; Access administrator {accessInfo.legacyReadOnly ? 'grants a business role' : 'to grant business roles'} in Security &amp; Access → People &amp; Access.
-          </div>
-        ) : null
-      ) : null}
-    </div>
   )
 
   const renderBusinessStep = () => (
     <div className="sera-sc-page space-y-6">
-      {sectionHeader(<Store className="h-5 w-5" />, 'Business Information', 'Provide business details for this user.')}
       <div className="space-y-2">
         <Label>Shop Name / Outlet</Label>
         <ShopPicker
@@ -1245,37 +1364,6 @@ export default function UserDialogNew({
     </div>
   )
 
-  const renderBankingStep = () => (
-    <div className="sera-sc-page space-y-6">
-      {sectionHeader(<Banknote className="h-5 w-5" />, 'Banking Information', 'Enter bank details for this user.')}
-      <div className="space-y-2">
-        <Label>Account Holder Name</Label>
-        <Input value={formData.bank_account_holder_name || ''} onChange={e => handleInputChange('bank_account_holder_name', e.target.value)} disabled={saving} placeholder="e.g., ALI BIN ABU" className={inputClass('bank_account_holder_name')} />
-      </div>
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-2">
-          <Label>Bank</Label>
-          <Select value={formData.bank_id || ''} onValueChange={value => handleInputChange('bank_id', value)} disabled={saving}>
-            <SelectTrigger className="h-11 rounded-lg"><SelectValue placeholder="Select bank" /></SelectTrigger>
-            <SelectContent className="max-h-[260px]">{banks.map(bank => <SelectItem key={bank.id} value={bank.id}>{bank.short_name}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <Label>Account Number</Label>
-          <div className="relative">
-            <CreditCard className="absolute left-3 top-3.5 h-4 w-4 text-[var(--sera-muted)]/70" />
-            <Input value={formData.bank_account_number || ''} onChange={e => handleInputChange('bank_account_number', e.target.value)} disabled={saving} placeholder="e.g., 1234567890" className={inputClass('bank_account_number', 'pl-9')} />
-          </div>
-          {renderFieldError('bank_account_number')}
-        </div>
-      </div>
-      <div className="flex items-start gap-2 rounded-lg bg-[var(--sera-orange)]/[0.06] p-3 text-sm text-[var(--sera-orange-deep)]">
-        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-        This information is used for payment and verification purposes only.
-      </div>
-    </div>
-  )
-
   const SummaryCard = ({ title, icon, step, children }: { title: string; icon: React.ReactNode; step: WizardStep; children: React.ReactNode }) => (
     <div className="rounded-lg border border-[var(--sera-line)] bg-white p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between gap-3">
@@ -1286,69 +1374,411 @@ export default function UserDialogNew({
     </div>
   )
 
-  const renderReviewStep = () => (
-    <div className="sera-sc-page space-y-6">
-      {sectionHeader(<CheckCircle2 className="h-5 w-5" />, 'Review & Confirm', 'Please review the information before creating the user.')}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <SummaryCard title="Basic Information" icon={<UserIcon className="h-4 w-4 text-[var(--sera-orange)]" />} step="basic">
-          <p>Full Name: <span className="font-medium text-[var(--sera-ink)]">{summaryValue(formData.full_name)}</span></p>
-          <p>Call Name: <span className="font-medium text-[var(--sera-ink)]">{summaryValue(formData.call_name)}</span></p>
-          <p>Email: <span className="font-medium text-[var(--sera-ink)]">{summaryValue(formData.email)}</span></p>
-          <p>Phone: <span className="font-medium text-[var(--sera-ink)]">{summaryValue(formData.phone)}</span></p>
-        </SummaryCard>
-        <SummaryCard title="Role & Access" icon={<Shield className="h-4 w-4 text-[var(--sera-orange)]" />} step="access">
-          <p>Role: <span className="font-medium text-[var(--sera-ink)]">{selectedRole ? `${desiredRoleLabel(selectedRole)} (Level ${selectedRole.role_level})` : '-'}</span></p>
-          <p>Organization Type: <span className="font-medium text-[var(--sera-ink)]">{organizationType === 'HQ' ? 'HQ' : getOrgTypeName(organizationType)}</span></p>
-          <p>Organization: <span className="font-medium text-[var(--sera-ink)]">{selectedOrg ? `${selectedOrg.org_name} (${selectedOrg.org_code})` : '-'}</span></p>
-        </SummaryCard>
-        {showHrFields ? (
-          <SummaryCard title="HR Configuration" icon={<Building2 className="h-4 w-4 text-[var(--sera-orange)]" />} step="access">
-            <p>Department: <span className="font-medium text-[var(--sera-ink)]">{selectedDepartment ? `${selectedDepartment.dept_code ? `${selectedDepartment.dept_code} - ` : ''}${selectedDepartment.dept_name}` : '-'}</span></p>
-            <p>Position: <span className="font-medium text-[var(--sera-ink)]">{selectedPosition?.name || '-'}</span></p>
-            <p>Reports To: <span className="font-medium text-[var(--sera-ink)]">{selectedManager?.full_name || selectedManager?.email || '-'}</span></p>
-            <p>Employment Type: <span className="font-medium text-[var(--sera-ink)]">{summaryValue(formData.employment_type)}</span></p>
-            <p>Join Date: <span className="font-medium text-[var(--sera-ink)]">{summaryValue(formData.join_date)}</span></p>
-            <p>Employment Status: <span className="font-medium text-[var(--sera-ink)]">{formData.employment_status || 'active'}</span></p>
-          </SummaryCard>
-        ) : null}
-        {showBusinessStep ? (
-          <SummaryCard title="Business Information" icon={<Store className="h-4 w-4 text-[var(--sera-orange)]" />} step="business">
-            <p>Shop Name: <span className="font-medium text-[var(--sera-ink)]">{summaryValue(formData.shop_name)}</span></p>
-            <p>Address: <span className="font-medium text-[var(--sera-ink)]">{summaryValue(formData.address)}</span></p>
-            <p>Reference: <span className="font-medium text-[var(--sera-ink)]">{summaryValue(formData.referral_phone)}</span></p>
-            <p>Notes: <span className="font-medium text-[var(--sera-ink)]">{summaryValue(formData.notes)}</span></p>
-          </SummaryCard>
-        ) : null}
-        {showBankingStep ? (
-          <SummaryCard title="Banking Information" icon={<Banknote className="h-4 w-4 text-[var(--sera-orange)]" />} step="banking">
-            <p>Bank: <span className="font-medium text-[var(--sera-ink)]">{banks.find(bank => bank.id === formData.bank_id)?.short_name || '-'}</span></p>
-            <p>Account No: <span className="font-medium text-[var(--sera-ink)]">{summaryValue(formData.bank_account_number)}</span></p>
-            <p>Account Holder: <span className="font-medium text-[var(--sera-ink)]">{summaryValue(formData.bank_account_holder_name)}</span></p>
-          </SummaryCard>
-        ) : null}
-        <SummaryCard title="Account/Security Status" icon={<CheckCircle2 className="h-4 w-4 text-[var(--sera-orange)]" />} step="access">
-          <div className="flex items-center gap-2">
-            <span>Status:</span>
-            <Badge className={formData.is_active ? 'bg-green-100 text-green-700 hover:bg-green-100' : 'bg-gray-100 text-[var(--sera-muted)] hover:bg-[var(--sera-ink)]/[0.04]'}>{formData.is_active ? 'Active' : 'Inactive'}</Badge>
-          </div>
-          <p>Password: <span className="font-medium text-[var(--sera-ink)]">{user ? 'Unchanged' : 'Set for new user'}</span></p>
-        </SummaryCard>
-      </div>
-      {submitError ? (
-        <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          {submitError}
+  /** Organization type + organization, shared by Add User and Edit User (same markup, same selection rules). */
+  const renderOrganizationPicker = () => (
+    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+      <div className="space-y-1">
+        <Label className="text-sm">Organization Type</Label>
+        <div className="grid grid-cols-2 gap-2">
+          {USER_ORGANIZATION_TYPES.map(type => {
+            const Icon = type.icon
+            const active = organizationType === type.value
+            return (
+              <button key={type.value} type="button" aria-pressed={active} onClick={() => selectOrganizationType(type.value)} disabled={saving || lockOrganization || isGuest}
+                className={`flex h-9 items-center justify-center gap-1.5 rounded-lg border text-sm font-medium transition ${active ? 'border-orange-400 bg-orange-50 text-orange-800' : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'} ${FOCUS}`}>
+                <Icon className="h-3.5 w-3.5" aria-hidden />{type.label}
+              </button>
+            )
+          })}
         </div>
-      ) : null}
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="user-dialog-organization" className="text-sm">Organization {!isGuest ? <span className="text-red-500" aria-hidden>*</span> : null}</Label>
+        <Select
+          value={formData.organization_id || ''}
+          onValueChange={(value) => {
+            setFormData(prev => ({ ...prev, organization_id: value, department_id: '', manager_user_id: '', position_id: '' }))
+            clearFieldError('organization_id')
+            setSubmitError(null)
+          }}
+          disabled={saving || lockOrganization || isGuest}
+        >
+          <SelectTrigger id="user-dialog-organization" aria-invalid={Boolean(errors.organization_id)} className={`h-9 rounded-lg ${errors.organization_id ? 'border-red-500' : ''}`}>
+            <SelectValue placeholder={isGuest ? 'Independent guest' : 'Search organization...'} />
+          </SelectTrigger>
+          <SelectContent className="max-h-[260px]">
+            <div className="sticky top-0 z-10 bg-white p-2">
+              <Input value={organizationSearch} onChange={(event) => setOrganizationSearch(event.target.value)} onKeyDown={(event) => event.stopPropagation()} placeholder="Search organization..." className="h-9" />
+            </div>
+            {filteredOrganizations.map(org => (<SelectItem key={org.id} value={org.id}>{org.org_name} ({org.org_code})</SelectItem>))}
+            {filteredOrganizations.length === 0 ? <p className="px-3 py-2 text-xs text-[var(--sera-muted)]">No matching organizations.</p> : null}
+          </SelectContent>
+        </Select>
+        {renderFieldError('organization_id')}
+        {!isGuest && organizationsLoaded && !formData.organization_id && filterOrganizationsForType(organizations, organizationType).length === 0 ? <p role="status" className="text-xs text-amber-700">No {organizationType === 'HQ' ? 'HQ' : getOrgTypeName(organizationType)} organization is available to you.</p> : null}
+        {isGuest ? <p className="text-xs text-gray-500">Guest users can be independent unless an organization is selected later by an admin.</p> : null}
+      </div>
     </div>
   )
 
+  const renderCreateAccessStep = () => {
+    return (
+      <div className="space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-950">Organization &amp; access</h3>
+          <p className="text-xs text-gray-500">Choose where this person belongs, then what they can do.</p>
+        </div>
+        {renderOrganizationPicker()}
+
+        {notices.length > 0 && (
+          <div role="status" className="space-y-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            {notices.map(n => <p key={n}>{n}</p>)}
+            <button type="button" onClick={() => setNotices([])} className={`rounded font-medium underline ${FOCUS}`}>Dismiss</button>
+          </div>
+        )}
+
+        {formData.organization_id && !isGuest ? (
+          <div id="user-dialog-identity" tabIndex={-1} className={`space-y-1 rounded-lg focus:outline-none ${errors.identity ? 'ring-2 ring-red-200' : ''}`}>
+            {identityNotice}
+            {errors.identity && !(lookup.phase === 'done' && ['account_exists', 'conflict', 'blocked'].includes(lookup.result.status)) && lookup.phase !== 'checking' && lookup.phase !== 'denied'
+              ? <p role="alert" className="text-xs text-red-600">{errors.identity}</p> : null}
+          </div>
+        ) : null}
+
+        {referenceAllowed ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 px-3 py-2">
+            <ReferenceCheckbox compact checked={Boolean(formData.can_be_reference)} onCheckedChange={checked => handleInputChange('can_be_reference', checked)} disabled={saving} />
+          </div>
+        ) : null}
+
+        {formData.organization_id && !isGuest ? (
+          <div id="user-dialog-access-status" tabIndex={-1} className="space-y-2 focus:outline-none">
+            {accessCheck === 'checking' && (
+              <p role="status" className="flex items-center gap-2 text-sm text-gray-600"><Loader2 className="h-4 w-4 animate-spin" aria-hidden />Checking assignment permissions…</p>
+            )}
+            {accessCheck === 'failed' && (
+              <div role="alert" className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
+                <span className="min-w-0 flex-1">{accessFailedStage === 'catalogue' || accessFailedStage === 'scopes' ? 'Your permission was confirmed, but the Group Policies or scopes for this organization could not be loaded. Nothing can be assigned until they load.' : 'Unable to check assignment permissions. Nothing can be assigned until the check succeeds.'}</span>
+                <button type="button" onClick={() => setAccessAttempt(n => n + 1)} className={`rounded-lg border border-red-300 px-3 py-1 text-xs font-medium ${FOCUS}`}>Retry</button>
+              </div>
+            )}
+            {accessCheck === 'denied' && (
+              <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                <p>{accessDenial?.reason ?? 'You cannot assign Group Policies in this organization.'}</p>
+                {accessDenial && !accessDenial.cannotCreate && <p className="mt-1 text-xs">You can still create the user without Group Policies; someone with assignment authority here can grant them afterwards in Security &amp; Access → People &amp; Access.</p>}
+              </div>
+            )}
+            {accessCheck === 'authorized' && (accessChoiceRequired || hqEssSelector ? (
+              <AccessProfileSelector
+                disabled={saving}
+                essAllowed={selectedOrgIsHq}
+                groupPoliciesHref={canOpenGroupPolicies ? '/security-access?tab=roles' : null}
+                organizationName={accessOrg?.name ?? selectedOrg?.org_name ?? null}
+                organizationTypeCode={accessOrg?.typeCode ?? selectedOrg?.org_type_code ?? null}
+                profiles={initialProfiles}
+                deferredProfiles={deferredProfiles}
+                ineligibleProfiles={ineligibleProfiles}
+                scopes={initialScopes}
+                orgNames={orgNames}
+                mode={selectedOrgIsHq ? ((((formData as any).initial_profiles as ProfileChoice[]) || []).length ? 'profiles' : 'self') : (((formData as any).initial_role_id as string) || '') as AccessMode}
+                items={((formData as any).initial_profiles as ProfileChoice[]) || []}
+                errors={{ mode: errors.initial_role_id, items: errors.initial_profiles }}
+                essExcluded={essExcluded}
+                onEssExcluded={excluded => { setFormData(prev => ({ ...prev, ess_excluded: excluded } as any)) }}
+                onMode={m => { setFormData(prev => ({ ...prev, initial_role_id: m, ...(m === 'self' ? { initial_profiles: [] } : {}) } as any)); clearFieldError('initial_role_id') }}
+                onItems={items => { setFormData(prev => ({ ...prev, initial_profiles: items, ...(selectedOrgIsHq ? { initial_role_id: items.length ? 'profiles' : 'self' } : {}) } as any)); clearFieldError('initial_profiles') }}
+              />
+            ) : (
+              <p role="note" className="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-700">
+                You may assign Group Policies here, but none is eligible for this organization and account type{deferredProfiles.length ? ` (${deferredProfiles.map(d => d.name).join(', ')} can only be assigned after the person exists)` : ''}. The user can be created without one.
+              </p>
+            ))}
+            {errors.access_authority && accessCheck !== 'denied' && accessCheck !== 'failed' && accessCheck !== 'checking' ? <p role="alert" className="text-xs text-red-600">{errors.access_authority}</p> : null}
+          </div>
+        ) : (
+          !isGuest && <p className="text-xs text-gray-500">Choose an organization to see the Group Policies you can assign.</p>
+        )}
+
+        {showHrFields ? (
+          <details className="rounded-lg border border-gray-200">
+            <summary className={`cursor-pointer rounded-lg px-3 py-2 text-sm font-semibold text-gray-950 ${FOCUS}`}>Employment details <span className="text-xs font-normal text-gray-500">(optional)</span></summary>
+            <div className="space-y-3 border-t border-gray-100 p-3">
+              <p className="text-xs text-gray-500">Department, position and reporting line are organizational facts only; they never grant access.</p>
+              {renderHrFields()}
+            </div>
+          </details>
+        ) : null}
+
+        {showBusinessStep ? (
+          <details className="rounded-lg border border-gray-200">
+            <summary className={`cursor-pointer rounded-lg px-3 py-2 text-sm font-semibold text-gray-950 ${FOCUS}`}>Shop details <span className="text-xs font-normal text-gray-500">(optional)</span></summary>
+            <div className="p-3">{renderBusinessStep()}</div>
+          </details>
+        ) : null}
+      </div>
+    )
+  }
+
+  const renderCreateReview = () => {
+    const picked: ProfileChoice[] = (formData as any).initial_profiles || []
+    const mode = ((formData as any).initial_role_id as string) || ''
+    const fallback = scopeLabels(initialScopes, new Map(Object.entries(orgNames)))
+    const labels = new Map(initialScopes.map(sc => [sc.id, sc.label ?? fallback.get(sc.id) ?? sc.display_name]))
+    const coverage = (id: string) => initialScopes.find(sc => sc.id === id)?.coverage
+    const policy = (id: string) => initialProfiles.find(p => p.id === id)?.name ?? 'Policy'
+    const row = (label: string, value: React.ReactNode) => (<div className="flex gap-2"><dt className="w-36 shrink-0 text-gray-500">{label}</dt><dd className="min-w-0 font-medium text-gray-900">{value}</dd></div>)
+    return (
+      <div className="space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-950">Review</h3>
+          <p className="text-xs text-gray-500">Check the details before creating the user. Passwords are never shown.</p>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-2">
+          <SummaryCard title="Basic details" icon={<UserIcon className="h-4 w-4 text-[var(--sera-orange)]" />} step="basic">
+            <dl className="space-y-1 text-sm">
+              {row('Full name', summaryValue(formData.full_name))}
+              {row('Call name', summaryValue(formData.call_name))}
+              {row('Email', summaryValue(formData.email))}
+              {row('Phone', summaryValue(formData.phone))}
+              {row('Password', employeeLink ? 'Existing login kept' : 'Set (hidden)')}
+            </dl>
+          </SummaryCard>
+          <SummaryCard title="Organization" icon={<Building2 className="h-4 w-4 text-[var(--sera-orange)]" />} step="access">
+            <dl className="space-y-1 text-sm">
+              {row('Type', organizationType === 'HQ' ? 'HQ' : getOrgTypeName(organizationType))}
+              {row('Organization', selectedOrg ? `${selectedOrg.org_name} (${selectedOrg.org_code})` : '-')}
+              {row('Status', 'Active')}
+              {referenceAllowed ? row('Reference', formData.can_be_reference ? 'Yes' : 'No') : null}
+              {selectedOrgIsHq ? row('HR employee', employeeLink ? `Linked: ${employeeLink.name || 'Employee'}${employeeLink.organizationName ? ` · ${employeeLink.organizationName}` : ''}` : 'Not linked (a new account is created)') : null}
+            </dl>
+          </SummaryCard>
+          <SummaryCard title="Group Policies" icon={<Shield className="h-4 w-4 text-[var(--sera-orange)]" />} step="access">
+            {(mode === 'profiles' || (selectedOrgIsHq && picked.length > 0)) && picked.length > 0 ? (
+              <ul className="list-disc space-y-0.5 pl-4 text-sm">{picked.map(c => <li key={`${c.roleId}:${c.scopeId}`}><strong>{policy(c.roleId)}</strong> — scope: {labels.get(c.scopeId) ?? '—'}{coverage(c.scopeId) ? ` · covers: ${coverage(c.scopeId)}` : ''}</li>)}</ul>
+            ) : null}
+            {selectedOrgIsHq && mode === 'profiles' && picked.length > 0 ? null : (!selectedOrgIsHq ? <p className="text-sm">{mode === 'self' ? 'No Group Policy for now.' : accessChoiceRequired ? 'Not chosen yet.' : 'None granted from this form.'}</p> : <p className="text-sm">No additional Group Policy.</p>)}
+            {selectedOrgIsHq ? (essExcluded
+              ? <p data-testid="review-ess" className="text-sm"><strong>Employee Self Service excluded</strong> — non-employee HQ account.</p>
+              : <p data-testid="review-ess" className="text-sm"><strong>Employee Self Service</strong> — own employee record only{accessCheck === 'authorized' ? '' : ' (default HQ baseline)'}.</p>) : null}
+            <p className="text-xs text-gray-500">Not the complete effective access: automatic lifecycle access may add more. No legacy level is assigned.</p>
+          </SummaryCard>
+        </div>
+        {submitError ? (
+          <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            {submitError}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+
+
+  /** Edit User: banking details, a compact optional section of Basic details (shown only when the record carries them). */
+  const renderBankingDetails = () => (
+    <details className="rounded-lg border border-gray-200" open={Boolean(errors.bank_account_number) || undefined}>
+      <summary className={`cursor-pointer rounded-lg px-3 py-2 text-sm font-semibold text-gray-950 ${FOCUS}`}>Banking details <span className="text-xs font-normal text-gray-500">(optional)</span></summary>
+      <div className="space-y-3 border-t border-gray-100 p-3">
+        <p className="text-xs text-gray-500">Used for payment and verification purposes only.</p>
+        <div className="space-y-1">
+          <Label htmlFor="user-dialog-bank-holder" className="text-sm">Account Holder Name</Label>
+          <Input id="user-dialog-bank-holder" autoComplete="off" value={formData.bank_account_holder_name || ''} onChange={e => handleInputChange('bank_account_holder_name', e.target.value)} disabled={saving} placeholder="e.g., ALI BIN ABU" className={inputClass('bank_account_holder_name')} />
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="space-y-1">
+            <Label htmlFor="user-dialog-bank" className="text-sm">Bank</Label>
+            <Select value={formData.bank_id || ''} onValueChange={value => handleInputChange('bank_id', value)} disabled={saving}>
+              <SelectTrigger id="user-dialog-bank" className="h-9 rounded-lg"><SelectValue placeholder="Select bank" /></SelectTrigger>
+              <SelectContent className="max-h-[260px]">{banks.map(bank => <SelectItem key={bank.id} value={bank.id}>{bank.short_name}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="user-dialog-bank-account" className="text-sm">Account Number</Label>
+            <div className="relative">
+              <CreditCard className="absolute left-3 top-2.5 h-4 w-4 text-[var(--sera-muted)]/70" />
+              <Input id="user-dialog-bank-account" autoComplete="off" aria-invalid={Boolean(errors.bank_account_number)} value={formData.bank_account_number || ''} onChange={e => handleInputChange('bank_account_number', e.target.value)} disabled={saving} placeholder="e.g., 1234567890" className={inputClass('bank_account_number', 'pl-9')} />
+            </div>
+            {renderFieldError('bank_account_number')}
+          </div>
+        </div>
+      </div>
+    </details>
+  )
+
+  const renderEditAccessStep = () => {
+    const storedOrgName = organizations.find(o => o.id === user?.organization_id)?.org_name ?? null
+    return (
+      <div className="space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-950">Organization &amp; access</h3>
+          <p className="text-xs text-gray-500">Where this person belongs, whether they can sign in, and what they can do.</p>
+        </div>
+        {renderOrganizationPicker()}
+
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 px-3 py-2">
+          <div className="flex items-center gap-2 text-sm">
+            <Switch id="user-dialog-active" aria-label="Active" checked={Boolean(formData.is_active)} onCheckedChange={checked => handleInputChange('is_active', checked)} disabled={saving} />
+            <Label htmlFor="user-dialog-active" className="cursor-pointer text-sm font-medium text-gray-900">{formData.is_active ? 'Active' : 'Inactive'}</Label>
+            <InfoPopover label="About Active"><p>Inactive users cannot sign in. Deactivating or reactivating applies through the account lifecycle and needs its own permission; the server decides when you save.</p></InfoPopover>
+          </div>
+          {referenceAllowed ? (
+            <ReferenceCheckbox compact checked={Boolean(formData.can_be_reference)} onCheckedChange={checked => handleInputChange('can_be_reference', checked)} disabled={saving} />
+          ) : null}
+        </div>
+
+        {!isGuest && user?.organization_id ? (
+          <div id="user-dialog-access" tabIndex={-1} className="focus:outline-none">
+            <UserEditAccess
+              state={editAccess}
+              draft={accessDraft}
+              onDraft={items => { setAccessDraft(items); clearFieldError('initial_profiles') }}
+              disabled={saving}
+              organizationName={storedOrgName}
+              organizationChanged={editOrgChanged}
+              error={errors.initial_profiles}
+            />
+          </div>
+        ) : isGuest ? <p className="text-xs text-gray-500">Independent guests hold no organization membership, so there are no Group Policies to manage here.</p>
+          : activeMemberships.length ? (
+            <p role="note" className="text-xs text-gray-600">
+              Active {activeMemberships.length === 1 ? 'membership' : 'memberships'}: {activeMemberships.map(m => `${m.organizationName}${m.isPrimary ? ' (primary)' : ''}`).join(', ')}. This account has no organization of its own, so its Group Policies are managed in People &amp; Access.
+            </p>
+          ) : null}
+
+        {showHrFields ? (
+          <details className="rounded-lg border border-gray-200">
+            <summary className={`cursor-pointer rounded-lg px-3 py-2 text-sm font-semibold text-gray-950 ${FOCUS}`}>Employment details <span className="text-xs font-normal text-gray-500">(optional)</span></summary>
+            <div className="space-y-3 border-t border-gray-100 p-3">
+              <p className="text-xs text-gray-500">Department, position and reporting line are organizational facts only; they never grant access.</p>
+              {renderHrFields()}
+            </div>
+          </details>
+        ) : null}
+
+        {showBusinessStep ? (
+          <details className="rounded-lg border border-gray-200">
+            <summary className={`cursor-pointer rounded-lg px-3 py-2 text-sm font-semibold text-gray-950 ${FOCUS}`}>Shop details <span className="text-xs font-normal text-gray-500">(optional)</span></summary>
+            <div className="p-3">{renderBusinessStep()}</div>
+          </details>
+        ) : null}
+
+        {user ? (
+          <LegacyCompatibilitySection
+            storedRole={roles.find(r => r.role_code === user.role_code) ?? null}
+            value={formData.role_code || ''}
+            roles={availableRoles}
+            currentUserRoleLevel={currentUserRoleLevel}
+            organizationId={user.organization_id ?? null}
+            disabled={saving}
+            onChange={code => handleInputChange('role_code', code)}
+          />
+        ) : null}
+      </div>
+    )
+  }
+
+  const renderEditReview = () => {
+    const text = (v: unknown) => (v === null || v === undefined ? '' : String(v).trim())
+    const orgLabel = (id?: string | null) => { const o = organizations.find(x => x.id === id); return o ? `${o.org_name} (${o.org_code})` : (id ? 'Unknown organization' : 'None') }
+    const bankName = (id?: string | null) => banks.find(b => b.id === id)?.short_name || (id ? 'Selected bank' : 'None')
+    const mask = (v: unknown) => { const d = text(v); return d ? `••••${d.slice(-4)}` : 'None' }
+    const u = user as any
+    const f = formData as any
+    type Row = { label: string; from: string; to: string }
+    const rows: Row[] = []
+    const track = (label: string, from: unknown, to: unknown, show: (v: unknown) => string = v => text(v) || 'None') => { if (text(from) !== text(to)) rows.push({ label, from: show(from), to: show(to) }) }
+    track('Full name', u.full_name, f.full_name)
+    track('Call name', u.call_name, f.call_name)
+    track('Phone', u.phone, f.phone)
+    track('Organization', u.organization_id, f.organization_id, v => orgLabel(v as string))
+    if (Boolean(u.is_active) !== Boolean(f.is_active)) rows.push({ label: 'Status', from: u.is_active ? 'Active' : 'Inactive', to: f.is_active ? 'Active' : 'Inactive' })
+    if (referenceAllowed) track('Reference', Boolean(u.can_be_reference), Boolean(f.can_be_reference), v => (v ? 'Yes' : 'No'))
+    if (showHrFields) {
+      track('Department', u.department_id, f.department_id, v => (v ? (departments.find(d => d.id === v)?.dept_name ?? 'Selected') : 'None'))
+      track('Position', u.position_id, f.position_id, v => (v ? (positions.find(x => x.id === v)?.name ?? 'Selected') : 'None'))
+      track('Reports to', u.manager_user_id, f.manager_user_id, v => (v ? (orgUsers.find(x => x.id === v)?.full_name ?? 'Selected') : 'None'))
+      track('Employment type', u.employment_type, f.employment_type)
+      track('Join date', u.join_date, f.join_date)
+      track('Employment status', u.employment_status || 'active', f.employment_status || 'active')
+    }
+    if (showBusinessStep) { track('Shop name', u.shop_name, f.shop_name); track('Address', u.address, f.address); track('Reference phone', u.referral_phone, f.referral_phone) }
+    track('Legacy compatibility level', u.role_code, f.role_code, v => { const r = roles.find(x => x.role_code === v); return r ? `${desiredRoleLabel(r)} (Level ${r.role_level})` : text(v) || 'None' })
+    if (bankingAvailable) {
+      track('Bank', u.bank_id, f.bank_id, v => bankName(v as string))
+      track('Account number', normalizeBankAccountNumber(u.bank_account_number), normalizeBankAccountNumber(f.bank_account_number), mask)
+      track('Account holder', u.bank_account_holder_name, f.bank_account_holder_name)
+    }
+    if (avatarFile) rows.push({ label: 'Photo', from: 'Current', to: 'New photo' })
+
+    const plan = accessPlan
+    const options = editAccess.options
+    const policyName = (id: string) => options?.profiles.find(p => p.id === id)?.name ?? 'Policy'
+    const labelMap = scopeLabels(options?.scopes ?? [], new Map(Object.entries(options?.orgNames ?? {})))
+    const scopeNames = (ids: string[]) => ids.map(id => labelMap.get(id) ?? options?.scopes.find(x => x.id === id)?.display_name ?? 'Scope').join(', ')
+    const kept = editAccess.classified ? editAccess.classified.held.length : 0
+    const hasPolicyChanges = Boolean(plan && !plan.empty)
+    return (
+      <div className="space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-950">Review</h3>
+          <p className="text-xs text-gray-500">Check what will change. Nothing is saved until you press Save. A password reset is a separate action and is never part of this save.</p>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-2">
+          <SummaryCard title="Profile" icon={<UserIcon className="h-4 w-4 text-[var(--sera-orange)]" />} step="basic">
+            {rows.length === 0 ? <p className="text-sm">No profile changes.</p> : (
+              <dl className="space-y-1 text-sm" aria-label="Profile changes">
+                {rows.map(r => <div key={r.label} className="flex flex-wrap gap-x-2"><dt className="w-40 shrink-0 text-gray-500">{r.label}</dt><dd className="min-w-0 font-medium text-gray-900">{r.from} <span aria-hidden>→</span><span className="sr-only"> changes to </span> {r.to}</dd></div>)}
+              </dl>
+            )}
+          </SummaryCard>
+          <SummaryCard title="Group Policies" icon={<Shield className="h-4 w-4 text-[var(--sera-orange)]" />} step="access">
+            {editOrgChanged ? <p className="text-sm">Group Policy changes are not applied together with an organization change.</p>
+              : editAccess.status !== 'ready' || !editAccess.classified ? <p className="text-sm">Current Group Policies were not loaded, so no access change is made.</p>
+                : !options?.canAssign ? <p className="text-sm">No Group Policy changes (you cannot assign Group Policies here).</p>
+                  : !hasPolicyChanges ? <p className="text-sm">No Group Policy changes.</p>
+                    : (
+                      <ul aria-label="Group Policy changes" className="list-disc space-y-0.5 pl-4 text-sm">
+                        {plan!.adds.map(op => <li key={`a-${op.roleId}`}><strong>Add</strong> {policyName(op.roleId)} — scope: {scopeNames(op.scopeIds)}</li>)}
+                        {plan!.removes.map(op => <li key={`r-${op.assignment.id}`}><strong>Remove</strong> {op.assignment.roleName} — scope: {scopeNames(op.assignment.scopes.map(x => x.id)) || '—'}</li>)}
+                        {plan!.scopeChanges.map(op => <li key={`s-${op.assignment.id}`}><strong>Change scope of</strong> {op.assignment.roleName}: {scopeNames(op.from)} → {scopeNames(op.to)}{op.assignment.effectiveUntil ? ' (end date kept)' : ''}</li>)}
+                      </ul>
+                    )}
+            {kept > 0 ? <p className="text-xs text-gray-500">{kept} other {kept === 1 ? 'grant is' : 'grants are'} kept exactly as is (managed, legacy-migration, another organization, or outside your authority).</p> : null}
+          </SummaryCard>
+        </div>
+        {hasPolicyChanges ? (
+          <div className="space-y-1">
+            <Label htmlFor="user-dialog-access-reason" className="text-sm">Reason for the Group Policy changes <span className="text-red-500" aria-hidden>*</span></Label>
+            <Input id="user-dialog-access-reason" aria-invalid={Boolean(errors.access_reason)} aria-required autoComplete="off" value={accessReason} onChange={e => { setAccessReason(e.target.value); clearFieldError('access_reason') }} disabled={saving} placeholder="Why is this access changing?" className={inputClass('access_reason')} />
+            {renderFieldError('access_reason')}
+            <p className="text-xs text-gray-500">Applied after the profile is saved, one change at a time, with the same checks as Security &amp; Access → People &amp; Access. If part fails you will be told exactly which part.</p>
+          </div>
+        ) : null}
+        {editOrgChanged ? (
+          <div id="user-dialog-org-move" tabIndex={-1} role="alert" className={`space-y-1.5 rounded-lg border px-3 py-2 text-sm focus:outline-none ${errors.org_move ? 'border-red-300 bg-red-50 text-red-900' : 'border-amber-200 bg-amber-50 text-amber-950'}`}>
+            <p><strong>Moving this person to {orgLabel(formData.organization_id)}.</strong> The account lifecycle ends memberships that follow the person’s organization, together with every grant on them. Memberships created manually are kept, and nothing is moved to the new organization automatically.</p>
+            {moverEffect && (moverEffect.memberships.length || moverEffect.assignments.length) ? (
+              <p className="text-xs">Ends: {moverEffect.memberships.join(', ') || 'no membership'}; {moverEffect.assignments.length} active {moverEffect.assignments.length === 1 ? 'grant' : 'grants'}{moverEffect.assignments.length ? ` (${Array.from(new Set(moverEffect.assignments.map(a => a.roleName))).join(', ')})` : ''}. Grant access again for the new organization afterwards in this form or in People &amp; Access.</p>
+            ) : <p className="text-xs">The current memberships could not be read, so the exact effect is unknown.</p>}
+            <label className="flex cursor-pointer items-start gap-2 text-xs"><input type="checkbox" className="mt-0.5 accent-orange-500" checked={moverAck} disabled={saving} onChange={e => { setMoverAck(e.target.checked); clearFieldError('org_move') }} />I understand and want to move this person.</label>
+            {errors.org_move ? <p className="text-xs">{errors.org_move}</p> : null}
+          </div>
+        ) : null}
+        {submitError ? (
+          <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            {submitError}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+
   const renderStep = () => {
     if (currentStep === 'basic') return renderBasicStep()
-    if (currentStep === 'access') return renderAccessStep()
-    if (currentStep === 'business') return renderBusinessStep()
-    if (currentStep === 'banking') return renderBankingStep()
-    return renderReviewStep()
+    if (currentStep === 'access') return isCreate ? renderCreateAccessStep() : renderEditAccessStep()
+    return isCreate ? renderCreateReview() : renderEditReview()
   }
 
   if (success) {
@@ -1362,8 +1792,8 @@ export default function UserDialogNew({
             <div className="mx-auto mb-5 flex h-28 w-28 items-center justify-center rounded-full bg-green-500 text-white shadow-lg">
               <Check className="h-16 w-16" />
             </div>
-            <h2 className="text-2xl font-bold text-gray-950">User Created Successfully!</h2>
-            <p className="mt-2 text-[var(--sera-muted)]">The new user has been added to the system.</p>
+            <h2 className="text-2xl font-bold text-gray-950">{linkedOnSuccess ? 'Employee Linked Successfully!' : 'User Created Successfully!'}</h2>
+            <p className="mt-2 text-[var(--sera-muted)]">{linkedOnSuccess ? 'The existing employee was linked and their Group Policies were assigned. No duplicate account was created.' : 'The new user has been added to the system.'}</p>
             <div className="mt-8 flex items-center gap-4 rounded-xl border border-[var(--sera-line)] bg-white p-5 text-left shadow-sm">
               <Avatar className="h-16 w-16">
                 <AvatarImage src={avatarPreview || undefined} />
@@ -1374,7 +1804,7 @@ export default function UserDialogNew({
                   <h3 className="font-semibold text-gray-950">{formData.full_name}</h3>
                   <Badge className="bg-green-100 text-green-700 hover:bg-green-100">Active</Badge>
                 </div>
-                <p className="text-sm text-[var(--sera-muted)]">{selectedRole ? `${desiredRoleLabel(selectedRole)} (Level ${selectedRole.role_level})` : '-'} {selectedOrg ? `- ${selectedOrg.org_name}` : ''}</p>
+                <p className="text-sm text-[var(--sera-muted)]">{selectedOrg ? selectedOrg.org_name : '-'}</p>
                 <div className="mt-2 flex flex-wrap gap-4 text-sm text-[var(--sera-muted)]">
                   <span className="inline-flex items-center gap-1"><Mail className="h-4 w-4" />{formData.email}</span>
                   <span className="inline-flex items-center gap-1"><Phone className="h-4 w-4" />{formData.phone}</span>
@@ -1405,12 +1835,19 @@ export default function UserDialogNew({
         <div className="flex items-center justify-between border-b border-[var(--sera-line)] px-5 py-4 sm:px-6">
           <div className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--sera-orange)] text-white"><UserPlus className="h-5 w-5" /></span>
-            <h2 className="text-xl font-bold text-gray-950">{user ? 'Edit User' : 'Add New User'}</h2>
+            <div className="min-w-0">
+              <h2 className="text-xl font-bold text-gray-950">{user ? 'Edit User' : 'Add New User'}</h2>
+              {user ? (
+                <p data-testid="edit-user-identity" className="truncate text-sm text-[var(--sera-muted)]">
+                  <span className="font-medium text-gray-900">{getDisplayName(user)}</span>{user.email ? <> · {user.email}</> : null}
+                </p>
+              ) : null}
+            </div>
           </div>
           <button onClick={handleClose} disabled={saving} className="rounded-lg p-1 text-[var(--sera-muted)]/70 hover:bg-[var(--sera-ink)]/[0.04] hover:text-[var(--sera-muted)]"><X className="h-6 w-6" /></button>
         </div>
         <div className="border-b border-[var(--sera-line)] px-4 py-4 sm:px-6">
-          <div className="flex gap-3 overflow-x-auto pb-1">
+          <div className="flex gap-1 overflow-x-auto pb-1 sm:gap-3">
             {steps.map((step, index) => {
               const active = step === currentStep
               const done = index < currentIndex
@@ -1419,7 +1856,7 @@ export default function UserDialogNew({
                   key={step}
                   type="button"
                   onClick={() => index <= currentIndex && setCurrentStep(step)}
-                  className={`flex min-w-[116px] flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left transition ${active ? 'bg-[var(--sera-orange)]/[0.06] text-[var(--sera-orange-deep)]' : done ? 'text-[var(--sera-orange)]' : 'text-[var(--sera-muted)]/70'}`}
+                  className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left transition sm:min-w-[116px] ${active ? 'bg-[var(--sera-orange)]/[0.06] text-[var(--sera-orange-deep)]' : done ? 'text-[var(--sera-orange)]' : 'text-[var(--sera-muted)]/70'}`}
                 >
                   <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${active ? 'border-[var(--sera-orange)] bg-[var(--sera-orange)] text-white' : done ? 'border-[var(--sera-orange)] bg-[var(--sera-orange)] text-white' : 'border-[var(--sera-line)] bg-white text-[var(--sera-muted)]'}`}>
                     {done ? <Check className="h-4 w-4" /> : index + 1}

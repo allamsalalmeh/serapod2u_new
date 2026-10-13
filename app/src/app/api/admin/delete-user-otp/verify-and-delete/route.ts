@@ -1,5 +1,5 @@
 import { guardUserOperation } from '@/lib/security-access/operation'
-import { targetProtectionAllows } from '@/lib/security-access/scope'
+import { archiveIdentityKeepingIdentifiers, authorizeIdentityRemoval } from '@/lib/identity/removal-authorization'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -21,38 +21,6 @@ async function getUserRemovalMode(admin: any, userId: string): Promise<UserRemov
 }
 
 /**
- * Archive keeps the identity whole (management decision 2026-09-29): the real
- * email and phone stay reserved on the archived identity, so the same person
- * is never re-created as a second identity — a returning person is
- * reactivated. The login is banned so the archived account cannot sign in.
- */
-async function archiveUserKeepingIdentifiers(
-    admin: any,
-    targetUser: { id: string },
-): Promise<{ error: string | null }> {
-    const { error: profileError } = await admin
-        .from('users')
-        .update({
-            account_status: 'ARCHIVED',
-            account_status_reason: 'Archived by administrator (history retained; identifiers reserved)',
-            updated_at: new Date().toISOString(),
-        })
-        .eq('id', targetUser.id)
-    if (profileError) return { error: profileError.message || 'Unable to archive user profile' }
-
-    const { error: authError } = await admin.auth.admin.updateUserById(targetUser.id, { ban_duration: '876000h' })
-    if (authError) console.error('Archived user login could not be banned; account status still blocks access:', authError.message)
-
-    // Prevent an archived business user from continuing to submit Telegram orders.
-    await admin
-        .from('telegram_links')
-        .update({ is_active: false })
-        .eq('user_id', targetUser.id)
-
-    return { error: null }
-}
-
-/**
  * POST /api/admin/delete-user-otp/verify-and-delete
  * 
  * Step 2: Verify OTP and execute deletion.
@@ -60,7 +28,10 @@ async function archiveUserKeepingIdentifiers(
  * Body: { targetUserId: string, code: string, codeId: string }
  * 
  * Security:
- * - Must be authenticated HQ Admin / Super Admin (role_level <= 10)
+ * - Archive Identities (platform.identity.delete) for the TARGET's organization,
+ *   re-decided here (never trusted from the OTP request), before the code is
+ *   checked or consumed; until enforced, HQ Admin / Super Admin (role_level <= 10)
+ * - Target protection and self-removal refusal (lib/identity/removal-authorization)
  * - OTP must match (hashed comparison)
  * - OTP must not be expired, used, or invalidated
  * - Max 5 attempts per OTP
@@ -84,29 +55,32 @@ export async function POST(request: NextRequest) {
         const saDenied = await guardUserOperation(user.id, 'platform.data.destructive')
         if (saDenied) return saDenied
 
-        const { data: profile } = await supabase
-            .from('users')
-            .select('role_code, roles(role_level)')
-            .eq('id', user.id)
-            .single()
-
-        const roleLevel = (profile as any)?.roles?.role_level
-        // Deleting an identity is an S&A decision (platform.identity.delete);
-        // the historical HQ Admin / Super Admin rule is the legacy evaluator.
-        const identityDenied = await guardUserOperation(user.id, 'platform.identity.delete', {
-            legacy: () => typeof roleLevel === 'number' && roleLevel <= 10,
-        })
-        if (identityDenied) return identityDenied
-
-        const { targetUserId, code, codeId } = await request.json()
+        const { targetUserId, code, codeId } = await request.json().catch(() => ({}))
         if (!targetUserId || !code || !codeId) {
             return NextResponse.json({ error: 'targetUserId, code, and codeId are required' }, { status: 400 })
         }
 
-        // Cannot delete yourself
-        if (targetUserId === user.id) {
-            return NextResponse.json({ error: 'Cannot delete your own account' }, { status: 400 })
+        // Authorization is decided again at submission (current permission,
+        // mode, target organization and target protection) before the code is
+        // checked: a refused request changes neither the OTP nor the account.
+        const removal = await authorizeIdentityRemoval(user.id, targetUserId)
+        if (!removal.ok) {
+            if (removal.status === 403) {
+                await logDeletionAudit(admin, {
+                    operation: 'delete_user_execute',
+                    userId: user.id,
+                    userEmail: user.email || null,
+                    allowed: false,
+                    reason: removal.auditReason,
+                    ip,
+                })
+            }
+            return NextResponse.json(
+                { success: false, error: removal.error, code: removal.code, ...(removal.decisionId ? { decisionId: removal.decisionId } : {}) },
+                { status: removal.status }
+            )
         }
+        const targetUser = removal.target
 
         // --- Find and validate OTP ---
         const { data: codeRow } = await db
@@ -154,36 +128,16 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        // Verify target user matches
+        // Verify target user matches (a code is bound to one target; a code
+        // without a recorded target is never accepted)
         const meta = codeRow.meta || {}
-        if (meta.target_user_id && meta.target_user_id !== targetUserId) {
+        if (meta.target_user_id !== targetUserId) {
             return NextResponse.json({ error: 'Target user mismatch. Please request a new code.' }, { status: 400 })
         }
 
         // Verify requester matches
-        if (codeRow.user_id && codeRow.user_id !== user.id) {
+        if (codeRow.user_id !== user.id) {
             return NextResponse.json({ error: 'This code was requested by a different admin.' }, { status: 403 })
-        }
-
-        // Get target user info
-        const { data: targetUser } = await admin
-            .from('users')
-            .select('id, email, phone, full_name, is_active, role_code, roles:role_code(role_level)')
-            .eq('id', targetUserId)
-            .single()
-
-        if (!targetUser) {
-            return NextResponse.json({ error: 'Target user not found' }, { status: 404 })
-        }
-
-        const targetRoleLevel = (targetUser as any)?.roles?.role_level
-        // Target protection (see delete-user-otp/request).
-        if (!(await targetProtectionAllows(user.id, targetUserId, 'platform.identity.delete',
-            () => !(typeof targetRoleLevel === 'number' && targetRoleLevel < roleLevel)))) {
-            return NextResponse.json(
-                { error: 'You cannot delete a user with higher privileges than your own.' },
-                { status: 403 }
-            )
         }
 
         // Recheck immediately before mutating: history may have been created
@@ -191,11 +145,11 @@ export async function POST(request: NextRequest) {
         const removalMode = await getUserRemovalMode(admin, targetUserId)
 
         if (removalMode === 'archive') {
-            const archiveResult = await archiveUserKeepingIdentifiers(admin, targetUser)
+            const archiveResult = await archiveIdentityKeepingIdentifiers(user.id, targetUser.id)
             if (archiveResult.error) {
                 return NextResponse.json({
                     error: `Unable to archive this user: ${archiveResult.error}`,
-                }, { status: 500 })
+                }, { status: archiveResult.status ?? 500 })
             }
 
             await db

@@ -8,6 +8,11 @@ const authGetUser = vi.fn()
 const checkPermissionForUser = vi.fn()
 const provisionIdentity = vi.fn()
 const roleFilters: Array<[string, string, unknown]> = []
+// Scope eligibility has its own suites (scope-eligibility / scope-grant); here it is stubbed to "nothing offered, everything allowed".
+vi.mock('@/lib/security-access/scope-grant', () => ({
+  loadScopeChoices: vi.fn(async () => ({ organization: { id: 'org-a', name: 'Org A', typeCode: 'HQ' }, choices: [], orgNames: {} })),
+  validateScopeGrant: vi.fn(async () => ({ ok: true })),
+}))
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 vi.mock('next/navigation', () => ({ redirect: vi.fn() }))
@@ -25,9 +30,12 @@ vi.mock('@/lib/supabase/admin', () => ({
           eq: (c: string, v: unknown) => { roleFilters.push(['eq', c, v]); return chain },
           neq: (c: string, v: unknown) => { roleFilters.push(['neq', c, v]); return chain },
           order: async () => ({ data: [{ id: 'r-1', name: 'Order Approver', description: 'Approves orders', role_key: 'order-approver', source: 'template' }] }),
+          in: async () => ({ data: ['r-1', '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'].map(id => ({ id, role_key: `k-${id}`, status: 'active', source: 'template', applicable_org_types: ['HQ'] })), error: null }),
+          maybeSingle: async () => ({ data: { role_key: 'order-approver', applicable_org_types: ['HQ'] } }),
         }
         return chain
       }
+      if (table === 'organizations') return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { org_type_code: 'HQ' } }) }) }) }
       return { update: () => ({ eq: async () => ({ error: null }) }), select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }) }
     },
   })),
@@ -43,7 +51,7 @@ describe('Add User wizard — initial Security & Access role', () => {
     authGetUser.mockResolvedValue({ data: { user: { id: 'admin' } }, error: null })
     checkPermissionForUser.mockResolvedValue({ allowed: false, context: { role_level: 20 } })
     const { listInitialAccessRoles } = await import('@/lib/actions')
-    expect(await listInitialAccessRoles('org-a')).toEqual({ success: true, roles: [], canAssign: false, legacyReadOnly: false })
+    expect(await listInitialAccessRoles('org-a')).toMatchObject({ success: true, roles: [], canAssign: false, legacyReadOnly: false, denial: { permission: 'security.role.assign', cannotCreate: false } })
     expect(roleFilters).toEqual([])
   })
 
@@ -64,26 +72,26 @@ describe('Add User wizard — initial Security & Access role', () => {
     checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 1 } })
     provisionIdentity.mockResolvedValue({ ok: true, userId: 'u-1', outcome: 'CREATED', principalType: 'INTERNAL_EMPLOYEE' })
     const { createUserWithAuth } = await import('@/lib/actions')
-    await createUserWithAuth({ email: 'x@y.test', password: 'p-123456', full_name: 'X', role_code: 'USER', organization_id: 'org-a',
-      initial_role_id: 'r-1', initial_access_reason: 'Order approval duty' })
+    await createUserWithAuth({ email: 'x@y.test', password: 'p-123456', full_name: 'X', organization_id: 'org-a',
+      initial_role_id: 'r-1', initial_access_reason: 'client-typed reason' } as any)
     expect(provisionIdentity).toHaveBeenCalledWith(expect.objectContaining({
-      initialAccess: { roleId: 'r-1', reason: 'Order approval duty' }, source: 'user_management',
+      initialAccess: { roleId: 'r-1' }, source: 'user_management',
     }))
   })
 })
 
-describe('Add User wizard — several Access Profiles, each with its own scope', () => {
+describe('Add User wizard — several Group Policies, each with its own scope', () => {
   it('passes every profile with its own scope to canonical provisioning (no shared or defaulted scope)', async () => {
     authGetUser.mockResolvedValue({ data: { user: { id: 'sec-admin' } }, error: null })
     checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 1 } })
     provisionIdentity.mockResolvedValue({ ok: true, userId: 'u-2', outcome: 'CREATED', principalType: 'INTERNAL_EMPLOYEE' })
     const { createUserWithAuth } = await import('@/lib/actions')
-    await createUserWithAuth({ email: 'w@y.test', password: 'p-123456', full_name: 'W', role_code: 'USER', organization_id: 'org-a',
-      initial_profiles: [{ role_id: 'r-wh', scope_id: 's-balakong' }, { role_id: 'r-rcv', scope_id: 's-alma' }], initial_access_reason: 'Warehouse duty' })
+    await createUserWithAuth({ email: 'w@y.test', password: 'p-123456', full_name: 'W', organization_id: 'org-a',
+      initial_profiles: [{ role_id: '11111111-1111-4111-8111-111111111111', scope_id: '33333333-3333-4333-8333-333333333333' }, { role_id: '22222222-2222-4222-8222-222222222222', scope_id: '44444444-4444-4444-8444-444444444444' }] })
     const call = provisionIdentity.mock.calls.at(-1)![0]
     expect(call.initialProfiles).toEqual([
-      { roleId: 'r-wh', scopeIds: ['s-balakong'], reason: 'Warehouse duty' },
-      { roleId: 'r-rcv', scopeIds: ['s-alma'], reason: 'Warehouse duty' },
+      { roleId: '11111111-1111-4111-8111-111111111111', scopeIds: ['33333333-3333-4333-8333-333333333333'] },
+      { roleId: '22222222-2222-4222-8222-222222222222', scopeIds: ['44444444-4444-4444-8444-444444444444'] },
     ])
     expect(call.initialAccess).toBeUndefined()
   })
