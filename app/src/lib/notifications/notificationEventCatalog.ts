@@ -66,8 +66,8 @@ export const REQUIRED_NOTIFICATION_TYPES = [
     },
     {
         category: 'ecommerce', event_code: TIKTOK_DAILY_REPORT_EVENT, event_name: 'TikTok Shop Daily Shipping Report',
-        event_description: 'Full packing list per TikTok shop at 9:35 am and 12:35 pm (parcels still to ship), and what shipped today at 6:35 pm. Choose the channel and recipients here.',
-        default_enabled: false, available_channels: ['email', 'whatsapp', 'sms'], is_system: false, sort_order: 10,
+        event_description: 'Full packing list per TikTok shop at 9:35 am and 12:35 pm (parcels still to ship), and what shipped today at 6:35 pm. Email or WhatsApp only; for SMS use the short summary.',
+        default_enabled: false, available_channels: ['email', 'whatsapp'], is_system: false, sort_order: 10,
     },
     {
         category: 'ecommerce', event_code: TIKTOK_DAILY_SUMMARY_EVENT, event_name: 'TikTok Shop Daily Shipping Summary (short)',

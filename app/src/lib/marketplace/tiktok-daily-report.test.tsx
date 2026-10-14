@@ -125,14 +125,16 @@ describe('Notification Types wiring', () => {
     const full = REQUIRED_NOTIFICATION_TYPES.find((t) => t.event_code === DAILY_REPORT_EVENT)!
     const short = REQUIRED_NOTIFICATION_TYPES.find((t) => t.event_code === DAILY_SUMMARY_EVENT)!
     expect(full.default_enabled).toBe(false)
+    expect(full.available_channels).toEqual(['email', 'whatsapp'])
     expect(short.available_channels).toEqual(['sms', 'whatsapp'])
     expect(categoryLabel('ecommerce')).toBe('E-Commerce')
     expect(categoryModule('ecommerce')).toBe('customer_growth')
   })
 
-  it('templates use the report text for email and the summary for SMS', () => {
+  it('the full report has no SMS; the short summary carries the SMS', () => {
     expect(getTemplatesForEvent(DAILY_REPORT_EVENT, 'email')[0].body).toBe('{{report_text}}')
-    expect(getTemplatesForEvent(DAILY_REPORT_EVENT, 'sms').map((t) => t.body)).toContain('{{summary_text}}')
+    expect(getTemplatesForEvent(DAILY_REPORT_EVENT, 'sms')).toEqual([])
+    expect(getTemplatesForEvent(DAILY_SUMMARY_EVENT, 'sms').map((t) => t.body)).toContain('{{summary_text}}')
     expect(getTemplatesForEvent(DAILY_SUMMARY_EVENT, 'email')).toEqual([])
   })
 
@@ -142,12 +144,10 @@ describe('Notification Types wiring', () => {
       report_title: r.label, report_date: r.date, report_time: r.time, shop_counts: r.shopCounts,
       total_parcels: String(r.parcels), total_items: String(r.items), summary_text: r.summary,
     }
-    for (const event of [DAILY_REPORT_EVENT, DAILY_SUMMARY_EVENT]) {
-      const body = getTemplatesForEvent(event, 'sms')[0].body
-      const sms = body.replace(/\{\{(\w+)\}\}/g, (_, key) => payload[key] ?? `{{${key}}}`)
-      expect(sms).toBe('[Serapod2U] TikTok to pack (7/10/2026 12:35 pm): SeraOutdoor 3 parcels/8 items; Ellbow 4 parcels/5 items. Total 7 parcels, 13 items.')
-      expect(sms.length).toBeLessThanOrEqual(160)
-    }
+    const body = getTemplatesForEvent(DAILY_SUMMARY_EVENT, 'sms')[0].body
+    const sms = body.replace(/\{\{(\w+)\}\}/g, (_, key) => payload[key] ?? `{{${key}}}`)
+    expect(sms).toBe('[Serapod2U] TikTok to pack (7/10/2026 12:35 pm): SeraOutdoor 3 parcels/8 items; Ellbow 4 parcels/5 items. Total 7 parcels, 13 items.')
+    expect(sms.length).toBeLessThanOrEqual(160)
   })
 
   it('the template screen offers the TikTok variables with a filled example', () => {
@@ -156,12 +156,14 @@ describe('Notification Types wiring', () => {
       const { variables, verified } = notificationVariableContract(type)
       expect(verified).toBe(true)
       expect(variables).toEqual(expect.arrayContaining(['report_title', 'report_date', 'shop_counts', 'total_parcels', 'total_items']))
-      const body = getTemplatesForEvent(event, 'sms')[0].body
-      expect(unknownPlaceholders(body, variables)).toEqual([])
-      const preview = renderPreviewSegments(body, buildNotificationSampleData(type), variables)
-      expect(preview.some((s) => s.kind === 'unresolved')).toBe(false)
-      expect(preview.map((s) => s.text).join('')).toContain('SeraOutdoor 3 parcels/8 items')
     }
+    const type = { event_code: DAILY_SUMMARY_EVENT, category: 'ecommerce' }
+    const { variables } = notificationVariableContract(type)
+    const body = getTemplatesForEvent(DAILY_SUMMARY_EVENT, 'sms')[0].body
+    expect(unknownPlaceholders(body, variables)).toEqual([])
+    const preview = renderPreviewSegments(body, buildNotificationSampleData(type), variables)
+    expect(preview.some((s) => s.kind === 'unresolved')).toBe(false)
+    expect(preview.map((s) => s.text).join('')).toContain('SeraOutdoor 3 parcels/8 items')
   })
 
   it('migration seeds the same two catalog rows and nothing else', () => {

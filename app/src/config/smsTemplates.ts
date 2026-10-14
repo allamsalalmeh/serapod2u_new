@@ -252,19 +252,6 @@ export const smsTemplates: Record<string, SmsTemplate[]> = {
         channel: 'sms',
         body: `Serapod2U SMS check. If you received this, Local Malaysian SMS is working.`,
     }],
-    tiktok_shop_daily_report: [{
-        id: 'tt_daily_sms_2',
-        name: 'SMS Daily Shipping Summary (with totals)',
-        description: 'Parcels and items per TikTok shop plus the total (the full list goes by email)',
-        channel: 'sms',
-        body: `[Serapod2U] TikTok {{report_title}} ({{report_date}} {{report_time}}): {{shop_counts}}. Total {{total_parcels}} parcels, {{total_items}} items.`,
-    }, {
-        id: 'tt_daily_sms_1',
-        name: 'SMS Daily Shipping Summary (one line)',
-        description: 'Ready-made line: parcels and items per TikTok shop',
-        channel: 'sms',
-        body: `{{summary_text}}`,
-    }],
     tiktok_shop_daily_report_sms: [{
         id: 'tt_daily_sum_sms_2',
         name: 'SMS Daily Shipping Summary (with totals)',
