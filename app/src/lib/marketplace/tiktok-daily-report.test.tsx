@@ -123,13 +123,15 @@ describe('Notification Types wiring', () => {
     const full = REQUIRED_NOTIFICATION_TYPES.find((t) => t.event_code === DAILY_REPORT_EVENT)!
     const short = REQUIRED_NOTIFICATION_TYPES.find((t) => t.event_code === DAILY_SUMMARY_EVENT)!
     expect(full.default_enabled).toBe(false)
+    expect(full.available_channels).toEqual(['email', 'whatsapp'])
     expect(short.available_channels).toEqual(['sms', 'whatsapp'])
     expect(full.category).toBe('ecommerce')
   })
 
-  it('templates use the report text for email and the summary for SMS', () => {
+  it('the full report has no SMS; the short summary carries the SMS', () => {
     expect(getTemplatesForEvent(DAILY_REPORT_EVENT, 'email')[0].body).toBe('{{report_text}}')
-    expect(getTemplatesForEvent(DAILY_REPORT_EVENT, 'sms').map((t) => t.body)).toContain('{{summary_text}}')
+    expect(getTemplatesForEvent(DAILY_REPORT_EVENT, 'sms')).toEqual([])
+    expect(getTemplatesForEvent(DAILY_SUMMARY_EVENT, 'sms').map((t) => t.body)).toContain('{{summary_text}}')
     expect(getTemplatesForEvent(DAILY_SUMMARY_EVENT, 'email')).toEqual([])
   })
 
@@ -139,12 +141,10 @@ describe('Notification Types wiring', () => {
       report_title: r.label, report_date: r.date, report_time: r.time, shop_counts: r.shopCounts,
       total_parcels: String(r.parcels), total_items: String(r.items), summary_text: r.summary,
     }
-    for (const event of [DAILY_REPORT_EVENT, DAILY_SUMMARY_EVENT]) {
-      const body = getTemplatesForEvent(event, 'sms')[0].body
-      const sms = body.replace(/\{\{(\w+)\}\}/g, (_, key) => payload[key] ?? `{{${key}}}`)
-      expect(sms).toBe('[Serapod2U] TikTok to pack (7/10/2026 12:35 pm): SeraOutdoor 3 parcels/8 items; Ellbow 4 parcels/5 items. Total 7 parcels, 13 items.')
-      expect(sms.length).toBeLessThanOrEqual(160)
-    }
+    const body = getTemplatesForEvent(DAILY_SUMMARY_EVENT, 'sms')[0].body
+    const sms = body.replace(/\{\{(\w+)\}\}/g, (_, key) => payload[key] ?? `{{${key}}}`)
+    expect(sms).toBe('[Serapod2U] TikTok to pack (7/10/2026 12:35 pm): SeraOutdoor 3 parcels/8 items; Ellbow 4 parcels/5 items. Total 7 parcels, 13 items.')
+    expect(sms.length).toBeLessThanOrEqual(160)
   })
 
   it('migration seeds the same two catalog rows and nothing else', () => {

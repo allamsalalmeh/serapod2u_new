@@ -18,6 +18,8 @@ type QueueNotificationEventInput = {
     payload: Record<string, any>
     dedupePayload?: Record<string, any>
     priority?: 'low' | 'normal' | 'high' | 'critical'
+    /** Channels this event may use regardless of its saved settings. Omit for no restriction. */
+    allowedChannels?: readonly string[]
 }
 
 type BuildOrderPayloadInput = {
@@ -67,7 +69,8 @@ function parseCustomerDetails(notes: string | null | undefined) {
 }
 
 export async function queueNotificationEvent(supabase: SupabaseLikeClient, input: QueueNotificationEventInput) {
-    const { orgId, eventCode, payload, priority = 'normal' } = input
+    const { orgId, eventCode, payload, priority = 'normal', allowedChannels } = input
+    const isAllowedChannel = (channel: string) => !allowedChannels || allowedChannels.includes(channel)
 
     if (!orgId) {
         return { queuedCount: 0, skippedReason: 'missing_org' as const }
@@ -107,7 +110,10 @@ export async function queueNotificationEvent(supabase: SupabaseLikeClient, input
     }
 
     if (isNotificationRoutingPreset(routingPreset) && isFallbackRoutingPreset(routingPreset)) {
-        const chain = deliveryChainForPreset(routingPreset)
+        const chain = deliveryChainForPreset(routingPreset).filter(isAllowedChannel)
+        if (!chain.length) {
+            return { queuedCount: 0, skippedReason: 'disabled_or_no_provider' as const, errors: [] }
+        }
         const { data: activeProviders } = await supabase
             .from('notification_provider_configs')
             .select('channel, provider_name')
@@ -115,7 +121,7 @@ export async function queueNotificationEvent(supabase: SupabaseLikeClient, input
             .eq('is_active', true)
             .in('channel', chain)
 
-        const providerByChannel = new Map(
+        const providerByChannel = new Map<string, string>(
             (activeProviders || []).map((provider: any) => [provider.channel, provider.provider_name]),
         )
         const firstAvailable = firstAvailableDeliveryChannel(routingPreset, providerByChannel.keys())
@@ -160,6 +166,7 @@ export async function queueNotificationEvent(supabase: SupabaseLikeClient, input
     } else if (routingPreset === 'sms_only') {
         channels = ['sms']
     }
+    channels = channels.filter(isAllowedChannel)
 
     let queuedCount = 0
     const errors: string[] = []
