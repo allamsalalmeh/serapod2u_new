@@ -1,3 +1,4 @@
+import { REQUIRED_NOTIFICATION_TYPES } from '@/lib/notifications/notificationEventCatalog'
 import { queueNotificationEvent } from '@/lib/notifications/supplyChainEventQueue'
 import {
   DAILY_REPORT_EVENT,
@@ -161,7 +162,8 @@ export async function runTikTokDailyReport(
         queued[eventCode] = 'already_sent'
         continue
       }
-      const outcome = await queueNotificationEvent(db, { orgId: companyId, eventCode, payload })
+      const allowedChannels = REQUIRED_NOTIFICATION_TYPES.find((t) => t.event_code === eventCode)?.available_channels
+      const outcome = await queueNotificationEvent(db, { orgId: companyId, eventCode, payload, allowedChannels })
       queued[eventCode] = outcome.queuedCount ? 'queued' : outcome.skippedReason || 'not_queued'
       if (outcome.errors?.length) console.warn(`[tiktok-daily-report] ${eventCode}: ${outcome.errors.join('; ')}`)
     }
