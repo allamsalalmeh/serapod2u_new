@@ -3,6 +3,7 @@ import autoTable from 'jspdf-autotable'
 import { wrapTermsLines } from '@/lib/organizations/terms'
 import { resolvePartyColumnHeading } from '@/lib/documents/counterparty'
 import { formatDateKeyLong, isDateKey } from '@/lib/orders/order-date'
+import { purchaseOrderHidesPrices } from '@/lib/orders/po-price-visibility'
 import {
   compressSignatureForPdf,
   formatFileSize,
@@ -1570,11 +1571,12 @@ export class PDFGenerator {
     // Parties Section
     y = this.addPartiesSection(orderData, y, 'PO')
 
-    // Order Lines Section
-    y = this.addOrderLinesSection(orderData, y)
-
-    // Summary Section
-    y = this.addSummarySection(orderData, y)
+    if (purchaseOrderHidesPrices(orderData.order_type, 'PO')) {
+      y = this.addOrderLinesSectionNoPricing(orderData, y)
+    } else {
+      y = this.addOrderLinesSection(orderData, y)
+      y = this.addSummarySection(orderData, y)
+    }
 
     // Organization Terms & Conditions (verbatim, omitted when unset)
     y = this.addTermsSection(orderData.organization_terms, y)
@@ -1610,11 +1612,12 @@ export class PDFGenerator {
     // Parties Section
     y = this.addPartiesSection(orderData, y, 'PO')
 
-    // Order Lines Section
-    y = this.addOrderLinesSection(orderData, y)
-
-    // Summary Section
-    y = this.addSummarySection(orderData, y)
+    if (purchaseOrderHidesPrices(orderData.order_type, 'PO')) {
+      y = this.addOrderLinesSectionNoPricing(orderData, y)
+    } else {
+      y = this.addOrderLinesSection(orderData, y)
+      y = this.addSummarySection(orderData, y)
+    }
 
     // Organization Terms & Conditions (verbatim, omitted when unset)
     y = this.addTermsSection(orderData.organization_terms, y)
@@ -2427,7 +2430,7 @@ export class PDFGenerator {
 
   /**
    * Order Lines Section without pricing columns - used for DH Delivery Orders
-   * DH orders use DO purely for delivery tracking, not for pricing
+   * and H2M Purchase Orders, which must not show prices to the recipient
    */
   private addOrderLinesSectionNoPricing(orderData: OrderData, yPosition: number): number {
     let y = yPosition
@@ -2490,7 +2493,7 @@ export class PDFGenerator {
       columnStyles: {
         0: { cellWidth: 12, halign: 'center' },
         1: { cellWidth: 45 },
-        2: { cellWidth: 80 },
+        2: { cellWidth: 73 },
         3: { cellWidth: 25, halign: 'right' },
         4: { cellWidth: 25, halign: 'right' }
       },

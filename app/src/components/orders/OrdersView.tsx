@@ -182,6 +182,11 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
   const [viewMode, setViewMode] = useState<'cards' | 'list'>('list')
   const [showOrderTypeDialog, setShowOrderTypeDialog] = useState(false)
 
+  // The list is a wide table; phones open on the card view instead.
+  useEffect(() => {
+    if (window.matchMedia?.('(max-width: 767px)')?.matches) setViewMode('cards')
+  }, [])
+
   // Sorting state
   // Date column = business/SO date (order_date), newest first.
   const [sortColumn, setSortColumn] = useState<string>('order_date')

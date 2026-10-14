@@ -12,6 +12,7 @@ import { wrapTermsLines } from '@/lib/organizations/terms'
 import { isBuyerIssuedDocument, resolveCounterparty } from '@/lib/documents/counterparty'
 import { formatExpectedDelivery, resolveOrderCasesPerBox } from '@/lib/orders/packaging'
 import { formatDateKey, isDateKey } from '@/lib/orders/order-date'
+import { purchaseOrderHidesPrices } from '@/lib/orders/po-price-visibility'
 import {
   salesOrderLineDescription,
   sortSalesOrderLinesForDisplay,
@@ -454,7 +455,8 @@ export class ClassicTemplate {
 
     // 3. Items Table
     // Simple table with no borders, just lines
-    const headers = ['No', 'Description', 'Unit', 'Price', 'Amount']
+    const hidePrices = purchaseOrderHidesPrices(orderData.order_type, documentData.doc_type)
+    const headers = hidePrices ? ['No', 'Description', 'Unit'] : ['No', 'Description', 'Unit', 'Price', 'Amount']
 
     // Sales Orders group the lines Hero first, then Zero, then anything else;
     // every other document keeps the stored sequence. Presentation only — the
@@ -473,6 +475,10 @@ export class ClassicTemplate {
       // repeats inside every variant name.
       const description =
         salesOrderLineDescription(item.product?.product_name, item.variant?.variant_name) || 'Product'
+
+      if (hidePrices) {
+        return [(index + 1).toString(), description, qty.toString()]
+      }
 
       return [
         (index + 1).toString(),
@@ -554,9 +560,11 @@ export class ClassicTemplate {
     this.doc.setFont('helvetica', 'bold')
     this.doc.setTextColor(0, 0, 0)
 
-    const totalX = this.pageWidth - this.margin - 30
-    this.doc.text('Total', totalX - 20, y, { align: 'right' })
-    this.doc.text(this.formatCurrency(totalAmount), this.pageWidth - this.margin, y, { align: 'right' })
+    if (!hidePrices) {
+      const totalX = this.pageWidth - this.margin - 30
+      this.doc.text('Total', totalX - 20, y, { align: 'right' })
+      this.doc.text(this.formatCurrency(totalAmount), this.pageWidth - this.margin, y, { align: 'right' })
+    }
 
     // 4b. Expected Delivery - the ordered cases in boxes, between the total and
     // the Terms. Sales Orders only; a PO or an invoice states no delivery figure.
