@@ -75,6 +75,7 @@ export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
   "admin/migrate-user-points": { kind: 'EMPTY', reason: "Route file has no handlers" },
   "admin/point-migration": { kind: 'ENTERPRISE', permissions: ["customer.loyalty.adjust"] },
   "admin/point-migration-stream": { kind: 'ENTERPRISE', permissions: ["customer.loyalty.adjust"] },
+  "admin/qr-collection": { kind: 'ENTERPRISE', permissions: ["customer.consumer.view"], via: ["lib/consumer/qr-collection-info.ts"] },
   "admin/redemption-history": { kind: 'ENTERPRISE', permissions: ["customer.redemption.manage"] },
   "admin/redemptions": { kind: 'ENTERPRISE', permissions: ["customer.redemption.manage"] },
   "admin/restore-data": { kind: 'ENTERPRISE', permissions: ["platform.data.destructive"] },

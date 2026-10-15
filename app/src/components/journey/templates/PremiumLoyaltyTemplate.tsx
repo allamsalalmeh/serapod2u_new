@@ -83,6 +83,7 @@ const QrScanner = dynamic(() => import('@/components/scanner/QrScanner'), { ssr:
 import { validatePhoneNumber, normalizePhone, getStorageUrl, toTitleCaseWords } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import ForgotPasswordModal from '@/components/journey/ForgotPasswordModal'
+import QrCollectionStatus from '@/components/journey/QrCollectionStatus'
 import { ReferencePicker, type ReferenceUser } from '@/components/ui/reference-picker'
 import { ShopPicker, type ShopResult } from '@/components/ui/shop-picker'
 import { CreateShopDialog } from '@/components/shop-requests/CreateShopDialog'
@@ -4895,6 +4896,15 @@ export default function PremiumLoyaltyTemplate({
 
     // Ellbow Pet Food home tab. Presentation is isolated from the shared engine;
     // all points, rewards, scanner, and navigation actions still use live state.
+    const renderQrCollectionStatus = () => (config.points_enabled && hasLegacyProductQrContext && !checkingQrStatus) ? (
+        <QrCollectionStatus
+            qrCode={qrCode}
+            isAuthenticated={isAuthenticated}
+            allCollected={qrClaimMode === 'dual' ? (qrShopLaneCollected && qrConsumerLaneCollected) : (qrShopLaneCollected || qrConsumerLaneCollected)}
+            anyCollected={qrShopLaneCollected || qrConsumerLaneCollected}
+        />
+    ) : null
+
     const renderEllbowHomeTab = () => {
         const hasQrContext = isRoadtourMode || hasLegacyProductQrContext
         const collected = Boolean(hasQrContext && (pointsCollected || qrPointsCollected))
@@ -4947,6 +4957,7 @@ export default function PremiumLoyaltyTemplate({
                     setCurrentRewardImageIndex(0)
                     setShowRewardDetailModal(true)
                 }}
+                collectionStatus={renderQrCollectionStatus()}
             />
         )
     }
@@ -5200,6 +5211,7 @@ export default function PremiumLoyaltyTemplate({
                         </button>
                     )}
                 </div>
+                {renderQrCollectionStatus()}
             </div>
 
             <div className="sera-collect__home-grid">
