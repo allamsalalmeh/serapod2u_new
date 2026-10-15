@@ -74,6 +74,7 @@ interface EllbowLiveHomeProps {
     onCollect: () => void
     onViewRewards: () => void
     onRewardClick: (rewardId: string) => void
+    collectionStatus?: ReactNode
 }
 
 export function EllbowLiveHome({
@@ -95,6 +96,7 @@ export function EllbowLiveHome({
     onCollect,
     onViewRewards,
     onRewardClick,
+    collectionStatus,
 }: EllbowLiveHomeProps) {
     return (
         <main data-testid="ellbow-live-home" className="min-h-0 flex-1 overflow-y-auto bg-[#f7f8f8] pb-32 text-[#17283a] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -204,6 +206,7 @@ export function EllbowLiveHome({
                             <ChevronRight className="ml-auto h-5 w-5" />
                         </button>
                     )}
+                    {pointsEnabled && collectionStatus}
                     <button
                         type="button"
                         onClick={onViewRewards}
