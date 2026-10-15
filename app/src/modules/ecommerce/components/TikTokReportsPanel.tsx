@@ -37,10 +37,10 @@ function Segmented<T extends string>({ value, options, onChange, label }: { valu
     )
 }
 
-function Delta({ value, label }: { value: number | null; label: string }) {
-    if (value === null) return <span>No earlier data to compare</span>
+function delta(value: number | null, label: string) {
+    if (value === null) return undefined
     const arrow = value > 0.0005 ? '↑' : value < -0.0005 ? '↓' : '→'
-    return <span>{arrow} {pct(Math.abs(value))} {label}</span>
+    return `${arrow} ${pct(Math.abs(value))} ${label}`
 }
 
 function Kpi({ label, value, note, warn }: { label: string; value: ReactNode; note?: ReactNode; warn?: boolean }) {
@@ -111,12 +111,15 @@ function SalesView({ report }: { report: any }) {
     return (
         <>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <Kpi label="Sales" value={rm(d.totals.sales)} note={<Delta value={d.change.sales} label={cmp} />} />
-                <Kpi label="Orders" value={count(d.totals.orders)} note={d.totals.cancelled ? `${count(d.totals.cancelled)} cancelled (${pct(d.cancelRate)})` : <Delta value={d.change.orders} label={cmp} />} />
-                <Kpi label="Items sold" value={count(d.totals.items)} note={<Delta value={d.change.items} label={cmp} />} />
-                <Kpi label="Average order" value={rm(d.totals.aov)} note={<Delta value={d.change.aov} label={cmp} />} />
+                <Kpi label="Sales" value={rm(d.totals.sales)} note={delta(d.change.sales, cmp)} />
+                <Kpi label="Orders" value={count(d.totals.orders)} note={d.totals.cancelled ? `${count(d.totals.cancelled)} cancelled (${pct(d.cancelRate)})` : delta(d.change.orders, cmp)} />
+                <Kpi label="Items sold" value={count(d.totals.items)} note={delta(d.change.items, cmp)} />
+                <Kpi label="Average order" value={rm(d.totals.aov)} note={delta(d.change.aov, cmp)} />
             </div>
 
+            {!hasSales && !d.totals.cancelled ? (
+                <div className="sera-sc-panel p-10 text-center text-sm text-[var(--sera-muted)]">No sales in this period yet.</div>
+            ) : (<>
             <Card title={report.period === 'day' ? 'Sales by hour' : 'Sales by day'}>
                 {hasSales ? (
                     <div className="h-56 -ml-2">
@@ -172,6 +175,7 @@ function SalesView({ report }: { report: any }) {
                     />
                 </Card>
             )}
+            </>)}
 
             <p className="text-xs text-[var(--sera-muted)]">
                 Sales are product prices after discounts, without shipping, by order time (Malaysia). Cancelled and unpaid orders are not counted.
@@ -417,7 +421,7 @@ export default function TikTokReportsPanel({ shops, defaultShopId }: { shops: { 
         return () => controller.abort()
     }, [query, scope])
 
-    const range = report?.range
+    const range = report && report.period === period ? report.range : null
     const current = report && report.kind === kind && report.period === period ? report : null
     const today = todayMyt()
     const showingToday = range ? range.isCurrent : date === today
@@ -461,7 +465,7 @@ export default function TikTokReportsPanel({ shops, defaultShopId }: { shops: { 
                             <ChevronLeft className="h-4 w-4" />
                         </button>
                         <span className="min-w-[9.5rem] text-center text-sm font-medium text-[var(--sera-ink)] tabular-nums">
-                            {range && report.period === period ? range.label : '…'}
+                            {range ? range.label : '…'}
                         </span>
                         <button
                             onClick={() => range?.nextDate && setDate(range.nextDate)}
