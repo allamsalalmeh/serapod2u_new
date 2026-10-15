@@ -150,7 +150,7 @@ function SalesView({ report }: { report: any }) {
                 )}
             </Card>
 
-            <div className="grid gap-3 lg:grid-cols-2">
+            <div className={`grid gap-3 ${d.lowProducts.length ? 'lg:grid-cols-2' : ''}`}>
                 <Card title="Best sellers">
                     {d.topProducts.length ? (
                         <div className="divide-y divide-[var(--sera-line)] text-sm">
@@ -158,13 +158,13 @@ function SalesView({ report }: { report: any }) {
                         </div>
                     ) : <p className="text-sm text-[var(--sera-muted)]">Nothing sold in this period.</p>}
                 </Card>
-                <Card title="Selling slowly" hint="Products with the fewest items sold in this period">
-                    {d.lowProducts.length ? (
+                {d.lowProducts.length > 0 && (
+                    <Card title="Selling slowly" hint="Products with the fewest items sold in this period">
                         <div className="divide-y divide-[var(--sera-line)] text-sm">
                             {d.lowProducts.map((p: any) => <ListRow key={p.product} title={p.product} sub={`${count(p.items)} items`} value={rm(p.sales)} />)}
                         </div>
-                    ) : <p className="text-sm text-[var(--sera-muted)]">Every product sold in this period is in Best sellers.</p>}
-                </Card>
+                    </Card>
+                )}
             </div>
 
             {d.shops.length > 0 && (
@@ -294,10 +294,10 @@ function ShippingView({ report }: { report: any }) {
     return (
         <>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <Kpi label="Shipped" value={count(d.shipped)} note={d.cancelled ? `${count(d.cancelled)} cancelled` : 'Handed to the courier'} />
+                <Kpi label="Shipped" value={count(d.shipped)} note="Handed to the courier" />
                 <Kpi label="Delivered" value={count(d.delivered)} note={d.deliveryDays !== null ? `About ${d.deliveryDays} days on the road` : undefined} />
                 <Kpi label="To pack now" value={count(d.toPack)} note={d.toPackLate ? `${count(d.toPackLate)} waiting over 48 h` : 'None waiting over 48 h'} warn={d.toPackLate > 0} />
-                <Kpi label="Shipped within 24 h" value={pct(d.within24h)} note={d.speed.medianHours !== null ? `Usually ${d.speed.medianHours} h after payment` : undefined} />
+                <Kpi label="Shipped within 24 h" value={pct(d.within24h)} note={d.speed.medianHours !== null ? `Usually about ${Math.round(d.speed.medianHours)} h after payment` : undefined} />
             </div>
 
             <div className="grid gap-3 lg:grid-cols-2">
@@ -319,8 +319,8 @@ function ShippingView({ report }: { report: any }) {
                     ) : <p className="text-sm text-[var(--sera-muted)]">Nothing shipped in this period.</p>}
                     {d.couriers.length > 0 && (
                         <SimpleTable
-                            head={[{ label: 'Courier' }, { label: 'Shipped', right: true }, { label: 'Delivered', right: true }, { label: 'Days to deliver', right: true }]}
-                            rows={d.couriers.map((c: any) => [c.courier, count(c.shipped), count(c.delivered), c.medianDeliveryDays ?? '—'])}
+                            head={[{ label: 'Courier' }, { label: 'Shipped', right: true }, { label: 'Days to deliver', right: true }]}
+                            rows={d.couriers.map((c: any) => [c.courier, count(c.shipped), c.medianDeliveryDays ?? '—'])}
                         />
                     )}
                 </Card>
@@ -338,7 +338,7 @@ function ShippingView({ report }: { report: any }) {
 
             <Card
                 title="Shipped orders"
-                hint={`${count(d.orders.length)} orders handed to the courier in this period`}
+                hint={`${count(d.orders.length)} orders handed to the courier in this period${d.cancelled ? ` · ${count(d.cancelled)} cancelled` : ''}`}
                 action={d.orders.length > 0 && (
                     <label className="relative">
                         <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--sera-muted)]" />
@@ -358,7 +358,7 @@ function ShippingView({ report }: { report: any }) {
                         <span key="t" className="whitespace-nowrap">{myTime(o.shippedAt)}</span>,
                         ...(multi ? [o.shop] : []),
                         <span key="o" className="font-mono text-xs">{o.orderId}</span>,
-                        o.courier || '—',
+                        <span key="c" className="whitespace-nowrap">{o.courier || '—'}</span>,
                         <span key="k" className="font-mono text-xs">{o.tracking || '—'}</span>,
                         o.hoursToShip ?? '—',
                         <span key="s" className="text-[var(--sera-muted)] whitespace-nowrap">{o.status || '—'}</span>,

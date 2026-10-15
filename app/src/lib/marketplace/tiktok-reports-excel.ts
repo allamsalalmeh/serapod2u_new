@@ -130,7 +130,7 @@ export async function buildTikTokReportWorkbook(report: TikTokReport): Promise<B
     const couriers = sheet(workbook, 'Couriers', [
       { header: 'Courier', key: 'courier', width: 24 },
       { header: 'Shipped', key: 'shipped', width: 10 },
-      { header: 'Delivered', key: 'delivered', width: 10 },
+      { header: 'Delivered so far', key: 'delivered', width: 16 },
       { header: 'Median days to deliver', key: 'medianDeliveryDays', width: 22 },
     ])
     for (const c of d.couriers) couriers.addRow(c)
