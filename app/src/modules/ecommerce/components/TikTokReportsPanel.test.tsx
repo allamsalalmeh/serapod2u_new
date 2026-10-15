@@ -33,8 +33,12 @@ describe('TikTokReportsPanel', () => {
         vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
         fetchMock.mockReset()
         fetchMock.mockImplementation(async (url: string) => {
-            const kind = new URL(url, 'http://x').searchParams.get('report')
-            const report = kind === 'settlement' ? settlement : kind === 'shipping' ? shipping : sales
+            const params = new URL(url, 'http://x').searchParams
+            const kind = params.get('report')
+            const base = kind === 'settlement' ? settlement : kind === 'shipping' ? shipping : sales
+            const period = params.get('period') as 'day' | 'week' | 'month'
+            const date = params.get('date') as string
+            const report = { ...base, period, date, range: periodRange(period, date, NOW) }
             return { ok: true, json: async () => ({ report }) }
         })
         vi.stubGlobal('fetch', fetchMock)
@@ -53,9 +57,23 @@ describe('TikTokReportsPanel', () => {
         const url = new URL(String(fetchMock.mock.calls[0][0]), 'http://x')
         expect(url.pathname).toBe('/api/ecommerce/tiktok-shop/reports')
         expect(Object.fromEntries(url.searchParams)).toMatchObject({ shop_id: 'all', report: 'sales', period: 'day' })
-        expect(screen.getByText(range.label)).toBeTruthy()
+        expect(screen.getByText(periodRange('day', url.searchParams.get('date')!, NOW).label)).toBeTruthy()
         expect(screen.getByText('Camping Chair')).toBeTruthy()
         expect(screen.getByRole('link', { name: 'Excel' }).getAttribute('href')).toContain('format=xlsx')
+    })
+
+    it('steps back a whole month after switching from day to month', async () => {
+        render(<TikTokReportsPanel shops={shopList} defaultShopId="sera" />)
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+        const today = new URL(String(fetchMock.mock.calls[0][0]), 'http://x').searchParams.get('date')!
+
+        await userEvent.click(screen.getByRole('tab', { name: 'Month' }))
+        await waitFor(() => expect(screen.getByText(periodRange('month', today, NOW).label)).toBeTruthy())
+        await userEvent.click(screen.getByRole('button', { name: 'Previous period' }))
+
+        const previous = periodRange('month', today, NOW).prevDate
+        await waitFor(() => expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain(`period=month&date=${previous}`))
+        await waitFor(() => expect(screen.getByText(periodRange('month', previous, NOW).label)).toBeTruthy())
     })
 
     it('shows the settlement chain and the shipped orders with tracking numbers', async () => {

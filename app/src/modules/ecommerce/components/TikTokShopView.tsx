@@ -263,7 +263,7 @@ export default function TikTokShopView(_props: TikTokShopViewProps) {
                 {([
                     ['reports', 'Reports'],
                     ['packing', 'Packing list'],
-                    ['records', 'Records & imports'],
+                    ['records', 'Records'],
                 ] as const).map(([value, text]) => (
                     <button
                         key={value}
@@ -287,7 +287,7 @@ export default function TikTokShopView(_props: TikTokShopViewProps) {
                 ) : (
                     <div className="sera-sc-panel p-8 text-center text-sm text-[var(--sera-muted)]">
                         No TikTok shop yet. Add one in{' '}
-                        <button onClick={() => setSection('records')} className="font-medium text-[var(--sera-orange)] hover:underline">Records & imports</button>.
+                        <button onClick={() => setSection('records')} className="font-medium text-[var(--sera-orange)] hover:underline">Records</button>.
                     </div>
                 )
             )}
