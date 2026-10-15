@@ -83,6 +83,7 @@ const QrScanner = dynamic(() => import('@/components/scanner/QrScanner'), { ssr:
 import { validatePhoneNumber, normalizePhone, getStorageUrl, toTitleCaseWords } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import ForgotPasswordModal from '@/components/journey/ForgotPasswordModal'
+import QrCollectionStatus from '@/components/journey/QrCollectionStatus'
 import { ReferencePicker, type ReferenceUser } from '@/components/ui/reference-picker'
 import { ShopPicker, type ShopResult } from '@/components/ui/shop-picker'
 import { CreateShopDialog } from '@/components/shop-requests/CreateShopDialog'
@@ -5200,6 +5201,14 @@ export default function PremiumLoyaltyTemplate({
                         </button>
                     )}
                 </div>
+                {config.points_enabled && hasLegacyProductQrContext && !checkingQrStatus && (
+                    <QrCollectionStatus
+                        qrCode={qrCode}
+                        isAuthenticated={isAuthenticated}
+                        allCollected={qrClaimMode === 'dual' ? (qrShopLaneCollected && qrConsumerLaneCollected) : (qrShopLaneCollected || qrConsumerLaneCollected)}
+                        anyCollected={qrShopLaneCollected || qrConsumerLaneCollected}
+                    />
+                )}
             </div>
 
             <div className="sera-collect__home-grid">
