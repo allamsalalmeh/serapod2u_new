@@ -74,6 +74,31 @@ describe('EllbowLiveHome', () => {
         expect(sources.some((source) => source.includes('ellbow-mobile-ready-assets/webp/01-ellbow-cat-mascot-full'))).toBe(true)
         expect(screen.getByRole('button', { name: 'Checking…' }).hasAttribute('disabled')).toBe(true)
     })
+
+    it('shows the QR collection status under Collect Points only when points are enabled', () => {
+        const props = {
+            campaignName: 'Ellbow RoadTour',
+            points: 0,
+            nextRewardPoints: 100,
+            progressPercent: 0,
+            collectLabel: 'Points Collected',
+            collectDisabled: true,
+            collectLoading: false,
+            collected: true,
+            rewards: [],
+            rewardsLoading: false,
+            onCollect: () => {},
+            onViewRewards: () => {},
+            onRewardClick: () => {},
+            collectionStatus: <div>Points for this QR code have already been collected</div>,
+        }
+
+        const { rerender } = render(<EllbowLiveHome {...props} pointsEnabled />)
+        expect(screen.getByText('Points for this QR code have already been collected')).toBeTruthy()
+
+        rerender(<EllbowLiveHome {...props} pointsEnabled={false} />)
+        expect(screen.queryByText('Points for this QR code have already been collected')).toBeNull()
+    })
 })
 
 describe('EllbowBottomNavigation', () => {

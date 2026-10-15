@@ -4896,6 +4896,15 @@ export default function PremiumLoyaltyTemplate({
 
     // Ellbow Pet Food home tab. Presentation is isolated from the shared engine;
     // all points, rewards, scanner, and navigation actions still use live state.
+    const renderQrCollectionStatus = () => (config.points_enabled && hasLegacyProductQrContext && !checkingQrStatus) ? (
+        <QrCollectionStatus
+            qrCode={qrCode}
+            isAuthenticated={isAuthenticated}
+            allCollected={qrClaimMode === 'dual' ? (qrShopLaneCollected && qrConsumerLaneCollected) : (qrShopLaneCollected || qrConsumerLaneCollected)}
+            anyCollected={qrShopLaneCollected || qrConsumerLaneCollected}
+        />
+    ) : null
+
     const renderEllbowHomeTab = () => {
         const hasQrContext = isRoadtourMode || hasLegacyProductQrContext
         const collected = Boolean(hasQrContext && (pointsCollected || qrPointsCollected))
@@ -4948,6 +4957,7 @@ export default function PremiumLoyaltyTemplate({
                     setCurrentRewardImageIndex(0)
                     setShowRewardDetailModal(true)
                 }}
+                collectionStatus={renderQrCollectionStatus()}
             />
         )
     }
@@ -5201,14 +5211,7 @@ export default function PremiumLoyaltyTemplate({
                         </button>
                     )}
                 </div>
-                {config.points_enabled && hasLegacyProductQrContext && !checkingQrStatus && (
-                    <QrCollectionStatus
-                        qrCode={qrCode}
-                        isAuthenticated={isAuthenticated}
-                        allCollected={qrClaimMode === 'dual' ? (qrShopLaneCollected && qrConsumerLaneCollected) : (qrShopLaneCollected || qrConsumerLaneCollected)}
-                        anyCollected={qrShopLaneCollected || qrConsumerLaneCollected}
-                    />
-                )}
+                {renderQrCollectionStatus()}
             </div>
 
             <div className="sera-collect__home-grid">
