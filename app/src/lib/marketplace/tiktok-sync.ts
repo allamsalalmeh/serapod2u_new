@@ -2,9 +2,11 @@ import {
   TikTokApiError,
   getStatementTransactions,
   getStatements,
+  getUnsettledTransactions,
   getWithdrawals,
   mapOrderToLines,
   mapStatementTransaction,
+  mapUnsettledTransaction,
   mapWithdrawal,
   myDateToUnix,
   refreshTikTokToken,
@@ -13,6 +15,7 @@ import {
   type ApiOrderLine,
   type ApiPayout,
   type ApiSettlement,
+  type ApiUnsettled,
   type TikTokShopApp,
 } from './tiktok-api'
 
@@ -34,6 +37,7 @@ const ORDER_OVERLAP_S = 600
 const PAYOUT_LOOKBACK_S = 7 * 86400
 const REFRESH_BEFORE_MS = 24 * 3600 * 1000
 const STALE_RUN_MS = 10 * 60 * 1000
+const UNSETTLED_MAX_PAGES = 30
 
 export interface SyncCounts {
   orderLinesInserted: number
@@ -216,6 +220,40 @@ async function writePayouts(db: any, conn: any, importFor: ImportFor, rows: ApiP
   counts.payoutsWritten += write.length
 }
 
+/**
+ * Replaces the shop's snapshot of orders TikTok has not settled yet. The old
+ * snapshot is kept unless every page was fetched, so a partial or failed fetch
+ * never shows fewer pending orders than there are.
+ */
+export async function refreshUnsettled(db: any, conn: any, app: TikTokShopApp, token: string, deadline: number) {
+  const rows: ApiUnsettled[] = []
+  let pageToken: string | undefined
+  for (let pages = 0; pages < UNSETTLED_MAX_PAGES; pages++) {
+    if (Date.now() >= deadline) return false
+    const page = await getUnsettledTransactions(app, token, conn.shop_cipher, pageToken)
+    for (const tx of page?.transactions || []) {
+      const row = mapUnsettledTransaction(tx)
+      if (row) rows.push(row)
+    }
+    pageToken = page?.next_page_token || undefined
+    if (!pageToken) break
+  }
+  if (pageToken) return false
+
+  const syncedAt = new Date().toISOString()
+  const unique = [...new Map(rows.map(r => [r.transaction_id, r])).values()]
+  for (const part of chunk(unique, WRITE_CHUNK)) {
+    const { error } = await db.from('marketplace_unsettled').upsert(
+      part.map(r => ({ ...r, company_id: conn.company_id, shop_id: conn.shop_id, synced_at: syncedAt })),
+      { onConflict: 'shop_id,transaction_id' },
+    )
+    if (error) throw error
+  }
+  const { error } = await db.from('marketplace_unsettled').delete().eq('shop_id', conn.shop_id).lt('synced_at', syncedAt)
+  if (error) throw error
+  return true
+}
+
 async function saveCursor(db: any, conn: any, update: Record<string, string>) {
   const { error } = await db.from('marketplace_shop_connections').update(update).eq('shop_id', conn.shop_id)
   if (error) throw error
@@ -302,6 +340,12 @@ export async function syncTikTokShop(db: any, conn: any, deadline: number): Prom
         if (!withdrawalToken || items.length === 0) { payoutsDone = true; break }
       }
       if (payoutsDone) await saveCursor(db, conn, { payouts_synced_to: startedAt })
+    }
+
+    if (payoutsDone) {
+      await refreshUnsettled(db, conn, app, token, deadline).catch(error => {
+        console.warn('[tiktok-sync] unsettled snapshot skipped:', describeSyncError(error))
+      })
     }
 
     done = ordersDone && statementsDone && payoutsDone

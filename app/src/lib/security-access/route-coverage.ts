@@ -183,6 +183,7 @@ export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
   "ecommerce/tiktok-shop/connect": { kind: 'ENTERPRISE', permissions: ["ecommerce.order.manage"], via: ["lib/marketplace/access.ts"] },
   "ecommerce/tiktok-shop/daily-report": { kind: 'ENTERPRISE', permissions: ["ecommerce.order.manage"], via: ["lib/marketplace/access.ts"] },
   "ecommerce/tiktok-shop/import": { kind: 'ENTERPRISE', permissions: ["ecommerce.order.manage"], via: ["lib/marketplace/access.ts"] },
+  "ecommerce/tiktok-shop/reports": { kind: 'ENTERPRISE', permissions: ["ecommerce.order.manage"], via: ["lib/marketplace/access.ts"] },
   "ecommerce/tiktok-shop/sync": { kind: 'ENTERPRISE', permissions: ["ecommerce.order.manage"], via: ["lib/marketplace/access.ts"] },
   "email/send": { kind: 'ENTERPRISE', permissions: ["platform.settings.manage"] },
   "email/usage": { kind: 'ENTERPRISE', permissions: ["platform.settings.manage"] },
