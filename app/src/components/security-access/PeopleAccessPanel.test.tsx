@@ -334,9 +334,9 @@ describe('People & Access across organizations (server-side directory)', () => {
     organization: { org_name: 'Manu Manufacturing', org_type_code: 'MFG' }, membership: [] }
   const viewOnly = { id: 'vo', full_name: 'View Only', email: 'vo@dev.com', role_code: 'USER', is_active: true, organization_id: DIST,
     organization: { org_name: 'North Distributor', org_type_code: 'DIST' },
-    membership: [{ id: 'mvo', organization_id: DIST, organization: DIST_ORG, status: 'active', is_primary: true, grantable: false, grant_blocked_reason: 'not_authorized', organization: { org_name: 'North Distributor', org_type_code: 'DIST' }, assignments: [] }] }
+    membership: [{ id: 'mvo', organization_id: DIST, status: 'active', is_primary: true, grantable: false, grant_blocked_reason: 'not_authorized', organization: { org_name: 'North Distributor', org_type_code: 'DIST' }, assignments: [] }] }
   const hq = (n: number): any => ({ id: `hq${n}`, full_name: `Bulk Person ${String(n).padStart(3, '0')}`, email: `bulk${n}@dev.com`, role_code: 'USER', is_active: true, organization_id: HQ,
-    organization: { org_name: 'Serapod HQ', org_type_code: 'HQ' }, membership: [{ id: `mh${n}`, organization_id: HQ, organization: HQ_ORG, status: 'active', is_primary: true, grantable: true, organization: { org_name: 'Serapod HQ', org_type_code: 'HQ' }, assignments: [] }] })
+    organization: { org_name: 'Serapod HQ', org_type_code: 'HQ' }, membership: [{ id: `mh${n}`, organization_id: HQ, status: 'active', is_primary: true, grantable: true, organization: { org_name: 'Serapod HQ', org_type_code: 'HQ' }, assignments: [] }] })
   const base = { viewerId: 'viewer', organizations: [], roles: ROLES, scopeDefinitions: [{ id: 'scope-mfg', organization_id: MFG, scope_type: 'organization', display_name: 'Manu Manufacturing' }] }
 
   it('finds a manufacturer user by email on the server and shows organization and type distinctly from internal staff', async () => {
@@ -410,7 +410,7 @@ describe('People & Access across organizations (server-side directory)', () => {
 
   it('other blockers stay distinct: own row, inactive account, inactive membership, view-only authority', async () => {
     const inactiveAcct = { ...hq(1), id: 'ia', full_name: 'Inactive Account', is_active: false }
-    const inactiveMem = { ...hq(2), id: 'im', full_name: 'Inactive Membership', membership: [{ id: 'x', organization_id: HQ, organization: HQ_ORG, status: 'inactive', is_primary: true, grantable: false, grant_blocked_reason: 'membership_not_active', organization: { org_name: 'Serapod HQ', org_type_code: 'HQ' }, assignments: [] }] }
+    const inactiveMem = { ...hq(2), id: 'im', full_name: 'Inactive Membership', membership: [{ id: 'x', organization_id: HQ, status: 'inactive', is_primary: true, grantable: false, grant_blocked_reason: 'membership_not_active', organization: { org_name: 'Serapod HQ', org_type_code: 'HQ' }, assignments: [] }] }
     await mountPanel({ ...base, people: [viewOnly, inactiveAcct, inactiveMem, { ...hq(9), id: 'viewer', full_name: 'Me Myself' }] }, vi.fn(), undefined, { organizations: [mfgOrg] })
     const expectWhy = async (name: string, text: RegExp) => {
       const row = within(screen.getByRole('button', { name: new RegExp(`^${name}`) }).closest('li')!)
@@ -564,13 +564,13 @@ describe('People & Access redesign: presentation of memberships, status and hist
     people: [{
       id: 'u9', full_name: 'Averyveryverylongname Withalongsurname', email: 'averyveryverylongemailaddress.for.layout@subdomain.example-company-name.test', role_code: 'HQ', principal_type: 'INTERNAL_EMPLOYEE', is_active: true,
       membership: [
-        { id: 'mA', organization_id: HQ, organization: HQ_ORG, status: 'active', is_primary: true, organization: { org_name: 'Serapod HQ', org_type_code: 'HQ' }, assignments: [
+        { id: 'mA', organization_id: HQ, status: 'active', is_primary: true, organization: { org_name: 'Serapod HQ', org_type_code: 'HQ' }, assignments: [
           assignment('g1', 'r-order', 'manual', { scopes: [{ scope: { id: 'own-hq', display_name: 'Own record' } }] }),
           assignment('g2', 'r-gl', 'manual', { status: 'revoked', effective_until: '2026-10-01T10:00:00Z' }),
           assignment('g3', 'r-crm', 'access_request', { effective_until: past }),
           assignment('g4', 'r-pfa', 'manual', { effective_until: '2099-01-01T00:00:00Z' }),
         ] },
-        { id: 'mB', organization_id: DIST, organization: DIST_ORG, status: 'suspended', is_primary: false, organization: { org_name: longOrg, org_type_code: 'DIST' }, assignments: [] },
+        { id: 'mB', organization_id: DIST, status: 'suspended', is_primary: false, organization: { org_name: longOrg, org_type_code: 'DIST' }, assignments: [] },
       ],
     }],
   }
@@ -938,7 +938,7 @@ describe('Grant a Group Policy: existing Full Access coverage', () => {
     return { id, status: 'active', source: 'manual', effective_from: null, effective_until: null, role: { id: r.id, name: r.name, source: r.source }, scopes: [hqScope], ...extra }
   }
   const admin = (assignments: any[], extra: any[] = []) => ({ id: 'u7', full_name: 'Ada Admin', email: 'admin@dev.test', role_code: 'HQ', is_active: true,
-    membership: [{ id: 'm7', organization_id: HQ, organization: HQ_ORG, status: 'active', is_primary: true, organization: { org_name: 'Serapod HQ', org_type_code: 'HQ' }, assignments }, ...extra] })
+    membership: [{ id: 'm7', organization_id: HQ, status: 'active', is_primary: true, organization: { org_name: 'Serapod HQ', org_type_code: 'HQ' }, assignments }, ...extra] })
   const EXAMPLE = [g('b1', 'r-bank'), g('b2', 'r-sa-fa'), g('b3', 'r-pwd'), g('b4', 'r-plat-fa')]
   const world = (people: any[]) => ({ ...data, roles: COV_ROLES, people: [...people, ...data.people] })
   const moduleNames = () => Array.from((screen.getByRole('combobox', { name: 'Module filter' }) as HTMLSelectElement).options).map(o => o.textContent)
@@ -1006,7 +1006,7 @@ describe('Grant a Group Policy: existing Full Access coverage', () => {
     expect(moduleNames()).toContain('Security & Access')
     cleanup()
     // Full Access on the Distributor membership only: offered for HQ, hidden for the Distributor.
-    const dual = admin([], [{ id: 'm7b', organization_id: DIST, organization: DIST_ORG, status: 'active', is_primary: false, organization: { org_name: 'North Distributor', org_type_code: 'DIST' }, assignments: [g('b9', 'r-sa-fa', { scopes: [distScope] })] }])
+    const dual = admin([], [{ id: 'm7b', organization_id: DIST, status: 'active', is_primary: false, organization: { org_name: 'North Distributor', org_type_code: 'DIST' }, assignments: [g('b9', 'r-sa-fa', { scopes: [distScope] })] }])
     await mountPanel(world([dual]))
     await openGrantFor('Ada Admin')
     await userEvent.click(screen.getByRole('combobox', { name: 'Membership organization' }))

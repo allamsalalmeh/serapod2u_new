@@ -47,7 +47,7 @@ const cutoffMigrations = [
 const finalFunctionBodies = new Map<string, string>()
 for (const sql of [schema, ...stockConfigMigrations, ...cutoffMigrations]) {
   for (const match of sql.matchAll(
-    /CREATE(?: OR REPLACE)? FUNCTION public\.([a-zA-Z0-9_]+)\([^;]*?AS \$\$(.*?)\$\$;/gsi,
+    /CREATE(?: OR REPLACE)? FUNCTION public\.([a-zA-Z0-9_]+)\([^;]*?AS \$\$([\s\S]*?)\$\$;/gi,
   )) {
     finalFunctionBodies.set(match[1], match[2])
   }
@@ -62,7 +62,7 @@ describe('stock movement consumer audit contract', () => {
 
   it.skipIf(!stagingSnapshot)('corrects all schema views that expose quantity_after', () => {
     const viewNames = Array.from(
-      schema.matchAll(/CREATE VIEW public\.([a-zA-Z0-9_]+) AS\s+(.*?);/gs),
+      schema.matchAll(/CREATE VIEW public\.([a-zA-Z0-9_]+) AS\s+([\s\S]*?);/g),
       match => ({ name: match[1], body: match[2] }),
     )
       .filter(view => view.body.includes('quantity_after'))

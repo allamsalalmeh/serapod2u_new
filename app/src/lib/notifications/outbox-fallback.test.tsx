@@ -4,7 +4,7 @@ import { queueRoutingFallback } from './outbox-fallback'
 function makeSupabase(input: {
     preset: string
     providers: Array<{ channel: string; provider_name: string }>
-    existing?: Array<{ id: string }>
+    existing?: Array<{ id: string; to_phone?: string }>
     userEmail?: string | null
     insertError?: string | null
 }) {

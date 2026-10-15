@@ -50,7 +50,7 @@ describe('ranking record links', () => {
   it('keeps filtering, sorting, pagination and CSV export available', async () => {
     const rows = Array.from({ length: 21 }, (_, index) => ({ ...row, shop_id: `10000000-0000-4000-8000-${String(index).padStart(12, '0')}`, shop_name: `Outlet ${String(index).padStart(2, '0')}` }))
     mount(rows); await screen.findByText('Page 1 of 2')
-    fireEvent.click(screen.getByRole('columnheader', { name: 'Shop', exact: true }))
+    fireEvent.click(screen.getByRole('columnheader', { name: 'Shop' }))
     expect(screen.getAllByRole('link')[0].textContent).toBe('Outlet 20')
     fireEvent.click(screen.getByText('Page 1 of 2').nextElementSibling!)
     expect(screen.getByText('Page 2 of 2')).toBeTruthy()
