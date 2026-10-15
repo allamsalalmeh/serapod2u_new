@@ -5,6 +5,7 @@ import { AlertTriangle, CheckCircle2, FileSpreadsheet, Link2, Loader2, Plus, Ref
 import SupplyChainPageHeader from '@/modules/supply-chain/components/SupplyChainPageHeader'
 import { TIKTOK_CONNECT_MESSAGES } from '@/lib/marketplace/tiktok-connect-messages'
 import TikTokDailyReportPanel from './TikTokDailyReportPanel'
+import TikTokReportsPanel from './TikTokReportsPanel'
 
 interface TikTokShopViewProps {
     userProfile: any
@@ -12,6 +13,7 @@ interface TikTokShopViewProps {
 }
 
 type Tab = 'summary' | 'orders' | 'settlements' | 'payouts' | 'history'
+type Section = 'reports' | 'packing' | 'records'
 
 const money = (v: unknown) =>
     `RM ${(Number(v) || 0).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -66,6 +68,7 @@ export default function TikTokShopView(_props: TikTokShopViewProps) {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
     const [tab, setTab] = useState<Tab>('summary')
+    const [section, setSection] = useState<Section>('reports')
 
     const [newShop, setNewShop] = useState('')
     const [addingShop, setAddingShop] = useState(false)
@@ -81,6 +84,7 @@ export default function TikTokShopView(_props: TikTokShopViewProps) {
         const params = new URLSearchParams(window.location.search)
         const outcome = params.get('tiktok')
         if (!outcome) return
+        setSection('records')
         const message = TIKTOK_CONNECT_MESSAGES[outcome] || TIKTOK_CONNECT_MESSAGES.error
         if (outcome === 'connected') setResult(message)
         else setError(message)
@@ -233,7 +237,7 @@ export default function TikTokShopView(_props: TikTokShopViewProps) {
             <SupplyChainPageHeader
                 eyebrow="Customer & Growth"
                 title="TikTok Shop"
-                description="Sales, settlements and payouts from the TikTok Shop API or Seller Center exports"
+                description="Sales, settlement and shipping reports from TikTok Shop"
                 actions={
                     <button onClick={load} disabled={loading} className={buttonClass}>
                         <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -255,6 +259,44 @@ export default function TikTokShopView(_props: TikTokShopViewProps) {
                 </div>
             )}
 
+            <div role="tablist" aria-label="TikTok Shop sections" className="flex gap-1 border-b border-[var(--sera-line)] overflow-x-auto overflow-y-hidden">
+                {([
+                    ['reports', 'Reports'],
+                    ['packing', 'Packing list'],
+                    ['records', 'Records'],
+                ] as const).map(([value, text]) => (
+                    <button
+                        key={value}
+                        role="tab"
+                        aria-selected={section === value}
+                        onClick={() => setSection(value)}
+                        className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px whitespace-nowrap transition-colors ${section === value
+                            ? 'border-[var(--sera-orange,#f97316)] text-[var(--sera-ink)]'
+                            : 'border-transparent text-[var(--sera-muted)] hover:text-[var(--sera-ink)]'}`}
+                    >
+                        {text}
+                    </button>
+                ))}
+            </div>
+
+            {section === 'reports' && (
+                shops.length > 0 ? (
+                    <TikTokReportsPanel shops={shops} defaultShopId={shopId} />
+                ) : loading ? (
+                    <div className="flex items-center justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+                ) : (
+                    <div className="sera-sc-panel p-8 text-center text-sm text-[var(--sera-muted)]">
+                        No TikTok shop yet. Add one in{' '}
+                        <button onClick={() => setSection('records')} className="font-medium text-[var(--sera-orange)] hover:underline">Records</button>.
+                    </div>
+                )
+            )}
+
+            {section === 'packing' && shopId && (
+                <TikTokDailyReportPanel shopId={shopId} shopName={shops.find(x => x.id === shopId)?.shop_name || ''} shopCount={shops.length} />
+            )}
+
+            {section === 'records' && (<>
             <div className="sera-sc-panel p-4 flex flex-col md:flex-row md:items-end gap-3">
                 <label className="flex flex-col gap-1 text-xs text-[var(--sera-muted)]">
                     Shop
@@ -331,10 +373,6 @@ export default function TikTokShopView(_props: TikTokShopViewProps) {
                         <p className="flex items-start gap-2 text-xs text-amber-700"><AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />The TikTok authorization ends on {reconnectBy}. Click Disconnect and connect again before then.</p>
                     )}
                 </div>
-            )}
-
-            {shopId && (
-                <TikTokDailyReportPanel shopId={shopId} shopName={shops.find(x => x.id === shopId)?.shop_name || ''} shopCount={shops.length} />
             )}
 
             {shopId && (
@@ -537,6 +575,7 @@ export default function TikTokShopView(_props: TikTokShopViewProps) {
                     )}
                 </>
             )}
+            </>)}
         </div>
     )
 }

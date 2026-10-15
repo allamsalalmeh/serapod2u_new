@@ -239,6 +239,18 @@ export function getWithdrawals(app: TikTokShopApp, accessToken: string, shopCiph
   })
 }
 
+/** Order transactions TikTok has not settled yet (estimated amounts and the reason). */
+export function getUnsettledTransactions(app: TikTokShopApp, accessToken: string, shopCipher: string, pageToken?: string, fetchImpl?: Fetch) {
+  return callTikTokApi<{ transactions?: any[]; next_page_token?: string }>({
+    path: '/finance/202507/orders/unsettled',
+    app,
+    accessToken,
+    shopCipher,
+    query: { page_size: 100, sort_field: 'order_create_time', sort_order: 'DESC', page_token: pageToken },
+    fetchImpl,
+  })
+}
+
 // ── Mappers ───────────────────────────────────────────────────────────
 
 /** Unix seconds → Malaysia calendar date (YYYY-MM-DD). */
@@ -336,6 +348,7 @@ export function mapOrderToLines(order: any): ApiOrderLine[] {
       fulfillment_type: humanize(order.fulfillment_type),
       delivery_option: text(order.delivery_option_name),
       shipping_provider: text(order.shipping_provider),
+      tracking_number: text(first.tracking_number) ?? text(order.tracking_number),
       payment_method: text(order.payment_method_name),
       package_id: text(first.package_id),
       buyer_state: district('L1'),
@@ -452,6 +465,42 @@ export function mapStatementTransaction(statementId: string, statementTime: numb
       adjustment_amount: amount(tx.adjustment_amount),
       fee_breakdown: fees,
     },
+  }
+}
+
+export interface ApiUnsettled {
+  transaction_id: string
+  transaction_type: string | null
+  order_id: string | null
+  order_created_at: string | null
+  delivered_at: string | null
+  status: string | null
+  reason: string | null
+  currency: string | null
+  est_revenue: string | null
+  est_fees: string | null
+  est_shipping: string | null
+  est_settlement: string | null
+}
+
+/** One unsettled order transaction → one marketplace_unsettled row. */
+export function mapUnsettledTransaction(tx: any): ApiUnsettled | null {
+  const transactionId = text(tx?.id)
+  if (!transactionId || !/^[A-Za-z0-9_-]{1,64}$/.test(transactionId)) return null
+  const orderId = text(tx.order_id)
+  return {
+    transaction_id: transactionId,
+    transaction_type: TRANSACTION_TYPE[String(tx.type)] ?? humanize(tx.type),
+    order_id: orderId && /^\d{6,30}$/.test(orderId) ? orderId : null,
+    order_created_at: unixToIso(tx.order_create_time),
+    delivered_at: unixToIso(tx.order_delivery_time),
+    status: humanize(tx.status),
+    reason: humanize(tx.unsettled_reason),
+    currency: text(tx.currency),
+    est_revenue: amount(tx.est_revenue_amount),
+    est_fees: amount(tx.est_fee_tax_amount),
+    est_shipping: amount(tx.est_shipping_cost_amount),
+    est_settlement: amount(tx.est_settlement_amount),
   }
 }
 

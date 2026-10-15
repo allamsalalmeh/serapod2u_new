@@ -7,6 +7,7 @@ import {
   isTikTokShopApiConfigured,
   mapOrderToLines,
   mapStatementTransaction,
+  mapUnsettledTransaction,
   mapWithdrawal,
   myDateToUnix,
   signTikTokRequest,
@@ -15,7 +16,7 @@ import {
   unixToMyDate,
 } from './tiktok-api'
 import { pickTikTokShop, readTikTokStateCookie, tiktokStateCookie } from './tiktok-oauth'
-import { claimSyncRun } from './tiktok-sync'
+import { claimSyncRun, refreshUnsettled } from './tiktok-sync'
 
 const env = { ...process.env }
 beforeEach(() => {
@@ -183,6 +184,13 @@ describe('mapOrderToLines', () => {
     }
   })
 
+  it('keeps the parcel tracking number, from the line item or else the order', () => {
+    expect(mapOrderToLines({ ...order, tracking_number: 'JNT000111' })[0].row.tracking_number).toBe('JNT000111')
+    const perItem = { ...order, tracking_number: 'JNT000111', line_items: [unit('111', { tracking_number: 'JNT000222' })] }
+    expect(mapOrderToLines(perItem)[0].row.tracking_number).toBe('JNT000222')
+    expect(mapOrderToLines(order)[0].row.tracking_number).toBeNull()
+  })
+
   it('maps cancelled orders to the export wording and skips bad IDs', () => {
     expect(mapOrderToLines({ ...order, status: 'CANCELLED' })[0].row.order_status).toBe('Canceled')
     expect(mapOrderToLines({ ...order, id: '5.83E+17' })).toEqual([])
@@ -236,6 +244,75 @@ describe('mapWithdrawal', () => {
   it('shows withdrawals as money out even when the API amount is positive', () => {
     expect(mapWithdrawal({ id: '3683478646751987069', type: 'WITHDRAW', amount: '24761.2', status: 'SUCCESS', create_time: 1790000000 })!.row.amount).toBe('-24761.20')
     expect(mapWithdrawal({ id: '3683478646751987070', type: 'SETTLE', amount: '342.83', status: 'SUCCESS', create_time: 1790000000 })!.row.amount).toBe('342.83')
+  })
+})
+
+describe('mapUnsettledTransaction', () => {
+  const tx = {
+    id: '7561000000000000001', type: 'ORDER', order_id: '583000000000000009', status: 'UNSETTLED',
+    unsettled_reason: 'WAITING_FOR_PACKAGE_DELIVERY', currency: 'MYR',
+    order_create_time: Date.parse('2026-10-10T02:00:00Z') / 1000, order_delivery_time: 0,
+    est_revenue_amount: '59.9', est_fee_tax_amount: '-9.12', est_shipping_cost_amount: '-3', est_settlement_amount: '47.78',
+    fee_tax_breakdown: { fee: { platform_commission_amount: '-6' } },
+  }
+
+  it('maps estimated amounts, reason and dates', () => {
+    expect(mapUnsettledTransaction(tx)).toEqual({
+      transaction_id: '7561000000000000001', transaction_type: 'Order', order_id: '583000000000000009',
+      order_created_at: '2026-10-10T02:00:00.000Z', delivered_at: null, status: 'Unsettled', reason: 'Waiting for package delivery',
+      currency: 'MYR', est_revenue: '59.90', est_fees: '-9.12', est_shipping: '-3.00', est_settlement: '47.78',
+    })
+  })
+
+  it('skips rows without a usable ID', () => {
+    expect(mapUnsettledTransaction({ ...tx, id: '' })).toBeNull()
+    expect(mapUnsettledTransaction({ ...tx, id: 'a b' })).toBeNull()
+    expect(mapUnsettledTransaction({ ...tx, order_id: '5.8E+17' })!.order_id).toBeNull()
+  })
+})
+
+describe('refreshUnsettled', () => {
+  const app = { appKey: 'appkey1', appSecret: 'secret1', serviceId: '1', shops: [] }
+  const conn = { shop_id: 's1', company_id: 'c1', shop_cipher: 'ROW_1' }
+  const fakeDb = () => {
+    const calls: any[] = []
+    const builder: any = {}
+    for (const m of ['upsert', 'delete', 'eq', 'lt']) builder[m] = vi.fn((...args: any[]) => { calls.push([m, ...args]); return builder })
+    builder.then = (resolve: any) => resolve({ data: null, error: null })
+    return { db: { from: (table: string) => { calls.push(['from', table]); return builder } }, calls }
+  }
+  const page = (transactions: any[], next = '') => new Response(JSON.stringify({ code: 0, data: { transactions, next_page_token: next } }), { status: 200 })
+  const row = (id: string) => ({ id, type: 'ORDER', order_id: '583000000000000009', est_settlement_amount: '10' })
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('replaces the snapshot after reading every page', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(page([row('1'), row('2')], 'next'))
+      .mockResolvedValueOnce(page([row('2'), row('3')]))
+    vi.stubGlobal('fetch', fetchMock)
+    const { db, calls } = fakeDb()
+    expect(await refreshUnsettled(db, conn, app, 'tok', Date.now() + 60_000)).toBe(true)
+    const upserted = calls.find(c => c[0] === 'upsert')
+    expect(upserted[1].map((r: any) => r.transaction_id)).toEqual(['1', '2', '3'])
+    expect(upserted[1][0]).toMatchObject({ shop_id: 's1', company_id: 'c1', est_settlement: '10.00' })
+    expect(upserted[2]).toEqual({ onConflict: 'shop_id,transaction_id' })
+    expect(calls).toContainEqual(['delete'])
+    expect(calls).toContainEqual(['lt', 'synced_at', upserted[1][0].synced_at])
+  })
+
+  it('clears the snapshot when nothing is pending', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(page([])))
+    const { db, calls } = fakeDb()
+    expect(await refreshUnsettled(db, conn, app, 'tok', Date.now() + 60_000)).toBe(true)
+    expect(calls.some(c => c[0] === 'delete')).toBe(true)
+  })
+
+  it('keeps the old snapshot when time runs out before the last page', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(page([row('1')], 'next')))
+    const { db, calls } = fakeDb()
+    expect(await refreshUnsettled(db, conn, app, 'tok', Date.now() - 1)).toBe(false)
+    expect(calls.some(c => c[0] === 'upsert' || c[0] === 'delete')).toBe(false)
   })
 })
 
