@@ -259,7 +259,7 @@ export default function TikTokShopView(_props: TikTokShopViewProps) {
                 </div>
             )}
 
-            <div role="tablist" aria-label="TikTok Shop sections" className="flex gap-1 border-b border-[var(--sera-line)] overflow-x-auto">
+            <div role="tablist" aria-label="TikTok Shop sections" className="flex gap-1 border-b border-[var(--sera-line)] overflow-x-auto overflow-y-hidden">
                 {([
                     ['reports', 'Reports'],
                     ['packing', 'Packing list'],
