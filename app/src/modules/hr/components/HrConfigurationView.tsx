@@ -230,7 +230,7 @@ export default function HrConfigurationView({ organizationId, canEdit, onNavigat
       setAudit(data)
       // In guided mode, auto-expand sections that need attention
       if (isGuided) {
-        const needsAttention = new Set(
+        const needsAttention = new Set<string>(
           (data.sections || [])
             .filter((s: AuditSection) => s.checks.some((c: AuditCheck) => c.status !== 'configured'))
             .map((s: AuditSection) => s.section)

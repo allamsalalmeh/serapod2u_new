@@ -365,7 +365,7 @@ function buildIndividualSheet(
   workbook: ExcelJS.Workbook | ExcelJS.stream.xlsx.WorkbookWriter,
   data: QRExcelData,
   codesSlice: GeneratedQRCode[]
-): Promise<void> {
+): void {
   const sheetName = 'Individual QR Codes'
 
   const sheet = workbook.addWorksheet(sheetName)
@@ -472,7 +472,7 @@ function buildProductBreakdownSheet(
   workbook: ExcelJS.Workbook | ExcelJS.stream.xlsx.WorkbookWriter,
   data: QRExcelData,
   productGroups: Map<string, ProductGroupAggregate>
-): Promise<void> {
+): void {
   const sheet = workbook.addWorksheet('Product Breakdown')
   sheet.columns = [
     { header: 'Product Code', key: 'productCode', width: 18 },

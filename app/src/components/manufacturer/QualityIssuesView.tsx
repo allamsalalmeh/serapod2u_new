@@ -1308,7 +1308,7 @@ function CreateIssueModal({
                     image_url: variant.image_url || null,
                     base_cost: variant.base_cost != null ? Number(variant.base_cost) : null,
                     attributes: variant.attributes || null,
-                })).sort((left, right) => {
+                })).sort((left: VariantOption, right: VariantOption) => {
                     const productCompare = left.product_name.localeCompare(right.product_name)
                     if (productCompare !== 0) return productCompare
                     return (left.variant_name || '').localeCompare(right.variant_name || '')

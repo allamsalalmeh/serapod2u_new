@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -1125,7 +1125,7 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
   }
 
   const getStatusColor = (status: OrderStatus) => {
-    const colors = {
+    const colors: Partial<Record<OrderStatus, string>> = {
       draft: 'sera-sc-badge sera-sc-badge--ink',
       submitted: 'sera-sc-badge sera-sc-badge--info',
       approved: 'sera-sc-badge sera-sc-badge--success',
@@ -1135,7 +1135,7 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
   }
 
   const getStatusIcon = (status: OrderStatus) => {
-    const icons = {
+    const icons: Partial<Record<OrderStatus, ReactNode>> = {
       draft: <Edit className="w-4 h-4" />,
       submitted: <Clock className="w-4 h-4" />,
       approved: <CheckCircle className="w-4 h-4" />,

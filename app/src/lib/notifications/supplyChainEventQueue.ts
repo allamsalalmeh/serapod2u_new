@@ -137,7 +137,7 @@ export async function queueNotificationEvent(supabase: SupabaseLikeClient, input
             .eq('is_active', true)
             .in('channel', chain)
 
-        const providerByChannel = new Map(
+        const providerByChannel = new Map<string, string>(
             (activeProviders || []).map((provider: any) => [provider.channel, provider.provider_name]),
         )
         const firstAvailable = firstAvailableDeliveryChannel(routingPreset, providerByChannel.keys())
