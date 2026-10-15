@@ -835,24 +835,24 @@ export default function OrderDocumentsDialogEnhanced({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 z-50 overflow-y-auto">
-      <div className="min-h-screen px-4 py-8">
+      <div className="min-h-screen px-2 py-4 sm:px-4 sm:py-8">
         <div className="max-w-6xl mx-auto bg-white rounded-lg shadow-xl">
           {/* Header */}
-          <div className="flex items-center justify-between p-6 border-b">
-            <div>
-              <h2 className="text-2xl font-bold text-gray-900">Order Documents</h2>
-              <p className="text-gray-600 mt-1">Order No: {effectiveDisplayOrderNo}</p>
+          <div className="flex items-center justify-between gap-3 p-4 sm:p-6 border-b">
+            <div className="min-w-0">
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Order Documents</h2>
+              <p className="text-gray-600 mt-1 break-words">Order No: {effectiveDisplayOrderNo}</p>
               {effectiveDisplayOrderNo && effectiveDisplayOrderNo !== orderNo && (
                 <p className="text-gray-400 text-sm">Legacy: {orderNo}</p>
               )}
             </div>
-            <Button variant="ghost" size="icon" onClick={onClose}>
+            <Button variant="ghost" size="icon" onClick={onClose} className="shrink-0">
               <X className="w-5 h-5" />
             </Button>
           </div>
 
           {/* Content */}
-          <div className="p-6 space-y-6">
+          <div className="p-3 sm:p-6 space-y-6">
             {/* Workflow Progress */}
             <DocumentWorkflowProgress
               documents={documents as any}
@@ -881,7 +881,7 @@ export default function OrderDocumentsDialogEnhanced({
                 </TabsList>
               ) : is50_50Split ? (
                 // 50/50 Split Payment Tabs
-                <TabsList className="grid w-full grid-cols-3 lg:grid-cols-6">
+                <TabsList className="grid h-auto w-full grid-cols-3 lg:h-10 lg:grid-cols-6">
                   <TabsTrigger value="po">
                     <span className="sm:hidden">PO</span>
                     <span className="hidden sm:inline">Purchase Order</span>
@@ -924,7 +924,7 @@ export default function OrderDocumentsDialogEnhanced({
                     <div className="space-y-4">
                       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                         <h3 className="font-semibold text-blue-900 mb-2">Sales Order Details</h3>
-                        <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                           <div>
                             <span className="text-blue-700">Document No:</span>{' '}
                             <span className="font-medium">{getDisplayDocNo(documents.so)}</span>
@@ -982,7 +982,7 @@ export default function OrderDocumentsDialogEnhanced({
                     <div className="space-y-4">
                       <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
                         <h3 className="font-semibold text-indigo-900 mb-2">Delivery Order Details</h3>
-                        <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                           <div>
                             <span className="text-indigo-700">Document No:</span>{' '}
                             <span className="font-medium">{getDisplayDocNo(documents.do)}</span>
@@ -1049,7 +1049,7 @@ export default function OrderDocumentsDialogEnhanced({
                     <div className="space-y-4">
                       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                         <h3 className="font-semibold text-blue-900 mb-2">Purchase Order Details</h3>
-                        <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                           <div>
                             <span className="text-blue-700">Document No:</span>{' '}
                             <span className="font-medium">{getDisplayDocNo(documents.po)}</span>
@@ -1144,7 +1144,7 @@ export default function OrderDocumentsDialogEnhanced({
                   <div className="space-y-4">
                     <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                       <h3 className="font-semibold text-green-900 mb-2">Invoice Details</h3>
-                      <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                         <div>
                           <span className="text-green-700">Document No:</span>{' '}
                           <span className="font-medium">{getDisplayDocNo(documents.invoice)}</span>
@@ -1266,7 +1266,7 @@ export default function OrderDocumentsDialogEnhanced({
                   <div className="space-y-4">
                     <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
                       <h3 className="font-semibold text-purple-900 mb-2">Payment Details</h3>
-                      <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                         <div>
                           <span className="text-purple-700">Document No:</span>{' '}
                           <span className="font-medium">{getDisplayDocNo(documents.payment)}</span>
@@ -1348,7 +1348,7 @@ export default function OrderDocumentsDialogEnhanced({
                     {console.log('📄 Deposit Invoice Tab - manufacturerDocUrl:', manufacturerDocUrl)}
                     <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                       <h3 className="font-semibold text-green-900 mb-2">Deposit Invoice Details ({depositPercentage}%)</h3>
-                      <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                         <div>
                           <span className="text-green-700">Document No:</span>{' '}
                           <span className="font-medium">{getDisplayDocNo(documents.depositInvoice)}</span>
@@ -1497,7 +1497,7 @@ export default function OrderDocumentsDialogEnhanced({
                   <div className="space-y-4">
                     <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
                       <h3 className="font-semibold text-purple-900 mb-2">Deposit Payment Details ({depositPercentage}%)</h3>
-                      <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                         <div>
                           <span className="text-purple-700">Document No:</span>{' '}
                           <span className="font-medium">{getDisplayDocNo(documents.depositPayment)}</span>
@@ -1625,7 +1625,7 @@ export default function OrderDocumentsDialogEnhanced({
                   <div className="space-y-4">
                     <div className="bg-teal-50 border border-teal-200 rounded-lg p-4">
                       <h3 className="font-semibold text-teal-900 mb-2">Balance Payment Request ({balancePercentage}%)</h3>
-                      <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                         <div>
                           <span className="text-teal-700">Document No:</span>{' '}
                           <span className="font-medium">{getDisplayDocNo(documents.balancePaymentRequest)}</span>
@@ -1750,7 +1750,7 @@ export default function OrderDocumentsDialogEnhanced({
                   <div className="space-y-4">
                     <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
                       <h3 className="font-semibold text-indigo-900 mb-2">Balance Payment Details ({balancePercentage}%)</h3>
-                      <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                         <div>
                           <span className="text-indigo-700">Document No:</span>{' '}
                           <span className="font-medium">{getDisplayDocNo(documents.balancePayment)}</span>
@@ -1876,7 +1876,7 @@ export default function OrderDocumentsDialogEnhanced({
                               DEPOSIT
                             </span>
                           </div>
-                          <div className="grid grid-cols-2 gap-3 text-sm">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                             <div>
                               <span className={documents.finalReceipt ? 'text-emerald-700' : 'text-amber-700'}>Document No:</span>{' '}
                               <span className="font-medium">{getDisplayDocNo(documents.depositReceipt)}</span>
@@ -1929,7 +1929,7 @@ export default function OrderDocumentsDialogEnhanced({
                               {documents.depositReceipt ? 'BALANCE' : 'FINAL'}
                             </span>
                           </div>
-                          <div className="grid grid-cols-2 gap-3 text-sm">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                             <div>
                               <span className="text-emerald-700">Document No:</span>{' '}
                               <span className="font-medium">{getDisplayDocNo(documents.finalReceipt)}</span>
