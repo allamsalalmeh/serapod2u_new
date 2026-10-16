@@ -606,8 +606,8 @@ export class ClassicTemplate {
     this.doc.setFont('helvetica', 'bold')
     this.doc.setTextColor(0, 0, 0)
 
+    const isBoxedOrder = ['H2M', 'D2H', 'DH'].includes(orderData.order_type)
     if (!hidePrices) {
-      const isBoxedOrder = ['H2M', 'D2H', 'DH'].includes(orderData.order_type)
       if (isSalesOrderDoc || !isBoxedOrder) {
         const totalX = this.pageWidth - this.margin - 30
         this.doc.text('Total', totalX - 20, y, { align: 'right' })
