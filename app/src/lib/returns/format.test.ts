@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { getVariantDisplayName, classifyProductLine, productLineLabel, getUnitsPerCase, formatReturnAmount, caseUnitLabel } from './format'
+import {
+    getVariantDisplayName, classifyProductLine, productLineLabel, getUnitsPerCase, getRowUnitsPerCase,
+    isCartridgeLine, isDeviceLine, formatReturnAmount, caseUnitLabel,
+} from './format'
 
 describe('getVariantDisplayName', () => {
     // Spec §5 display-extraction table.
@@ -62,6 +65,25 @@ describe('getUnitsPerCase', () => {
     it('falls back to 1 for non-Cellera products without a reliable pack size', () => {
         expect(getUnitsPerCase('Some Device', 1)).toBe(1)
         expect(getUnitsPerCase('Accessory', null)).toBe(1)
+    })
+})
+
+describe('isCartridgeLine / getRowUnitsPerCase', () => {
+    it('marks only Hero and Zero as cartridges', () => {
+        expect(isCartridgeLine('hero')).toBe(true)
+        expect(isCartridgeLine('zero')).toBe(true)
+        expect(isCartridgeLine('sbox')).toBe(false)
+        expect(isCartridgeLine('sline')).toBe(false)
+        expect(isCartridgeLine('other')).toBe(false)
+        expect(isDeviceLine('sbox')).toBe(true)
+    })
+
+    it('Cases pack size is only for cartridges — devices and other products stay at 1 pcs', () => {
+        expect(getRowUnitsPerCase('hero', 'Cellera Hero', 1)).toBe(4)
+        expect(getRowUnitsPerCase('zero', 'Cellera Zero', null)).toBe(4)
+        expect(getRowUnitsPerCase('sbox', 'Serapod Device S.Box', 10)).toBe(1)
+        expect(getRowUnitsPerCase('other', 'SERAPOD PRESTIGE KUREX', 12)).toBe(1)
+        expect(getRowUnitsPerCase('other', 'Moonchair Camping Chair', 6)).toBe(1)
     })
 })
 
