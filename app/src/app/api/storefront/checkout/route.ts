@@ -10,6 +10,13 @@ import { easyParcelRateCheck, isEasyParcelBookingEnabled, isEasyParcelConfigured
 import { toEasyParcelState } from '@/lib/shipping/malaysia-states'
 import { recordOrderEvent } from '@/lib/storefront/order-events'
 import { sellableStock, stockShortfall } from '@/lib/storefront/order-stock'
+import { allocateBundlePrice, bundleIdFromCartId, isBundleCartId } from '@/lib/outdoor/sales-tools'
+import {
+  loadOrderBumpOffer,
+  loadOutdoorBundles,
+  loadOutdoorCheckoutSettings,
+  resolveOutdoorAffiliate,
+} from '@/lib/outdoor/sales-tools-server'
 
 // NOTE: storefront_orders / storefront_order_items are not in the
 // auto-generated database types yet. After running STOREFRONT_MIGRATION.sql
@@ -56,6 +63,10 @@ interface CheckoutBody {
     referrerDomain?: string
   } | null
   paymentProvider?: string
+  /** Outdoor: the shopper ticked the checkout offer. */
+  orderBump?: boolean
+  /** Outdoor: live host / affiliate code from a ?ref= link. */
+  affiliateCode?: string
 }
 
 const MAX_LINE_QUANTITY = 999
@@ -148,7 +159,32 @@ export async function POST(request: NextRequest) {
     const landingPageAttribution = await validateLandingPageCheckoutAttribution(supabase, body.landingPageAttribution)
 
     // ── 1. Verify prices server-side ──────────────────────────────
-    const variantIds = body.items.map((i) => i.variantId)
+    const isOutdoor = body.salesChannel === 'outdoor'
+    const bundleItems = body.items.filter((i) => isBundleCartId(i.variantId))
+    const plainItems = body.items.filter((i) => !isBundleCartId(i.variantId))
+    if (bundleItems.length > 0 && !isOutdoor) {
+      return NextResponse.json({ error: 'Combos are sold on the Outdoor shop.' }, { status: 400 })
+    }
+    const outdoorSettings = isOutdoor ? await loadOutdoorCheckoutSettings(supabase) : null
+    const bundles = bundleItems.length > 0
+      ? await loadOutdoorBundles(supabase, { ids: [...new Set(bundleItems.map((i) => bundleIdFromCartId(i.variantId)))], withStock: false })
+      : []
+    const bundleMap = new Map(bundles.map((b) => [b.id, b]))
+    if (bundleItems.some((i) => !bundleMap.has(bundleIdFromCartId(i.variantId)))) {
+      return NextResponse.json({ error: 'A combo in your cart is no longer available. Remove it to continue.' }, { status: 400 })
+    }
+    const bumpOffer = isOutdoor && body.orderBump === true ? await loadOrderBumpOffer(supabase, outdoorSettings!) : null
+    if (isOutdoor && body.orderBump === true && !bumpOffer) {
+      return NextResponse.json({ error: 'The checkout offer has ended. Refresh the page to continue.' }, { status: 409 })
+    }
+
+    const variantIds = [
+      ...new Set([
+        ...plainItems.map((i) => i.variantId),
+        ...bundles.flatMap((b) => b.components.map((c) => c.variantId)),
+        ...(bumpOffer ? [bumpOffer.variantId] : []),
+      ]),
+    ]
     const { data: variants, error: vErr } = await supabase
       .from('product_variants')
       .select('id, variant_name, suggested_retail_price, is_active, product_id, products(product_name)')
@@ -171,9 +207,36 @@ export async function POST(request: NextRequest) {
       quantity: number
       unit_price: number
       subtotal: number
+      line_kind?: 'bundle' | 'order_bump'
+      bundle_id?: string
     }[] = []
 
-    for (const item of body.items) {
+    for (const item of bundleItems) {
+      const bundle = bundleMap.get(bundleIdFromCartId(item.variantId))!
+      if (bundle.components.some((c) => !variantMap.has(c.variantId))) {
+        return NextResponse.json({ error: `${bundle.name} is no longer available. Remove it to continue.` }, { status: 400 })
+      }
+      const parts = allocateBundlePrice(
+        bundle.price * item.quantity,
+        bundle.components.map((c) => ({ ...c, quantity: c.quantity * item.quantity })),
+      )
+      for (const part of parts) {
+        const variant = variantMap.get(part.variantId) as any
+        orderTotal += part.subtotal
+        lineItems.push({
+          variant_id: part.variantId,
+          product_name: variant.products?.product_name || 'Unknown',
+          variant_name: [variant.variant_name, `${bundle.name} combo`].filter(Boolean).join(' · '),
+          quantity: part.quantity,
+          unit_price: part.unitPrice,
+          subtotal: part.subtotal,
+          line_kind: 'bundle',
+          bundle_id: bundle.id,
+        })
+      }
+    }
+
+    for (const item of plainItems) {
       const variant = variantMap.get(item.variantId) as any
       if (!variant) {
         return NextResponse.json(
@@ -199,6 +262,24 @@ export async function POST(request: NextRequest) {
         subtotal,
       })
     }
+
+    if (bumpOffer) {
+      const variant = variantMap.get(bumpOffer.variantId) as any
+      if (!variant) {
+        return NextResponse.json({ error: 'The checkout offer has ended. Refresh the page to continue.' }, { status: 409 })
+      }
+      orderTotal += bumpOffer.price
+      lineItems.push({
+        variant_id: bumpOffer.variantId,
+        product_name: variant.products?.product_name || bumpOffer.productName,
+        variant_name: [variant.variant_name, 'Checkout offer'].filter(Boolean).join(' · '),
+        quantity: 1,
+        unit_price: bumpOffer.price,
+        subtotal: bumpOffer.price,
+        line_kind: 'order_bump',
+      })
+    }
+    orderTotal = Math.round(orderTotal * 100) / 100
 
     const shortfall = stockShortfall(
       lineItems.map((li) => ({
@@ -238,13 +319,22 @@ export async function POST(request: NextRequest) {
     let shippingAmount = 0
     let shippingServiceId: string | null = null
     let shippingCourierName: string | null = null
+    let shippingActualCost: number | null = null
+    let shippingSubsidy: number | null = null
+    let affiliate: { id: string; code: string } | null = null
     if (salesChannel === 'outdoor') {
       const delivery = await resolveOutdoorShipping(
         supabase,
         variants.map((variant: any) => String(variant.product_id || '')),
         orderTotal,
+        { customerSharePercent: outdoorSettings?.shippingCustomerSharePercent },
       )
       shippingAmount = delivery.amount
+      if (delivery.actualCost != null) {
+        shippingActualCost = delivery.actualCost
+        shippingSubsidy = delivery.subsidy ?? 0
+      }
+      affiliate = await resolveOutdoorAffiliate(supabase, body.affiliateCode)
       const quote = await cheapestOutdoorCourier(body.customer.postcode, body.customer.state)
       if (quote) {
         shippingServiceId = quote.serviceId.slice(0, 80)
@@ -283,11 +373,27 @@ export async function POST(request: NextRequest) {
       total_amount: payableTotal,
       currency: 'MYR',
     }
+    const salesToolColumns: Record<string, unknown> = {}
+    if (shippingActualCost != null) {
+      salesToolColumns.shipping_actual_cost = shippingActualCost
+      salesToolColumns.shipping_subsidy_amount = shippingSubsidy
+    }
+    if (affiliate) {
+      salesToolColumns.affiliate_id = affiliate.id
+      salesToolColumns.affiliate_code = affiliate.code
+    }
 
     let order: { id: string; order_ref: string } | null = null
     let orderErr: any = null
     {
-      const first = await supabase.from('storefront_orders').insert(orderPayload).select('id, order_ref').single()
+      let first = await supabase
+        .from('storefront_orders')
+        .insert({ ...orderPayload, ...salesToolColumns })
+        .select('id, order_ref')
+        .single()
+      if (first.error && Object.keys(salesToolColumns).length > 0 && /affiliate_|shipping_actual_cost|shipping_subsidy_amount/i.test(String(first.error.message || ''))) {
+        first = await supabase.from('storefront_orders').insert(orderPayload).select('id, order_ref').single()
+      }
       order = first.data
       orderErr = first.error
       // Pre-migration fallback: keep /store checkout working if Outdoor columns are not applied yet.
@@ -309,7 +415,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ── 5. Insert line items ─────────────────────────────────────
-    const { error: lineErr } = await supabase.from('storefront_order_items').insert(
+    const lineRows = (withKinds: boolean) =>
       lineItems.map((li) => ({
         order_id: order.id,
         variant_id: li.variant_id,
@@ -318,8 +424,13 @@ export async function POST(request: NextRequest) {
         quantity: li.quantity,
         unit_price: li.unit_price,
         subtotal: li.subtotal,
-      })),
-    )
+        ...(withKinds && li.line_kind ? { line_kind: li.line_kind, bundle_id: li.bundle_id ?? null } : {}),
+      }))
+    const hasKinds = lineItems.some((li) => li.line_kind)
+    let { error: lineErr } = await supabase.from('storefront_order_items').insert(lineRows(hasKinds))
+    if (lineErr && hasKinds && /line_kind|bundle_id/i.test(String(lineErr.message || ''))) {
+      ;({ error: lineErr } = await supabase.from('storefront_order_items').insert(lineRows(false)))
+    }
 
     if (lineErr) {
       console.error('Line item creation failed:', lineErr)

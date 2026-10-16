@@ -16,6 +16,7 @@ export const CATEGORY_MODULE: Record<string, string> = {
   return: 'supply_chain',
   qr: 'customer_growth',
   roadtour: 'customer_growth',
+  ecommerce: 'customer_growth',
   security: 'platform_settings',
   user: 'platform_settings',
   'Delete Organization Masterdata': 'platform_settings',
@@ -29,6 +30,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   return: 'Return Product',
   qr: 'QR & Consumer',
   roadtour: 'RoadTour',
+  ecommerce: 'E-Commerce',
   security: 'Security & OTP',
   user: 'User Account',
   'Delete Organization Masterdata': 'Delete Organization Masterdata',
@@ -36,7 +38,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
 }
 
 /** Category order inside each module; unknown categories follow alphabetically. */
-const CATEGORY_ORDER = ['order', 'document', 'inventory', 'return', 'qr', 'roadtour', 'security', 'user', 'Delete Organization Masterdata', 'system']
+const CATEGORY_ORDER = ['order', 'document', 'inventory', 'return', 'qr', 'roadtour', 'ecommerce', 'security', 'user', 'Delete Organization Masterdata', 'system']
 
 export const categoryLabel = (category: string) => CATEGORY_LABELS[category] || category
 export const categoryModule = (category: string) => CATEGORY_MODULE[category] || OTHER_MODULE.id

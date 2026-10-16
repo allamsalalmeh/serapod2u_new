@@ -143,6 +143,13 @@ export default function OutdoorAdminClient() {
         </div>
         <div className="flex gap-2">
           <Link
+            href="/outdoor/admin/sales-tools"
+            className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--out-bark)] px-4 text-sm font-semibold text-[var(--out-cream)]"
+          >
+            <TrendingUp className="h-4 w-4" aria-hidden />
+            Sales tools
+          </Link>
+          <Link
             href="/outdoor/shop"
             className="inline-flex h-10 items-center gap-2 rounded-md border border-[var(--out-line)] px-4 text-sm font-medium hover:bg-white"
           >

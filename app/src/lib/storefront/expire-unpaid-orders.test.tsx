@@ -147,11 +147,20 @@ describe('expireUnpaidOrders', () => {
     expect((await expireUnpaidOrders())[0].outcome).toBe('cancelled')
   })
 
-  it('never cancels orders that did not go through Stripe', async () => {
-    state.orders = [{ ...order, payment_provider: 'manual', payment_ref: 'MANUAL-ORD-1' }]
+  it('never cancels orders paid through another gateway it cannot check', async () => {
+    state.orders = [{ ...order, payment_provider: 'billplz', payment_ref: 'bill_123' }]
     const fetchMock = stripeReplies()
     expect((await expireUnpaidOrders())[0].outcome).toBe('kept')
     expect(fetchMock).not.toHaveBeenCalled()
     expect(state.updates).toHaveLength(0)
+  })
+
+  it('cancels an order placed while no gateway was on: it has no payment page', async () => {
+    state.orders = [{ ...order, payment_provider: 'manual', payment_ref: 'MANUAL-ORD-1' }]
+    const fetchMock = stripeReplies()
+    expect((await expireUnpaidOrders())[0].outcome).toBe('cancelled')
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(state.updates[0].filters).toContainEqual(['eq', 'payment_ref', 'MANUAL-ORD-1'])
+    expect(state.emails).toEqual([['o1', 'auto_cancelled']])
   })
 })

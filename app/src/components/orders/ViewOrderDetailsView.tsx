@@ -29,6 +29,7 @@ import DHReceiptDialog from '@/components/orders/DHReceiptDialog'
 import { MessagingOrderTimelinePanel } from '@/components/orders/MessagingOrderTimelinePanel'
 import { MessagingOrderFulfilmentPanel } from '@/components/orders/MessagingOrderFulfilmentPanel'
 import { formatDateKey, orderBusinessDate } from '@/lib/orders/order-date'
+import { isManufacturerOrgType, purchaseOrderHidesPrices } from '@/lib/orders/po-price-visibility'
 
 interface UserProfile {
   id: string
@@ -534,6 +535,11 @@ export default function ViewOrderDetailsView({ userProfile, onViewChange, orderI
   const otherOrgContactLines = buildCounterpartyContactLines(otherOrg)
   const docTitle = isSalesOrder ? 'SALES ORDER' : 'PURCHASE ORDER'
   const docNoLabel = isSalesOrder ? 'SO#:' : 'PO#:'
+  // H2M Purchase Order: the manufacturer never sees prices, and HQ's printed
+  // copy drops them too; HQ still sees them on screen.
+  const poHidesPrices = !isSalesOrder && purchaseOrderHidesPrices(orderData.order_type, 'PO')
+  const showPriceColumns = !(poHidesPrices && isManufacturerOrgType(userProfile.organizations?.org_type_code))
+  const priceColumnPrintClass = poHidesPrices ? ' print:hidden' : ''
 
   const totalQuantity = orderData.order_items?.reduce((sum: number, item: any) => sum + (item.qty || 0), 0) || 0
 
@@ -831,8 +837,12 @@ export default function ViewOrderDetailsView({ userProfile, onViewChange, orderI
                 <th className="py-2 text-left text-xs font-bold text-gray-900">Description</th>
                 <th className="py-2 text-left text-xs font-bold text-gray-900 w-32">Product Code</th>
                 <th className="py-2 text-right text-xs font-bold text-gray-900 w-24">Cases</th>
-                <th className="py-2 text-right text-xs font-bold text-gray-900 w-32">Price</th>
-                <th className="py-2 text-right text-xs font-bold text-gray-900 w-32">Amount</th>
+                {showPriceColumns && (
+                  <>
+                    <th className={`py-2 text-right text-xs font-bold text-gray-900 w-32${priceColumnPrintClass}`}>Price</th>
+                    <th className={`py-2 text-right text-xs font-bold text-gray-900 w-32${priceColumnPrintClass}`}>Amount</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -855,8 +865,12 @@ export default function ViewOrderDetailsView({ userProfile, onViewChange, orderI
                     <span className="font-medium">{item.variant?.product_code || '—'}</span>
                   </td>
                   <td className="py-3 text-xs text-gray-900 text-right align-top pt-4">{formatNumber(item.qty)}</td>
-                  <td className="py-3 text-xs text-gray-900 text-right align-top pt-4">{formatCurrency(item.unit_price).replace('RM', '')}</td>
-                  <td className="py-3 text-xs text-gray-900 text-right align-top pt-4">{formatCurrency(item.line_total)}</td>
+                  {showPriceColumns && (
+                    <>
+                      <td className={`py-3 text-xs text-gray-900 text-right align-top pt-4${priceColumnPrintClass}`}>{formatCurrency(item.unit_price).replace('RM', '')}</td>
+                      <td className={`py-3 text-xs text-gray-900 text-right align-top pt-4${priceColumnPrintClass}`}>{formatCurrency(item.line_total)}</td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -865,8 +879,12 @@ export default function ViewOrderDetailsView({ userProfile, onViewChange, orderI
                 <tr className="border-t border-gray-200">
                   <td colSpan={3} className="py-4"></td>
                   <td className="py-4 text-right text-xs font-bold text-gray-900">{formatNumber(totalQuantity)}</td>
-                  <td className="py-4 text-right text-xs font-bold text-gray-900">Total</td>
-                  <td className="py-4 text-right text-sm font-bold text-gray-900">{formatCurrency(subtotal)}</td>
+                  {showPriceColumns && (
+                    <>
+                      <td className={`py-4 text-right text-xs font-bold text-gray-900${priceColumnPrintClass}`}>Total</td>
+                      <td className={`py-4 text-right text-sm font-bold text-gray-900${priceColumnPrintClass}`}>{formatCurrency(subtotal)}</td>
+                    </>
+                  )}
                 </tr>
               ) : (
                 // H2M / D2H: Grand Total | total cases (under Cases) | amount
@@ -874,8 +892,12 @@ export default function ViewOrderDetailsView({ userProfile, onViewChange, orderI
                 <tr className="border-t border-gray-200">
                   <td colSpan={3} className="py-4 pr-3 text-right text-xs font-bold text-gray-900">Grand Total</td>
                   <td className="py-4 text-right text-xs font-bold text-gray-900">{formatNumber(totalQuantity)}</td>
-                  <td className="py-4"></td>
-                  <td className="py-4 text-right text-sm font-bold text-gray-900">{formatCurrency(subtotal)}</td>
+                  {showPriceColumns && (
+                    <>
+                      <td className={`py-4${priceColumnPrintClass}`}></td>
+                      <td className={`py-4 text-right text-sm font-bold text-gray-900${priceColumnPrintClass}`}>{formatCurrency(subtotal)}</td>
+                    </>
+                  )}
                 </tr>
               )}
             </tfoot>

@@ -1,4 +1,4 @@
-import { exchangeTikTokAuthCode, getAuthorizedShops, type TikTokAuthorizedShop } from './tiktok-api'
+import { exchangeTikTokAuthCode, getAuthorizedShops, tiktokAppForShop, type TikTokAuthorizedShop } from './tiktok-api'
 import { computeDataFrom } from './tiktok-sync'
 
 const STATE_COOKIE = 'tts_oauth_state'
@@ -66,17 +66,19 @@ export async function saveTikTokConnection(db: any, ctx: { orgId: string; userId
   if (shopsError) throw shopsError
   const selected = (shops || []).find((s: any) => s.id === shopId)
   if (!selected) return 'invalid'
+  const app = tiktokAppForShop(selected)
+  if (!app) return 'not_configured'
 
   let tokens
   try {
-    tokens = await exchangeTikTokAuthCode(authCode)
+    tokens = await exchangeTikTokAuthCode(app, authCode)
   } catch (error) {
     console.error('[tiktok-shop/oauth] token', (error as Error).message)
     return 'token'
   }
   if (tokens.userType !== null && tokens.userType !== 0) return 'not_seller'
 
-  const picked = pickTikTokShop(await getAuthorizedShops(tokens.accessToken), selected, shops || [])
+  const picked = pickTikTokShop(await getAuthorizedShops(app, tokens.accessToken), selected, shops || [])
   if ('error' in picked) return picked.error
 
   const { data: elsewhere, error: elsewhereError } = await db.from('marketplace_shop_connections').select('shop_id')

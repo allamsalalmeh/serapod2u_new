@@ -154,7 +154,20 @@ export function buildNotificationSampleData(type: PreviewType, sampleId = ''): R
         // Generic
         event_name: type.event_name || 'Order Submitted',
         reference_id: sampleId || 'ORD26000048',
+        ...(type.event_code.startsWith('tiktok_shop_daily_report') ? TIKTOK_DAILY_SAMPLE : {}),
     }
+}
+
+const TIKTOK_DAILY_SAMPLE: Record<string, string> = {
+    report_title: 'to pack',
+    report_date: '7/10/2026',
+    report_time: '9:35 am',
+    shop_counts: 'SeraOutdoor 3 parcels/8 items; Ellbow 4 parcels/5 items',
+    total_parcels: '7',
+    total_items: '13',
+    summary_text: '[Serapod2U] TikTok to pack 7/10/2026 9:35 am: SeraOutdoor 3 parcels/8 items; Ellbow 4 parcels/5 items.',
+    email_subject: 'TikTok Shop - to pack (7/10/2026, 9:35 am)',
+    report_text: 'TIKTOK SHOP - TO PACK\n7/10/2026, 9:35 am\n\nSERAOUTDOOR\nACCOUNT : TIKTOK SERAOUTDOOR\nORDER : 6/10/2026\n------------------------------\nTOTAL ITEMS : 8\nTOTAL PARCEL : 3\n------------------------------\nITEMS\nHIGHBACK : 4\nTUMBLER 1L : 3\nMOONCHAIR : 1\n...',
 }
 
 // Payload keys taken from each notification's actual producer. Keep in sync
@@ -165,6 +178,7 @@ export function buildNotificationSampleData(type: PreviewType, sampleId = ''): R
 //    from the order whose display number is in `order_no`.
 const ORDER_PAYLOAD = ['order_no', 'order_date', 'order_type', 'status', 'buyer_org', 'seller_org', 'customer_name', 'customer_phone', 'delivery_address', 'amount', 'total_cases', 'total_items', 'item_list', 'order_url']
 const ORDER_CREATOR = ['User', 'created_by']
+const TIKTOK_DAILY_PAYLOAD = ['report_title', 'report_date', 'report_time', 'shop_counts', 'total_parcels', 'total_items', 'summary_text']
 const RETURN_PAYLOAD = ['return_no', 'return_status', 'return_source_type', 'return_source_name', 'return_source_code', 'return_warehouse_name', 'reported_date', 'total_quantity', 'total_value', 'contact_name', 'updated_at']
 
 const EVENT_VARIABLES: Record<string, string[]> = {
@@ -197,6 +211,9 @@ const EVENT_VARIABLES: Record<string, string[]> = {
     return_received: RETURN_PAYLOAD,
     return_processing: RETURN_PAYLOAD,
     return_completed: RETURN_PAYLOAD,
+    // lib/marketplace/tiktok-daily-report-server
+    tiktok_shop_daily_report: [...TIKTOK_DAILY_PAYLOAD, 'report_text', 'email_subject'],
+    tiktok_shop_daily_report_sms: TIKTOK_DAILY_PAYLOAD,
 }
 
 // trigger_document_notification (SQL) sends only these. Its order_no is the

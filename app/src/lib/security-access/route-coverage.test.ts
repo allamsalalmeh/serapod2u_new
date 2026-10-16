@@ -12,6 +12,7 @@ import { ORDER_VIEW_PERMISSION_KEYS } from './order-view'
 import { MSS_PERMISSION_KEYS } from './mss'
 import { COMPENSATION_VIEWER_PERMISSION_KEYS } from './compensation-viewer'
 import { COMMISSION_PERMISSION_KEYS } from './commission'
+import { BANK_STATEMENT_PERMISSION_KEYS } from './bank-statement-catalog'
 
 const src = resolve(process.cwd(), 'src')
 const apiRoot = resolve(src, 'app/api')
@@ -25,7 +26,7 @@ const WAVE1_KEYS = [
   'inventory.transfer.view', 'inventory.transfer.request', 'inventory.transfer.approve', 'inventory.transfer.dispatch',
   'inventory.transfer.receive', 'security.access.view', 'security.role.assign', 'security.permission.manage',
 ]
-const KNOWN = new Set([...FINAL_WAVE_PERMISSION_KEYS, ...WAVE1_KEYS, ...IDENTITY_PERMISSION_KEYS, ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS, ...USER_ADMIN_PERMISSION_KEYS, ...SYSTEM_LOGS_PERMISSION_KEYS, ...ORDER_VIEW_PERMISSION_KEYS, ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS, ...COMMISSION_PERMISSION_KEYS])
+const KNOWN = new Set([...FINAL_WAVE_PERMISSION_KEYS, ...WAVE1_KEYS, ...IDENTITY_PERMISSION_KEYS, ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS, ...USER_ADMIN_PERMISSION_KEYS, ...SYSTEM_LOGS_PERMISSION_KEYS, ...ORDER_VIEW_PERMISSION_KEYS, ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS, ...COMMISSION_PERMISSION_KEYS, ...BANK_STATEMENT_PERMISSION_KEYS])
 
 describe('authorization coverage gate', () => {
   it('classifies every API route (no UNKNOWN, no stale entries)', () => {

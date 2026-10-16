@@ -87,24 +87,31 @@ export function classifyProductLine(productName?: string | null): ProductLine {
 
 /**
  * Device product lines are entered in PCS only — no Cases mode, no pack-size
- * conversion. 1 entered unit = 1 PCS. Everything else (Hero/Zero flavours) keeps
- * the standard pack-size logic.
+ * conversion. 1 entered unit = 1 PCS.
  */
 export function isDeviceLine(line: ProductLine): boolean {
     return line === 'sline' || line === 'sbox'
 }
 
 /**
- * Units per case for a worksheet row, respecting the Device PCS-only rule.
- * Device lines always resolve to 1 (no conversion); flavour lines defer to the
- * standard pack-size resolution.
+ * Vape cartridges (Cellera Hero / Zero) are the only products that may be
+ * entered or displayed in Cases. Devices and every other product stay in PCS.
+ */
+export function isCartridgeLine(line: ProductLine): boolean {
+    return line === 'hero' || line === 'zero'
+}
+
+/**
+ * Units per case for a worksheet row.
+ * Devices and non-cartridge products always resolve to 1 (PCS only).
+ * Hero / Zero keep the standard pack-size resolution.
  */
 export function getRowUnitsPerCase(
     line: ProductLine,
     productName: string | null | undefined,
     masterUnitsPerCase?: number | null,
 ): number {
-    if (isDeviceLine(line)) return 1
+    if (!isCartridgeLine(line)) return 1
     return getUnitsPerCase(productName, masterUnitsPerCase)
 }
 

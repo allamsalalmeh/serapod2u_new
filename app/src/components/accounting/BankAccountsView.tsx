@@ -28,7 +28,11 @@ interface BankAccount {
   currency_code: string
   gl_account_id: string | null
   opening_balance: number
+  opening_balance_date: string | null
+  statement_frequency: 'monthly' | 'daily'
   current_balance: number
+  statement_balance?: number | null
+  statement_balance_date?: string | null
   is_active: boolean
   is_default: boolean
   notes: string | null
@@ -61,6 +65,8 @@ const emptyForm = {
   currency_code: 'MYR',
   gl_account_id: '',
   opening_balance: '0',
+  opening_balance_date: '',
+  statement_frequency: 'monthly' as 'monthly' | 'daily',
   is_default: false,
   notes: '',
 }
@@ -73,6 +79,10 @@ export default function BankAccountsView({ userProfile }: BankAccountsViewProps)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState(emptyForm)
+  // The opening balance (and its date) is set when the account is created;
+  // afterwards only a Super Admin may change it (enforced by the API and the database).
+  const isSuperAdmin = userProfile?.roles?.role_level === 1
+  const openingLocked = editingId !== null && !isSuperAdmin
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -111,6 +121,8 @@ export default function BankAccountsView({ userProfile }: BankAccountsViewProps)
       currency_code: acct.currency_code,
       gl_account_id: acct.gl_account_id || '',
       opening_balance: String(acct.opening_balance || 0),
+      opening_balance_date: acct.opening_balance_date || '',
+      statement_frequency: acct.statement_frequency || 'monthly',
       is_default: acct.is_default,
       notes: acct.notes || '',
     })
@@ -133,9 +145,13 @@ export default function BankAccountsView({ userProfile }: BankAccountsViewProps)
         branch: form.branch || null,
         currency_code: form.currency_code || 'MYR',
         gl_account_id: form.gl_account_id || null,
-        opening_balance: parseFloat(form.opening_balance) || 0,
         is_default: form.is_default,
         notes: form.notes || null,
+      }
+      if (!openingLocked) {
+        payload.opening_balance = parseFloat(form.opening_balance) || 0
+        payload.opening_balance_date = form.opening_balance_date || null
+        payload.statement_frequency = form.statement_frequency
       }
 
       let res: Response
@@ -286,7 +302,33 @@ export default function BankAccountsView({ userProfile }: BankAccountsViewProps)
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">Opening Balance</Label>
-                <Input type="number" value={form.opening_balance} onChange={(e) => setForm({ ...form, opening_balance: e.target.value })} className="h-9" step="0.01" />
+                <Input type="number" value={form.opening_balance} onChange={(e) => setForm({ ...form, opening_balance: e.target.value })} className="h-9" step="0.01" disabled={openingLocked} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Opening Balance Date</Label>
+                <Input type="date" value={form.opening_balance_date} onChange={(e) => setForm({ ...form, opening_balance_date: e.target.value })} className="h-9" disabled={openingLocked} />
+                <p className="text-[11px] text-muted-foreground">
+                  {openingLocked
+                    ? 'Locked: only a Super Admin can change the opening balance or its date.'
+                    : 'Balance at the end of this day. The first imported statement must start the next day.'}
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Statement Frequency</Label>
+                <select
+                  value={form.statement_frequency}
+                  onChange={(e) => setForm({ ...form, statement_frequency: e.target.value as 'monthly' | 'daily' })}
+                  disabled={openingLocked}
+                  className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm disabled:opacity-60"
+                >
+                  <option value="monthly">Monthly – one whole calendar month per statement</option>
+                  <option value="daily">Daily – one or more days within a month</option>
+                </select>
+                <p className="text-[11px] text-muted-foreground">
+                  {openingLocked
+                    ? 'Locked: only a Super Admin can change the statement frequency.'
+                    : 'Which bank statement files this account accepts. Every statement still needs approval by a second person.'}
+                </p>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">Notes</Label>
@@ -365,6 +407,7 @@ export default function BankAccountsView({ userProfile }: BankAccountsViewProps)
                     <TableHead>GL Account</TableHead>
                     <TableHead className="text-right">Opening</TableHead>
                     <TableHead className="text-right">Current Balance</TableHead>
+                    <TableHead className="text-right">Bank Balance</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -392,9 +435,26 @@ export default function BankAccountsView({ userProfile }: BankAccountsViewProps)
                       </TableCell>
                       <TableCell className="text-right font-mono text-sm">
                         {formatCurrency(parseFloat(String(acct.opening_balance)) || 0)}
+                        <div className="text-[11px] text-muted-foreground font-sans">
+                          {acct.opening_balance_date ? `as of ${formatDate(acct.opening_balance_date)}` : 'no date set'}
+                          {' · '}{acct.statement_frequency === 'daily' ? 'daily statements' : 'monthly statements'}
+                        </div>
                       </TableCell>
                       <TableCell className="text-right font-mono text-sm font-medium">
                         {formatCurrency(parseFloat(String(acct.current_balance)) || 0)}
+                        <div className="text-[11px] text-muted-foreground font-sans font-normal">book balance</div>
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-sm">
+                        {acct.statement_balance !== null && acct.statement_balance !== undefined ? (
+                          <>
+                            {formatCurrency(Number(acct.statement_balance))}
+                            <div className="text-[11px] text-muted-foreground font-sans">
+                              per statement · {acct.statement_balance_date ? formatDate(acct.statement_balance_date) : ''}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-xs text-muted-foreground italic font-sans">No approved statement</span>
+                        )}
                       </TableCell>
                       <TableCell>
                         {acct.is_active ? (

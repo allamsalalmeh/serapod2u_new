@@ -2,7 +2,7 @@ import { guardUserOperation } from '@/lib/security-access/operation'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { canAccessBatchForOrder } from '@/lib/qr-batch-access'
+import { PROCESSING_ORG_TYPES, canProcessBatchForOrder } from '@/lib/qr-batch-access'
 
 const BUCKET_NAME = 'qr-codes'
 
@@ -41,44 +41,42 @@ export async function POST(request: NextRequest) {
     const saDenied = await guardUserOperation(user.id, 'qr.batch.manage')
     if (saDenied) return saDenied
 
-    // The signed URL is created with the service role below, so ownership is
-    // decided here from trusted rows: a partner (manufacturer) only reaches
-    // batches of the orders placed with it.
-    const adminForScope = createAdminClient() as any
-    const { data: actorRow } = await adminForScope.from('users').select('organization_id, organizations:organization_id(org_type_code)').eq('id', user.id).maybeSingle()
-    const actorOrgType = String(actorRow?.organizations?.org_type_code || '').toUpperCase()
-    const actorOrgId = String(actorRow?.organization_id || '')
-    const { data: scoped } = await adminForScope.from('qr_batches')
-      .select('id, order:orders!qr_batches_order_id_fkey(seller_org_id, buyer_org_id, company_id)').eq('id', batchId).maybeSingle()
-    if (!scoped || !canAccessBatchForOrder(actorOrgType, actorOrgId, scoped.order)) {
-      return NextResponse.json({ error: 'Batch not found' }, { status: 404 })
+    const { data: profile, error: profileError } = await (supabase as any)
+      .from('users')
+      .select('is_active, organization_id, organizations:organization_id(org_type_code)')
+      .eq('id', user.id)
+      .single()
+
+    const orgType = String(profile?.organizations?.org_type_code || '').toUpperCase()
+    const orgId = String(profile?.organization_id || '')
+    if (profileError || !profile || profile.is_active === false || !orgId || !PROCESSING_ORG_TYPES.includes(orgType)) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    const { data: batch, error: batchError } = await supabase
+    // Supply partners may read but not write QR tables under RLS, so the batch
+    // is read and marked printed with the service role once ownership is shown.
+    const adminSupabase = createAdminClient() as any
+
+    const { data: batch, error: batchError } = await adminSupabase
       .from('qr_batches')
-      .select('id, order_id, excel_file_url')
+      .select('id, status, excel_file_url, order:orders!qr_batches_order_id_fkey(order_no, seller_org_id, buyer_org_id, company_id)')
       .eq('id', batchId)
       .maybeSingle()
 
     if (batchError) {
       console.error('Failed to load batch for download:', batchError)
+      return NextResponse.json({ error: 'Failed to load batch', details: batchError.message }, { status: 500 })
+    }
+
+    if (!batch || !canProcessBatchForOrder(orgType, orgId, batch.order)) {
       return NextResponse.json({ error: 'Batch not found' }, { status: 404 })
     }
 
-    if (!batch || !batch.excel_file_url) {
+    if (!batch.excel_file_url) {
       return NextResponse.json({ error: 'Excel file not available for this batch' }, { status: 404 })
     }
 
-    let orderNo: string | null = null
-    if (batch.order_id) {
-      const { data: orderRecord } = await supabase
-        .from('orders')
-        .select('order_no')
-        .eq('id', batch.order_id)
-        .maybeSingle()
-
-      orderNo = orderRecord?.order_no ?? null
-    }
+    const orderNo: string | null = batch.order?.order_no ?? null
 
     const storagePath = extractStoragePath(batch.excel_file_url)
 
@@ -86,13 +84,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid storage path for Excel file' }, { status: 500 })
     }
 
-  const downloadName = `QR_Batch_${orderNo || batch.id}.xlsx`
+    const downloadName = `QR_Batch_${orderNo || batch.id}.xlsx`
 
-    // Use admin client for storage operations — the qr-codes bucket has no
-    // RLS policies for authenticated users, so the session client cannot
-    // create signed URLs. Service-role bypasses storage RLS.
-    const adminSupabase = createAdminClient()
-
+    // Storage also uses the admin client — the qr-codes bucket has no RLS
+    // policies for authenticated users, so the session client cannot create
+    // signed URLs.
     const { data: signedUrlData, error: signedUrlError } = await adminSupabase.storage
       .from(BUCKET_NAME)
       .createSignedUrl(storagePath, 3600, {
@@ -113,9 +109,23 @@ export async function POST(request: NextRequest) {
       finalUrl = `${finalUrl}${sep}apikey=${anonKey}`
     }
 
+    // The first download moves the batch to 'printing' and its codes to
+    // 'printed'. A failure here must not block the download itself.
+    let markedPrinted = false
+    if (batch.status === 'generated') {
+      const { data: printed, error: printedError } = await adminSupabase.rpc('mark_batch_as_printed', {
+        p_batch_id: batch.id
+      })
+      if (printedError || printed?.success === false) {
+        console.error('Failed to mark QR batch as printed:', printedError?.message || printed?.error)
+      } else {
+        markedPrinted = true
+      }
+    }
+
     // Return with proper CORS and download headers for Vercel
     return NextResponse.json(
-      { success: true, url: finalUrl, filename: downloadName },
+      { success: true, url: finalUrl, filename: downloadName, marked_printed: markedPrinted },
       { 
         status: 200,
         headers: {

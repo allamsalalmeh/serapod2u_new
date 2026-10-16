@@ -1,6 +1,7 @@
 import { listOutdoorProducts, listOutdoorCategories, getOutdoorCategoryNav } from '@/lib/outdoor/catalog'
 import OutdoorCategoryNav from '@/components/outdoor/OutdoorCategoryNav'
 import OutdoorShopBrowser from '@/components/outdoor/OutdoorShopBrowser'
+import OutdoorCombos from '@/components/outdoor/OutdoorCombos'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Shop' }
@@ -28,6 +29,7 @@ export default async function OutdoorShopPage({ searchParams }: { searchParams: 
       <OutdoorCategoryNav items={circles} />
     <div className="mx-auto max-w-xl sm:max-w-3xl px-4 sm:px-8 py-6 sm:py-10">
       <h1 className="font-display text-3xl sm:text-5xl tracking-tight text-[var(--out-ink)]">Shop</h1>
+      <OutdoorCombos />
       <OutdoorShopBrowser
         key={collection || 'all'}
         products={products}

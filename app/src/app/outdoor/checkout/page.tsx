@@ -16,6 +16,8 @@ import {
 } from '@/lib/outdoor/shipping'
 import type { OutdoorCheckoutPrefill } from '@/lib/outdoor/checkout-prefill'
 import { validateCheckoutCustomer, type CheckoutFieldErrors } from '@/lib/storefront/customer-validation'
+import type { OutdoorOrderBumpOffer } from '@/lib/outdoor/sales-tools'
+import { readOutdoorRef } from '@/components/outdoor/OutdoorRefCapture'
 
 function loginForCheckout() {
   const here = `${window.location.pathname}${window.location.search}`
@@ -51,7 +53,17 @@ export default function OutdoorCheckoutPage() {
     postcode: '',
   })
   const [shipping, setShipping] = useState<OutdoorShippingQuote | null>(null)
+  const [offer, setOffer] = useState<OutdoorOrderBumpOffer | null>(null)
+  const [bumpChecked, setBumpChecked] = useState(false)
+  const bump = offer && bumpChecked ? offer : null
   const bagKey = items.map((item) => `${item.variantId}:${item.quantity}`).join('|')
+
+  useEffect(() => {
+    void fetch('/api/storefront/outdoor-offers')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setOffer(data?.orderBump || null))
+      .catch(() => setOffer(null))
+  }, [])
 
   useEffect(() => {
     const mode = new URLSearchParams(window.location.search).get('mode')
@@ -95,7 +107,10 @@ export default function OutdoorCheckoutPage() {
     void fetch('/api/storefront/outdoor-shipping', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: items.map((i) => ({ variantId: i.variantId, quantity: i.quantity })) }),
+      body: JSON.stringify({
+        items: items.map((i) => ({ variantId: i.variantId, quantity: i.quantity })),
+        orderBump: Boolean(bump),
+      }),
     })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
@@ -108,7 +123,7 @@ export default function OutdoorCheckoutPage() {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bagKey])
+  }, [bagKey, Boolean(bump)])
 
   useEffect(() => {
     void fetch('/api/storefront/payment/methods')
@@ -145,7 +160,8 @@ export default function OutdoorCheckoutPage() {
   const shippingReady = shipping !== null
   const shippingCost = shipping?.amount ?? 0
   const freeShipping = shippingReady && shippingCost <= 0
-  const total = subtotal + shippingCost
+  const bumpPrice = bump?.price ?? 0
+  const total = subtotal + bumpPrice + shippingCost
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -173,6 +189,8 @@ export default function OutdoorCheckoutPage() {
           salesChannel: 'outdoor',
           paymentProvider: payProvider || undefined,
           shipping: { amount: shippingCost },
+          orderBump: Boolean(bump),
+          affiliateCode: readOutdoorRef() || undefined,
         }),
       })
       const data = await res.json().catch(() => null)
@@ -313,9 +331,14 @@ export default function OutdoorCheckoutPage() {
                       <p className="font-display text-xl leading-none text-[var(--out-bark)]">{shipping.title}</p>
                       <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-[var(--out-muted)]">{shipping.note}</p>
                     </div>
-                    <p key={shippingCost} className="out-swap shrink-0 whitespace-nowrap font-display text-xl text-[var(--out-bark)] sm:text-2xl">
-                      {freeShipping ? 'Free' : money(shippingCost)}
-                    </p>
+                    <div key={shippingCost} className="out-swap shrink-0 text-right">
+                      {shipping.actualCost != null && shipping.actualCost > shippingCost ? (
+                        <p className="whitespace-nowrap text-xs text-[var(--out-muted)] line-through">{money(shipping.actualCost)}</p>
+                      ) : null}
+                      <p className="whitespace-nowrap font-display text-xl text-[var(--out-bark)] sm:text-2xl">
+                        {freeShipping ? 'Free' : money(shippingCost)}
+                      </p>
+                    </div>
                   </>
                 ) : (
                   <div className="min-w-0 flex-1 animate-pulse space-y-2" aria-label="Loading delivery">
@@ -333,6 +356,26 @@ export default function OutdoorCheckoutPage() {
               ) : null}
             </div>
           </div>
+
+          {offer ? (
+            <label
+              className={`flex cursor-pointer items-center gap-3 rounded-[1.4rem] border-2 border-dashed px-4 py-3 transition-colors ${
+                bumpChecked ? 'border-[var(--out-ember)] bg-[var(--out-ivory)]' : 'border-[var(--out-bark)]/20'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={bumpChecked}
+                onChange={(e) => setBumpChecked(e.target.checked)}
+                className="h-5 w-5 shrink-0 accent-[var(--out-ember)]"
+              />
+              {offer.imageUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={offer.imageUrl} alt="" className="h-12 w-12 shrink-0 rounded-xl bg-white object-contain p-1" />
+              ) : null}
+              <span className="text-sm font-semibold text-[var(--out-bark)]">{offer.text}</span>
+            </label>
+          ) : null}
 
           {payMethods.length > 1 ? (
             <div>
@@ -396,6 +439,12 @@ export default function OutdoorCheckoutPage() {
               <span>Subtotal</span>
               <span>{money(subtotal)}</span>
             </div>
+            {bump ? (
+              <div className="flex justify-between gap-3">
+                <span className="min-w-0 truncate">{bump.productName}</span>
+                <span>{money(bump.price)}</span>
+              </div>
+            ) : null}
             <div className="flex justify-between">
               <span>Shipping</span>
               <span>{!shippingReady ? '—' : freeShipping ? 'Free' : money(shippingCost)}</span>

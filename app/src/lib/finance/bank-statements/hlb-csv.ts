@@ -27,6 +27,8 @@ export interface BankStatementLine {
   branchCode: string | null
   daySequence: number
   dedupeKey: string
+  /** 1-based line number of this transaction in the original file. */
+  sourceRowNo: number
 }
 
 export interface BankStatementMeta {
@@ -172,7 +174,7 @@ export function parseHlbStatementCsv(text: string): ParsedBankStatement {
     return result()
   }
 
-  type Raw = Omit<BankStatementLine, 'daySequence' | 'dedupeKey'> & { row: number }
+  type Raw = Omit<BankStatementLine, 'daySequence' | 'dedupeKey' | 'sourceRowNo'> & { row: number }
   const raw: Raw[] = []
   let mangledReferences = 0
   rows.slice(headerIndex + 1).forEach((r, i) => {
@@ -234,13 +236,54 @@ export function parseHlbStatementCsv(text: string): ParsedBankStatement {
 
   const daySeq = new Map<string, number>()
   const occurrences = new Map<string, number>()
-  const lines: BankStatementLine[] = chronological.map(({ row: _row, ...line }) => {
+  const lines: BankStatementLine[] = chronological.map(({ row, ...line }) => {
     const seq = (daySeq.get(line.transactionDate) ?? 0) + 1
     daySeq.set(line.transactionDate, seq)
     const base = `${line.transactionDate}|${line.debitCents}|${line.creditCents}|${line.balanceCents}`
     const n = (occurrences.get(base) ?? 0) + 1
     occurrences.set(base, n)
-    return { ...line, daySequence: seq, dedupeKey: `${base}|${n}` }
+    return { ...line, daySequence: seq, dedupeKey: `${base}|${n}`, sourceRowNo: row }
   })
   return result(lines)
+}
+
+export type StatementFrequency = 'monthly' | 'daily'
+export type StatementPeriodType = 'monthly' | 'daily' | 'other'
+
+const ymd = (v: string | null | undefined) => String(v ?? '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+
+/**
+ * Describes a statement period: a whole calendar month, a day or several
+ * consecutive days within one month ('daily'), or anything else.
+ */
+export function statementPeriodType(start: string | null | undefined, end: string | null | undefined): StatementPeriodType {
+  const s = ymd(start)
+  const e = ymd(end)
+  if (!s || !e || s[1] !== e[1] || s[2] !== e[2] || String(start) > String(end)) return 'other'
+  const lastDay = new Date(Date.UTC(Number(s[1]), Number(s[2]), 0)).getUTCDate()
+  return Number(s[3]) === 1 && Number(e[3]) === lastDay ? 'monthly' : 'daily'
+}
+
+/**
+ * Period rule of the bank account's statement frequency (the database
+ * function bank_statement_period_error applies the same rule):
+ *   monthly  one whole calendar month
+ *   daily    one or more consecutive days within one month, not in the future
+ * Returns null when the period is accepted, otherwise a message.
+ */
+export function statementPeriodError(
+  frequency: StatementFrequency,
+  start: string | null | undefined,
+  end: string | null | undefined,
+  today: string,
+): string | null {
+  if (!ymd(start) || !ymd(end) || String(start) > String(end)) return 'The statement period is invalid.'
+  const type = statementPeriodType(start, end)
+  if (frequency === 'monthly') {
+    return type === 'monthly' ? null
+      : `This account takes monthly statements: the file must cover a whole calendar month (it covers ${start} to ${end}).`
+  }
+  if (type === 'other') return `A daily statement must stay within one calendar month (this file covers ${start} to ${end}).`
+  if (String(end) > today) return `The statement period ends in the future (${end}).`
+  return null
 }

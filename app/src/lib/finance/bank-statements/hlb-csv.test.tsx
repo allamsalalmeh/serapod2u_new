@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeAccountNumber, parseAmountCents, parseDmyDate, parseHlbStatementCsv } from './hlb-csv'
+import { normalizeAccountNumber, parseAmountCents, parseDmyDate, parseHlbStatementCsv, statementPeriodError, statementPeriodType } from './hlb-csv'
 
 const HEADER = 'Transaction Date,Remarks,Cheque No.,Sender / Receiver Name,Receipient Reference,Other Payment Details,Payment Amount,Credit Amount,Balance,Branch Code'
 
@@ -94,5 +94,34 @@ describe('HLB statement CSV parser', () => {
     const parsed = parseHlbStatementCsv(csv(['31/03/2026,FPX B2B1,,TAX OFFICE,1.22509E+15,,281,0,719.00,100']))
     expect(parsed.errors).toEqual([])
     expect(parsed.warnings[0]).toMatch(/scientific notation/)
+  })
+
+  it('keeps the original file line number of every transaction', () => {
+    const parsed = parseHlbStatementCsv(csv(MARCH))
+    // header is line 10; the bank lists newest first, so the oldest line is the last one (16)
+    expect(parsed.lines.map(l => l.sourceRowNo)).toEqual([16, 15, 14, 13, 12, 11])
+  })
+
+  it('classifies the statement period', () => {
+    expect(statementPeriodType('2026-07-01', '2026-07-31')).toBe('monthly')
+    expect(statementPeriodType('2026-02-01', '2026-02-28')).toBe('monthly')
+    expect(statementPeriodType('2028-02-01', '2028-02-29')).toBe('monthly')
+    expect(statementPeriodType('2026-07-06', '2026-07-06')).toBe('daily')
+    expect(statementPeriodType('2026-07-01', '2026-07-30')).toBe('daily')
+    expect(statementPeriodType('2026-07-30', '2026-08-02')).toBe('other')
+    expect(statementPeriodType('2026-07-05', '2026-07-01')).toBe('other')
+    expect(statementPeriodType(null, '2026-07-31')).toBe('other')
+  })
+
+  it('applies the bank account statement frequency', () => {
+    const today = '2026-10-07'
+    expect(statementPeriodError('monthly', '2026-07-01', '2026-07-31', today)).toBeNull()
+    expect(statementPeriodError('monthly', '2026-07-01', '2026-07-15', today)).toMatch(/whole calendar month/)
+    expect(statementPeriodError('daily', '2026-10-06', '2026-10-06', today)).toBeNull()
+    expect(statementPeriodError('daily', '2026-10-03', '2026-10-05', today)).toBeNull()
+    expect(statementPeriodError('daily', '2026-07-01', '2026-07-31', today)).toBeNull()
+    expect(statementPeriodError('daily', '2026-09-30', '2026-10-01', today)).toMatch(/within one calendar month/)
+    expect(statementPeriodError('daily', '2026-10-08', '2026-10-08', today)).toMatch(/future/)
+    expect(statementPeriodError('daily', null, '2026-10-01', today)).toMatch(/invalid/)
   })
 })

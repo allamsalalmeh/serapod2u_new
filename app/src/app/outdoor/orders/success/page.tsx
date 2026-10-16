@@ -10,6 +10,8 @@ import { outdoorStaticImage, outdoorSwatchesFromVariants } from '@/lib/outdoor/m
 import type { CartItem } from '@/lib/storefront/cart-context'
 import { OutdoorPaymentPoller, OutdoorRetryBag } from '@/components/outdoor/OutdoorOrderResult'
 import OutdoorThankYouGift from '@/components/outdoor/OutdoorThankYouGift'
+import { bundleCartId, bundleItemsLabel } from '@/lib/outdoor/sales-tools'
+import { loadOutdoorBundles } from '@/lib/outdoor/sales-tools-server'
 
 export const metadata = { title: 'Order confirmation' }
 export const dynamic = 'force-dynamic'
@@ -24,6 +26,8 @@ type OrderItem = {
   quantity: number
   unit_price: number
   subtotal: number
+  line_kind?: string | null
+  bundle_id?: string | null
 }
 
 type Order = {
@@ -47,12 +51,16 @@ function exactEmailPattern(email: string) {
 
 async function loadOrder(ref: string, email: string): Promise<Order | null> {
   const admin: any = createAdminClient()
-  const { data, error } = await admin
-    .from('storefront_orders')
-    .select('order_ref, status, customer_name, total_amount, shipping_amount, currency, shipping_address, storefront_order_items(variant_id, product_name, variant_name, quantity, unit_price, subtotal)')
-    .eq('order_ref', ref)
-    .ilike('customer_email', exactEmailPattern(email))
-    .maybeSingle()
+  const lookup = (lineColumns: string) =>
+    admin
+      .from('storefront_orders')
+      .select(`order_ref, status, customer_name, total_amount, shipping_amount, currency, shipping_address, storefront_order_items(${lineColumns})`)
+      .eq('order_ref', ref)
+      .ilike('customer_email', exactEmailPattern(email))
+      .maybeSingle()
+  const baseLines = 'variant_id, product_name, variant_name, quantity, unit_price, subtotal'
+  let { data, error } = await lookup(`${baseLines}, line_kind, bundle_id`)
+  if (error && /line_kind|bundle_id/i.test(error.message || '')) ({ data, error } = await lookup(baseLines))
   if (error) {
     console.error('[outdoor-success] order lookup', error)
     return null
@@ -61,9 +69,29 @@ async function loadOrder(ref: string, email: string): Promise<Order | null> {
 }
 
 async function retryItems(order: Order): Promise<CartItem[]> {
-  const lines = (order.storefront_order_items || []).filter((item) => item.variant_id)
-  if (lines.length === 0) return []
+  const all = order.storefront_order_items || []
+  const lines = all.filter((item) => item.variant_id && !item.line_kind)
   const admin: any = createAdminClient()
+  const bundleIds = [...new Set(all.filter((item) => item.line_kind === 'bundle' && item.bundle_id).map((item) => item.bundle_id!))]
+  const bundleItems: CartItem[] = []
+  if (bundleIds.length > 0) {
+    const bundles = await loadOutdoorBundles(admin, { ids: bundleIds, withStock: false })
+    for (const bundle of bundles) {
+      const first = bundle.components[0]
+      const line = all.find((item) => item.bundle_id === bundle.id && item.variant_id === first?.variantId)
+      const quantity = first && line ? Math.max(1, Math.round(Number(line.quantity) / first.quantity)) : 1
+      bundleItems.push({
+        productId: bundleCartId(bundle.id),
+        variantId: bundleCartId(bundle.id),
+        productName: bundle.name,
+        variantName: bundleItemsLabel(bundle),
+        price: bundle.price,
+        imageUrl: bundle.imageUrl || first?.imageUrl || null,
+        quantity,
+      })
+    }
+  }
+  if (lines.length === 0) return bundleItems
   const { data } = await admin
     .from('product_variants')
     .select('id, product_id, variant_name, image_url, attributes, is_active')
@@ -84,7 +112,7 @@ async function retryItems(order: Order): Promise<CartItem[]> {
       quantity: Math.max(1, Number(line.quantity) || 1),
     })
   }
-  return out
+  return [...bundleItems, ...out]
 }
 
 function OrderSummary({ order }: { order: Order }) {

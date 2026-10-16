@@ -1,61 +1,58 @@
-import { financeAllowed } from '@/lib/security-access/finance'
-import { createClient } from '@/lib/supabase/server'
-import { checkPermissionForUser } from '@/lib/server/permissions'
-import { isCanonicalStaff } from '@/lib/identity/staff'
+import { createHash, randomUUID } from 'node:crypto'
+import { createAdminClient } from '@/lib/supabase/admin'
 import {
   centsToAmount,
   normalizeAccountNumber,
-  parseAmountCents,
   parseHlbStatementCsv,
+  statementPeriodError,
+  statementPeriodType,
   type BankStatementLine,
+  type StatementFrequency,
 } from '@/lib/finance/bank-statements/hlb-csv'
+import {
+  CASH_VIEW,
+  MAX_STATEMENT_BYTES,
+  STATEMENT_APPROVE,
+  STATEMENT_BUCKET,
+  STATEMENT_IMPORT,
+  loadStatementContext,
+  maskAccount,
+  statementErrorResponse,
+  statementFilePath,
+  loadPeopleNames,
+} from '@/lib/finance/bank-statements/server'
 import { NextResponse } from 'next/server'
 
 /**
- * GET  /api/accounting/cash/bank-statements?bank_account_id=… — imports and stored lines
- * POST /api/accounting/cash/bank-statements — { bank_account_id, file_name, csv_text, mode: 'preview' | 'import' }
+ * GET  /api/accounting/cash/bank-statements?bank_account_id=… — statements (all states) and approved lines
+ * POST /api/accounting/cash/bank-statements — multipart/form-data:
+ *        bank_account_id, mode ('preview' | 'upload'), file (the bank's CSV, unchanged)
  *
- * Read-only bank data: lines come from the bank's exported statement file.
- * Nothing is sent to the bank and bank_accounts balances are not changed.
+ *   preview  validates the file and returns a summary; nothing is written.
+ *   upload   stores the original file (private bucket 'bank-statements', never
+ *            overwritten), then records the statement as 'uploaded' through
+ *            bank_statement_stage(), which re-validates every line in the
+ *            database. Lines reach bank_statement_transactions only when a
+ *            second person approves (see ./[id]/route.ts).
+ *
+ * Read-only bank data: nothing is sent to the bank and bank balances are not changed.
  */
 
-const MAX_CSV_BYTES = 2 * 1024 * 1024
-const PAGE = 1000
-const INSERT_CHUNK = 500
-
-async function loadContext() {
-  const supabase = await createClient()
-  const { data: { user }, error: authError } = await supabase.auth.getUser()
-  if (authError || !user) return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) }
-
-  const { data: profile } = await (supabase as any)
-    .from('users')
-    .select('id, organization_id, principal_type, is_active, account_status, roles:role_code ( role_level )')
-    .eq('id', user.id)
-    .single()
-  if (!profile?.organization_id) return { error: NextResponse.json({ error: 'User has no organization' }, { status: 400 }) }
-
-  const role = Array.isArray((profile as any).roles) ? (profile as any).roles[0] : (profile as any).roles
-  const legacyFinanceUser = async () =>
-    isCanonicalStaff(profile as any, role?.role_level, 40) || (await checkPermissionForUser(user.id, 'view_settings')).allowed
-  return { supabase, user, orgId: profile.organization_id as string, legacyFinanceUser }
-}
-
-function maskAccount(value: string | null | undefined) {
-  const digits = normalizeAccountNumber(value)
-  return digits.length > 4 ? `••••${digits.slice(-4)}` : digits
-}
-
-const amount = (v: unknown) => parseAmountCents(String(v ?? '')) ?? 0
+const IMPORT_COLUMNS = [
+  'id', 'source_format', 'file_name', 'file_size', 'period_type', 'period_start', 'period_end',
+  'opening_balance', 'closing_balance', 'total_debit', 'total_credit', 'rows_in_file', 'rows_inserted', 'rows_skipped',
+  'expected_opening_balance', 'opening_difference', 'opening_basis', 'reason_required', 'mismatch_reason',
+  'status', 'imported_by', 'imported_at', 'submitted_by', 'submitted_at', 'approved_by', 'approved_at',
+  'rejected_by', 'rejected_at', 'rejection_reason', 'reversed_by', 'reversed_at', 'reversal_reason',
+].join(', ')
 
 export async function GET(request: Request) {
   try {
-    const ctx = await loadContext()
-    if (ctx.error) return ctx.error
-    const { supabase, user, orgId, legacyFinanceUser } = ctx
-    if (!(await financeAllowed(user.id, 'finance.cash.view', legacyFinanceUser, orgId))) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
+    const ctx = await loadStatementContext()
+    if ('error' in ctx) return ctx.error
+    const { db, orgId, user, allowed } = ctx
+    const [canView, canImport, canApprove] = await Promise.all([allowed(CASH_VIEW), allowed(STATEMENT_IMPORT), allowed(STATEMENT_APPROVE)])
+    if (!canView && !canImport && !canApprove) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     const { searchParams } = new URL(request.url)
     const bankAccountId = searchParams.get('bank_account_id')
@@ -64,30 +61,45 @@ export async function GET(request: Request) {
     const to = searchParams.get('to')
     const limit = Math.min(Math.max(Number(searchParams.get('limit')) || 200, 1), 1000)
 
-    const db = supabase as any
     const { data: imports, error: importsError } = await db
       .from('bank_statement_imports')
-      .select('id, source_format, file_name, period_start, period_end, opening_balance, closing_balance, rows_in_file, rows_inserted, rows_skipped, status, imported_at')
+      .select(IMPORT_COLUMNS)
       .eq('company_id', orgId)
       .eq('bank_account_id', bankAccountId)
       .order('imported_at', { ascending: false })
       .limit(50)
     if (importsError) return NextResponse.json({ error: importsError.message }, { status: 500 })
 
-    let query = db
-      .from('bank_statement_transactions')
-      .select('id, transaction_date, day_sequence, description, cheque_no, counterparty, reference, payment_details, debit_amount, credit_amount, balance, branch_code', { count: 'exact' })
-      .eq('company_id', orgId)
-      .eq('bank_account_id', bankAccountId)
-      .order('transaction_date', { ascending: false })
-      .order('day_sequence', { ascending: false })
-      .limit(limit)
-    if (from) query = query.gte('transaction_date', from)
-    if (to) query = query.lte('transaction_date', to)
-    const { data: transactions, count, error: txError } = await query
-    if (txError) return NextResponse.json({ error: txError.message }, { status: 500 })
+    let transactions: any[] = []
+    let total = 0
+    if (canView) {
+      let query = db
+        .from('bank_statement_transactions')
+        .select('id, import_id, transaction_date, day_sequence, description, cheque_no, counterparty, reference, payment_details, debit_amount, credit_amount, balance, branch_code', { count: 'exact' })
+        .eq('company_id', orgId)
+        .eq('bank_account_id', bankAccountId)
+        .order('transaction_date', { ascending: false })
+        .order('day_sequence', { ascending: false })
+        .limit(limit)
+      if (from) query = query.gte('transaction_date', from)
+      if (to) query = query.lte('transaction_date', to)
+      const { data, count, error: txError } = await query
+      if (txError) return NextResponse.json({ error: txError.message }, { status: 500 })
+      transactions = data || []
+      total = count ?? 0
+    }
 
-    return NextResponse.json({ imports: imports || [], transactions: transactions || [], total: count ?? 0 })
+    const people = await loadPeopleNames(orgId, (imports || []).flatMap((i: any) =>
+      [i.imported_by, i.submitted_by, i.approved_by, i.rejected_by, i.reversed_by]))
+
+    return NextResponse.json({
+      imports: imports || [],
+      people,
+      transactions,
+      total,
+      permissions: { can_view_lines: canView, can_import: canImport, can_approve: canApprove },
+      user_id: user.id,
+    })
   } catch (error) {
     console.error('Error in bank statements list API:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -96,36 +108,38 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const ctx = await loadContext()
-    if (ctx.error) return ctx.error
-    const { supabase, user, orgId, legacyFinanceUser } = ctx
-    if (!(await financeAllowed(user.id, 'finance.reconciliation.perform', legacyFinanceUser, orgId))) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
+    const ctx = await loadStatementContext()
+    if ('error' in ctx) return ctx.error
+    const { db, orgId, allowed } = ctx
+    if (!(await allowed(STATEMENT_IMPORT))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-    const body = await request.json().catch(() => null)
-    const bankAccountId = typeof body?.bank_account_id === 'string' ? body.bank_account_id : ''
-    const csvText = typeof body?.csv_text === 'string' ? body.csv_text : ''
-    const fileName = typeof body?.file_name === 'string' ? body.file_name.slice(0, 255) : null
-    const mode = body?.mode === 'import' ? 'import' : 'preview'
-    if (!bankAccountId || !csvText) {
+    const form = await request.formData().catch(() => null)
+    const file = form?.get('file')
+    const bankAccountId = String(form?.get('bank_account_id') ?? '')
+    const mode = form?.get('mode') === 'upload' ? 'upload' : 'preview'
+    if (!bankAccountId || !file || typeof file === 'string') {
       return NextResponse.json({ error: 'Bank account and statement file are required' }, { status: 400 })
     }
-    if (Buffer.byteLength(csvText, 'utf8') > MAX_CSV_BYTES) {
+    if (file.size <= 0) return NextResponse.json({ error: 'The statement file is empty' }, { status: 400 })
+    if (file.size > MAX_STATEMENT_BYTES) {
       return NextResponse.json({ error: 'Statement file is too large (max 2 MB)' }, { status: 413 })
     }
 
-    const db = supabase as any
+    // The exact bytes received are hashed and (on upload) stored unchanged.
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const fileName = (file.name || 'statement.csv').slice(0, 255)
+
     const { data: bank } = await db
       .from('bank_accounts')
-      .select('id, account_name, bank_name, account_number, currency_code, is_active')
+      .select('id, company_id, account_name, bank_name, account_number, currency_code, is_active, statement_frequency')
       .eq('id', bankAccountId)
       .eq('company_id', orgId)
       .maybeSingle()
     if (!bank) return NextResponse.json({ error: 'Bank account not found' }, { status: 404 })
     if (!bank.is_active) return NextResponse.json({ error: 'Bank account is inactive' }, { status: 400 })
 
-    const parsed = parseHlbStatementCsv(csvText)
+    const parsed = parseHlbStatementCsv(new TextDecoder('utf-8').decode(bytes))
     if (parsed.errors.length) {
       return NextResponse.json({ error: 'The statement file cannot be imported', errors: parsed.errors }, { status: 422 })
     }
@@ -139,53 +153,39 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `File currency ${meta.currency} does not match the bank account currency ${bank.currency_code}.` }, { status: 422 })
     }
 
-    // Lines already stored for the file's period (delta detection)
-    const stored: { dedupe_key: string }[] = []
-    for (let offset = 0; ; offset += PAGE) {
-      const { data, error } = await db
-        .from('bank_statement_transactions')
-        .select('dedupe_key')
-        .eq('bank_account_id', bank.id)
-        .gte('transaction_date', meta.periodStart)
-        .lte('transaction_date', meta.periodEnd)
-        .order('id')
-        .range(offset, offset + PAGE - 1)
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-      stored.push(...(data || []))
-      if (!data || data.length < PAGE) break
+    const frequency: StatementFrequency = bank.statement_frequency === 'daily' ? 'daily' : 'monthly'
+    const periodType = statementPeriodType(meta.periodStart, meta.periodEnd)
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }).format(new Date())
+    const opening = centsToAmount(meta.openingBalanceCents ?? 0)
+    const closing = centsToAmount(parsed.closingBalanceCents ?? 0)
+
+    const { data: check, error: checkError } = await db.rpc('bank_statement_check', {
+      p_bank_account_id: bank.id,
+      p_period_start: meta.periodStart,
+      p_period_end: meta.periodEnd,
+      p_file_sha256: sha256,
+      p_opening_balance: opening,
+    })
+    if (checkError) return statementErrorResponse(checkError)
+
+    const blocking: string[] = []
+    const periodError = statementPeriodError(frequency, meta.periodStart, meta.periodEnd, today)
+    if (periodError) blocking.push(periodError)
+    else if (check?.period_error) blocking.push('The statement period does not match this account\'s statement frequency.')
+    if (check?.duplicate_file) {
+      blocking.push(`This exact file was already uploaded (statement ${check.duplicate_file.period_start} to ${check.duplicate_file.period_end}, status ${check.duplicate_file.status}).`)
+    } else if (check?.overlap) {
+      blocking.push(`A statement for ${check.overlap.period_start} to ${check.overlap.period_end} (status ${check.overlap.status}) already covers part of this period.`)
     }
-    const storedKeys = new Set(stored.map(r => r.dedupe_key))
-    const fileKeys = new Set(lines.map(l => l.dedupeKey))
-    const newLines = lines.filter(l => !storedKeys.has(l.dedupeKey))
-    const storedNotInFile = stored.filter(r => !fileKeys.has(r.dedupe_key)).length
 
     const warnings = [...parsed.warnings]
-    if (storedNotInFile) {
-      warnings.push(`${storedNotInFile} line(s) already stored for this period are not in this file. Check that the file covers whole days and is the right statement.`)
-    }
-    const { data: before } = await db
-      .from('bank_statement_transactions')
-      .select('transaction_date, balance')
-      .eq('bank_account_id', bank.id)
-      .lt('transaction_date', meta.periodStart)
-      .order('transaction_date', { ascending: false })
-      .order('day_sequence', { ascending: false })
-      .limit(1)
-    if (before?.[0] && amount(before[0].balance) !== meta.openingBalanceCents) {
-      warnings.push(`Gap before this statement: the last stored balance (${before[0].transaction_date}) is ${centsToAmount(amount(before[0].balance))}, but this file starts from ${centsToAmount(meta.openingBalanceCents ?? 0)}. A period may be missing.`)
-    }
-    const { data: after } = await db
-      .from('bank_statement_transactions')
-      .select('transaction_date, balance, debit_amount, credit_amount')
-      .eq('bank_account_id', bank.id)
-      .gt('transaction_date', meta.periodEnd)
-      .order('transaction_date', { ascending: true })
-      .order('day_sequence', { ascending: true })
-      .limit(1)
-    if (after?.[0] && parsed.closingBalanceCents !== null) {
-      const expectedBefore = amount(after[0].balance) + amount(after[0].debit_amount) - amount(after[0].credit_amount)
-      if (expectedBefore !== parsed.closingBalanceCents) {
-        warnings.push(`Gap after this statement: the next stored line (${after[0].transaction_date}) does not continue from this file's closing balance ${centsToAmount(parsed.closingBalanceCents)}.`)
+    for (const code of (check?.reason_codes ?? []) as string[]) {
+      if (code === 'opening_mismatch') {
+        warnings.push(`Opening balance ${opening} does not match the expected ${check.expected_opening_balance} (${check.opening_basis === 'previous_statement' ? 'closing balance of the previous statement' : 'account opening balance'}); difference ${check.opening_difference}. A reason is required to submit.`)
+      } else if (code === 'period_gap') {
+        warnings.push(`There is a gap of ${check.gap_days} day(s) before this statement. A reason is required to submit.`)
+      } else if (code === 'no_opening_basis') {
+        warnings.push('There is no previous statement and no account opening balance date to compare the opening balance with. A reason is required to submit.')
       }
     }
 
@@ -194,87 +194,96 @@ export async function POST(request: Request) {
       account_number: maskAccount(meta.accountNumber),
       account_name: meta.accountName,
       currency: meta.currency,
+      file_name: fileName,
+      file_size: file.size,
+      file_sha256: sha256,
+      period_type: periodType,
+      statement_frequency: frequency,
       period_start: meta.periodStart,
       period_end: meta.periodEnd,
-      opening_balance: centsToAmount(meta.openingBalanceCents ?? 0),
-      closing_balance: centsToAmount(parsed.closingBalanceCents ?? 0),
+      opening_balance: opening,
+      closing_balance: closing,
       total_debit: centsToAmount(parsed.totalDebitCents),
       total_credit: centsToAmount(parsed.totalCreditCents),
+      debit_count: lines.filter(l => l.debitCents > 0).length,
+      credit_count: lines.filter(l => l.creditCents > 0).length,
       lines_in_file: lines.length,
-      new_lines: newLines.length,
-      already_imported: lines.length - newLines.length,
+      expected_opening_balance: check?.expected_opening_balance ?? null,
+      opening_basis: check?.opening_basis ?? 'none',
+      opening_difference: check?.opening_difference ?? null,
+      reason_required: Boolean(check?.reason_required),
     }
 
     if (mode === 'preview') {
       return NextResponse.json({
         summary,
         warnings,
-        sample: newLines.slice(-20).reverse().map(toPreviewRow),
+        blocking,
+        can_upload: blocking.length === 0,
+        sample: lines.slice(-20).reverse().map(toPreviewRow),
       })
     }
+    if (blocking.length) {
+      return NextResponse.json({ error: blocking[0], blocking, summary }, { status: 409 })
+    }
 
-    const { data: importRow, error: importError } = await db
-      .from('bank_statement_imports')
-      .insert({
-        company_id: orgId,
-        bank_account_id: bank.id,
-        source_format: parsed.format,
+    // 1. Store the original file (never overwritten). 2. Record + re-validate in the database.
+    const importId = randomUUID()
+    const filePath = statementFilePath(bank.company_id, bank.id, importId, fileName)
+    const admin = createAdminClient(30_000)
+    const { error: storeError } = await admin.storage.from(STATEMENT_BUCKET).upload(filePath, bytes, {
+      contentType: 'text/csv',
+      upsert: false,
+    })
+    if (storeError) {
+      console.error('Error storing bank statement file:', storeError)
+      return NextResponse.json({ error: 'The original file could not be stored. Try again.' }, { status: 500 })
+    }
+
+    const { data: staged, error: stageError } = await db.rpc('bank_statement_stage', {
+      p_import_id: importId,
+      p_bank_account_id: bank.id,
+      p_file: {
         file_name: fileName,
+        file_path: filePath,
+        file_size: file.size,
+        file_sha256: sha256,
+        source_format: parsed.format,
+        period_type: frequency,
         period_start: meta.periodStart,
         period_end: meta.periodEnd,
-        opening_balance: centsToAmount(meta.openingBalanceCents ?? 0),
-        closing_balance: centsToAmount(parsed.closingBalanceCents ?? 0),
-        rows_in_file: lines.length,
-        imported_by: user.id,
-      })
-      .select('id')
-      .single()
-    if (importError || !importRow) {
-      console.error('Error creating bank statement import:', importError)
-      return NextResponse.json({ error: importError?.message || 'Failed to record the import' }, { status: 500 })
+        opening_balance: opening,
+        closing_balance: closing,
+        account_number: meta.accountNumber,
+        currency_code: meta.currency,
+        warnings: parsed.warnings,
+      },
+      p_lines: lines.map(toStageLine),
+    })
+    if (stageError) {
+      // The statement was refused, so no record points to the stored copy:
+      // remove the orphan object (an accepted upload is never removed).
+      await admin.storage.from(STATEMENT_BUCKET).remove([filePath]).catch(() => undefined)
+      return statementErrorResponse(stageError)
     }
 
-    let inserted = 0
-    try {
-      for (let i = 0; i < newLines.length; i += INSERT_CHUNK) {
-        const chunk = newLines.slice(i, i + INSERT_CHUNK).map(l => toRow(l, orgId, bank.id, importRow.id))
-        const { data, error } = await db
-          .from('bank_statement_transactions')
-          .upsert(chunk, { onConflict: 'bank_account_id,dedupe_key', ignoreDuplicates: true })
-          .select('id')
-        if (error) throw error
-        inserted += data?.length ?? 0
-      }
-    } catch (error: any) {
-      console.error('Error inserting bank statement lines:', error)
-      await db.from('bank_statement_imports')
-        .update({ status: 'failed', rows_inserted: inserted, rows_skipped: lines.length - inserted })
-        .eq('id', importRow.id)
-      return NextResponse.json({
-        error: `Import stopped after ${inserted} line(s): ${error?.message || 'database error'}. Importing the same file again continues safely.`,
-      }, { status: 500 })
-    }
-
-    await db.from('bank_statement_imports')
-      .update({ status: 'completed', rows_inserted: inserted, rows_skipped: lines.length - inserted })
-      .eq('id', importRow.id)
-
-    return NextResponse.json({
-      summary: { ...summary, new_lines: inserted, already_imported: lines.length - inserted },
-      warnings,
-      import_id: importRow.id,
-    }, { status: 201 })
+    return NextResponse.json({ import_id: importId, status: 'uploaded', summary: { ...summary, ...pickStaged(staged) }, warnings }, { status: 201 })
   } catch (error) {
-    console.error('Error in bank statement import API:', error)
+    console.error('Error in bank statement upload API:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
-function toRow(line: BankStatementLine, companyId: string, bankAccountId: string, importId: string) {
+function pickStaged(staged: any) {
+  if (!staged || typeof staged !== 'object') return {}
+  const { expected_opening_balance, opening_difference, opening_basis, reason_required } = staged
+  return { expected_opening_balance, opening_difference, opening_basis, reason_required }
+}
+
+function toStageLine(line: BankStatementLine, index: number) {
   return {
-    company_id: companyId,
-    bank_account_id: bankAccountId,
-    import_id: importId,
+    line_no: index + 1,
+    source_row_no: line.sourceRowNo,
     transaction_date: line.transactionDate,
     day_sequence: line.daySequence,
     description: line.description,

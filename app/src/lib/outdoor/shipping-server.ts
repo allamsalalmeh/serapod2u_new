@@ -1,10 +1,14 @@
 import { pickOutdoorShipping, type OutdoorShippingQuote, type OutdoorShippingRow } from '@/lib/outdoor/shipping'
 
-/** Reads each product's Outdoor delivery settings. Missing columns fall back to the standard RM 2 line. */
+/**
+ * Reads each product's Outdoor delivery settings. Missing columns fall back to the standard RM 2 line.
+ * customerSharePercent below 100 makes the company cover the rest of the delivery price.
+ */
 export async function resolveOutdoorShipping(
   supabase: any,
   productIds: string[],
   subtotal: number,
+  options?: { customerSharePercent?: number },
 ): Promise<OutdoorShippingQuote> {
   const ids = [...new Set(productIds.filter(Boolean))]
   let rows: OutdoorShippingRow[] = []
@@ -21,5 +25,5 @@ export async function resolveOutdoorShipping(
       rows = data || []
     }
   }
-  return pickOutdoorShipping(rows, subtotal)
+  return pickOutdoorShipping(rows, subtotal, { customerSharePercent: options?.customerSharePercent })
 }

@@ -40,6 +40,8 @@ const CRON_JOBS: CronJob[] = [
   { path: '/api/cron/storefront-unpaid-expiry', schedule: '*/15 * * * *' },
   // TikTok Shop API: hourly sync of connected shops (no-op when none is connected).
   { path: '/api/cron/tiktok-shop-sync', schedule: '23 * * * *' },
+  // TikTok Shop daily shipping report: sends at 9:35, 12:35 and 18:35 Malaysia time only.
+  { path: '/api/cron/tiktok-daily-report', schedule: '35 * * * *' },
   // Serapp 1-hour warehouse acceptance holds — expire unaccepted orders & release
   // stock. Opt-in: see serappHoldExpiryEnabled.
   {

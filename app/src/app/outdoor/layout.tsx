@@ -3,6 +3,7 @@ import { Manrope, Syne } from 'next/font/google'
 import { CartProvider } from '@/lib/storefront/cart-context'
 import OutdoorChrome from '@/components/outdoor/OutdoorChrome'
 import OutdoorAnalytics from '@/components/outdoor/OutdoorAnalytics'
+import OutdoorRefCapture from '@/components/outdoor/OutdoorRefCapture'
 import { OUTDOOR_SITE_DEFAULT } from '@/lib/hosts/outdoor-hosts'
 import './outdoor.css'
 
@@ -58,6 +59,7 @@ export default function OutdoorLayout({ children }: { children: React.ReactNode 
     <CartProvider storageKey="serapod_outdoor_cart" accountScoped>
       <div className={`sera-outdoor ${display.variable} ${body.variable} min-h-screen min-w-0`}>
         <OutdoorAnalytics />
+        <OutdoorRefCapture />
         <OutdoorChrome>{children}</OutdoorChrome>
       </div>
     </CartProvider>

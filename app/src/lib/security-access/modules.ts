@@ -78,7 +78,7 @@ export const MODULE_TAXONOMY: readonly ModuleGroup[] = [
       { id: 'general_ledger', name: 'General Ledger', match: res('finance', 'ledger', 'journal', 'account') },
       { id: 'payables', name: 'Payables & Payments', match: res('finance', 'payable', 'payment') },
       { id: 'receivables', name: 'Receivables', match: res('finance', 'receivable') },
-      { id: 'cash_bank', name: 'Cash & Bank', match: res('finance', 'cash', 'reconciliation') },
+      { id: 'cash_bank', name: 'Cash & Bank', match: res('finance', 'cash', 'reconciliation', 'statement') },
       { id: 'finance_reports', name: 'Financial Reports', match: res('finance', 'report') },
       { id: 'finance_admin', name: 'Finance Administration', match: res('finance', 'module', 'settings', 'data', 'payroll_integration') },
     ],

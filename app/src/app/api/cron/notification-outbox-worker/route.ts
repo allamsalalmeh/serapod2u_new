@@ -13,7 +13,7 @@ import { deliveryChainForPreset, isRoutingFallbackPayload, resolveNotificationRo
 import { isSingleCreatorSource, ownerEmailFromPayload, ownerPhoneFromPayload, resolveRecipientTargets } from '@/lib/notifications/orderOwnerNotify'
 import { notificationPhoneKey } from '@/lib/notifications/manualPhoneNumbers'
 import { EMAIL_UI_TEST_REWRITE_LOOKBACK_MS, emailProviderBlockedByUiTest } from '@/lib/notifications/emailProviderReady'
-import { fanoutChildPayload, isFanoutChild, selectFanoutRecipients } from '@/lib/notifications/outboxFanout'
+import { fanoutChildKeepsAddress, fanoutChildPayload, fanoutScope, isFanoutChild, selectFanoutRecipients } from '@/lib/notifications/outboxFanout'
 
 async function failEmailsSentWhileProviderTestBlocked(supabase: any) {
     const { data: providers } = await supabase
@@ -479,6 +479,10 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                         templateBody = `🎉 Your product return {{return_no}} has been completed.`
                     } else if (event_code === 'system_sms_check') {
                         templateBody = `Serapod2U SMS check. If you received this, Local Malaysian SMS is working.`
+                    } else if (event_code === 'tiktok_shop_daily_report') {
+                        templateBody = `{{report_text}}`
+                    } else if (event_code === 'tiktok_shop_daily_report_sms') {
+                        templateBody = `{{summary_text}}`
                     } else {
                         templateBody = `Update: ${event_code} occurred.\nOrder: {{order_no}}\nStatus: {{status}}`
                     }
@@ -520,7 +524,7 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                     } else {
                         recipientPhone = ownerPhoneFromPayload(payload)
                     }
-                } else if (notifSetting && !isFallbackHop) {
+                } else if (notifSetting && !isFallbackHop && !fanoutChildKeepsAddress(payload, channel, to_phone, to_email)) {
                     // Same rules as the Configure drawer's recipient preview (shared module).
                     const configured = await collectConfiguredRecipients(supabase, {
                         orgId: org_id,
@@ -555,17 +559,17 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                         // already have a row for this order. Both guards are required: the marker
                         // stops new children from re-expanding, and the sibling lookup stops rows
                         // queued before this fix from expanding again.
-                        const fanoutOrderNo = String(payload.order_no || '').trim()
+                        const siblingScope = fanoutScope(payload)
                         let existingSiblings: { to_phone?: string | null; to_email?: string | null }[] = []
 
-                        if (!isFanoutChild(payload) && fanoutOrderNo) {
+                        if (!isFanoutChild(payload) && siblingScope) {
                             const { data: siblingRows } = await supabase
                                 .from('notifications_outbox')
                                 .select('to_phone, to_email')
                                 .eq('org_id', org_id)
                                 .eq('event_code', event_code)
                                 .eq('channel', channel)
-                                .contains('payload_json', { order_no: fanoutOrderNo })
+                                .contains('payload_json', siblingScope)
                             existingSiblings = siblingRows || []
                         }
 
@@ -622,15 +626,15 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                     }
                 }
 
-                const orderNo = String(payload.order_no || '').trim()
-                if (orderNo && (recipientPhone || recipientEmail)) {
+                const duplicateScope = fanoutScope(payload)
+                if (duplicateScope && (recipientPhone || recipientEmail)) {
                     const { data: siblings } = await supabase
                         .from('notifications_outbox')
                         .select('id, to_phone, to_email, status')
                         .eq('org_id', org_id)
                         .eq('event_code', event_code)
                         .eq('channel', channel)
-                        .contains('payload_json', { order_no: orderNo })
+                        .contains('payload_json', duplicateScope)
                         .in('status', ['queued', 'processing', 'sent', 'delivered', 'failed'])
                     const phoneKey = notificationPhoneKey(recipientPhone)
                     const emailKey = String(recipientEmail || '').trim().toLowerCase()
@@ -800,7 +804,9 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                         failed++
                     }
                 } else if (channel === 'email') {
-                    const emailSubject = event_code === 'roadtour_qr_delivery'
+                    const emailSubject = String(event_code).startsWith('tiktok_shop_daily_report') && payload.email_subject
+                        ? String(payload.email_subject)
+                        : event_code === 'roadtour_qr_delivery'
                         ? `RoadTour QR — ${String(payload.campaign_name || 'Campaign')}`
                         : String(event_code).startsWith('return_')
                             ? `Product Return ${String(payload.return_no || '')} — ${String(payload.return_status || 'Update')}`.trim()

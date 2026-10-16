@@ -90,6 +90,8 @@ async function cancelOrder(admin: any, order: ExpiringOrder): Promise<UnpaidExpi
 async function expireOrder(admin: any, order: ExpiringOrder, stripeKey: string): Promise<UnpaidExpiryResult> {
   const kept = (reason: string): UnpaidExpiryResult => ({ orderRef: order.order_ref, outcome: 'kept', reason })
   const sessionId = String(order.payment_ref || '')
+  // Placed while no payment gateway was on: there is no payment page, so it can never be paid.
+  if (order.payment_provider === 'manual') return cancelOrder(admin, order)
   if (order.payment_provider !== 'stripe' || !sessionId.startsWith('cs_')) return kept('not a Stripe payment')
   if (!stripeKey) return kept('Stripe is not configured')
 

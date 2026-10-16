@@ -19,6 +19,9 @@ export type OutdoorShippingQuote = {
   amount: number
   title: string
   note: string
+  /** Set when the company covers part of delivery: the price before the subsidy. */
+  actualCost?: number
+  subsidy?: number
 }
 
 export function outdoorCustomerShippingAmount(
@@ -50,6 +53,19 @@ function text(raw: unknown) {
  * When the bag mixes products, the highest delivery price wins.
  */
 export function pickOutdoorShipping(
+  rows: OutdoorShippingRow[],
+  subtotal: number,
+  options?: { freeOver?: number | null; customerSharePercent?: number },
+): OutdoorShippingQuote {
+  const quote = pickFullOutdoorShipping(rows, subtotal, options)
+  const share = options?.customerSharePercent
+  if (share == null || !Number.isFinite(share) || share >= 100 || quote.amount <= 0) return quote
+  const actualCost = quote.amount
+  const amount = Math.round(actualCost * Math.max(0, share) + 1e-6) / 100
+  return { ...quote, amount, actualCost, subsidy: Math.round((actualCost - amount) * 100) / 100 }
+}
+
+function pickFullOutdoorShipping(
   rows: OutdoorShippingRow[],
   subtotal: number,
   options?: { freeOver?: number | null },

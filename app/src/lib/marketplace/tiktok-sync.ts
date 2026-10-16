@@ -2,16 +2,21 @@ import {
   TikTokApiError,
   getStatementTransactions,
   getStatements,
+  getUnsettledTransactions,
   getWithdrawals,
   mapOrderToLines,
   mapStatementTransaction,
+  mapUnsettledTransaction,
   mapWithdrawal,
   myDateToUnix,
   refreshTikTokToken,
   searchOrders,
+  tiktokAppForShop,
   type ApiOrderLine,
   type ApiPayout,
   type ApiSettlement,
+  type ApiUnsettled,
+  type TikTokShopApp,
 } from './tiktok-api'
 
 /**
@@ -32,6 +37,7 @@ const ORDER_OVERLAP_S = 600
 const PAYOUT_LOOKBACK_S = 7 * 86400
 const REFRESH_BEFORE_MS = 24 * 3600 * 1000
 const STALE_RUN_MS = 10 * 60 * 1000
+const UNSETTLED_MAX_PAGES = 30
 
 export interface SyncCounts {
   orderLinesInserted: number
@@ -104,10 +110,18 @@ export async function claimSyncRun(db: any, shopId: string, now = Date.now()) {
   return (data || []).length > 0
 }
 
-async function validAccessToken(db: any, conn: any) {
+async function shopApp(db: any, conn: any): Promise<TikTokShopApp> {
+  const { data: shop, error } = await db.from('marketplace_shops').select('id, shop_name').eq('id', conn.shop_id).maybeSingle()
+  if (error) throw error
+  const app = tiktokAppForShop(shop ?? { id: conn.shop_id })
+  if (!app) throw new Error('The TikTok Shop app for this shop is not set up on this server.')
+  return app
+}
+
+async function validAccessToken(db: any, conn: any, app: TikTokShopApp) {
   const expires = Date.parse(conn.access_token_expires_at)
   if (Number.isFinite(expires) && expires - Date.now() > REFRESH_BEFORE_MS) return conn.access_token as string
-  const tokens = await refreshTikTokToken(conn.refresh_token)
+  const tokens = await refreshTikTokToken(app, conn.refresh_token)
   const update = {
     access_token: tokens.accessToken,
     access_token_expires_at: tokens.accessTokenExpiresAt,
@@ -206,6 +220,40 @@ async function writePayouts(db: any, conn: any, importFor: ImportFor, rows: ApiP
   counts.payoutsWritten += write.length
 }
 
+/**
+ * Replaces the shop's snapshot of orders TikTok has not settled yet. The old
+ * snapshot is kept unless every page was fetched, so a partial or failed fetch
+ * never shows fewer pending orders than there are.
+ */
+export async function refreshUnsettled(db: any, conn: any, app: TikTokShopApp, token: string, deadline: number) {
+  const rows: ApiUnsettled[] = []
+  let pageToken: string | undefined
+  for (let pages = 0; pages < UNSETTLED_MAX_PAGES; pages++) {
+    if (Date.now() >= deadline) return false
+    const page = await getUnsettledTransactions(app, token, conn.shop_cipher, pageToken)
+    for (const tx of page?.transactions || []) {
+      const row = mapUnsettledTransaction(tx)
+      if (row) rows.push(row)
+    }
+    pageToken = page?.next_page_token || undefined
+    if (!pageToken) break
+  }
+  if (pageToken) return false
+
+  const syncedAt = new Date().toISOString()
+  const unique = [...new Map(rows.map(r => [r.transaction_id, r])).values()]
+  for (const part of chunk(unique, WRITE_CHUNK)) {
+    const { error } = await db.from('marketplace_unsettled').upsert(
+      part.map(r => ({ ...r, company_id: conn.company_id, shop_id: conn.shop_id, synced_at: syncedAt })),
+      { onConflict: 'shop_id,transaction_id' },
+    )
+    if (error) throw error
+  }
+  const { error } = await db.from('marketplace_unsettled').delete().eq('shop_id', conn.shop_id).lt('synced_at', syncedAt)
+  if (error) throw error
+  return true
+}
+
 async function saveCursor(db: any, conn: any, update: Record<string, string>) {
   const { error } = await db.from('marketplace_shop_connections').update(update).eq('shop_id', conn.shop_id)
   if (error) throw error
@@ -230,7 +278,8 @@ export async function syncTikTokShop(db: any, conn: any, deadline: number): Prom
   }
   let done = false
   try {
-    const token = await validAccessToken(db, conn)
+    const app = await shopApp(db, conn)
+    const token = await validAccessToken(db, conn, app)
     const dataFromUnix = myDateToUnix(conn.data_from)
 
     // Orders (created or changed since the cursor)
@@ -238,7 +287,7 @@ export async function syncTikTokShop(db: any, conn: any, deadline: number): Prom
     const orderSince = Math.max(dataFromUnix, (toUnix(conn.orders_synced_to) ?? dataFromUnix) - ORDER_OVERLAP_S)
     let pageToken: string | undefined
     while (Date.now() < deadline) {
-      const page = await searchOrders(token, conn.shop_cipher, { updateTimeGe: orderSince, pageToken })
+      const page = await searchOrders(app, token, conn.shop_cipher, { updateTimeGe: orderSince, pageToken })
       const orders = page?.orders || []
       const lines = orders.flatMap(mapOrderToLines)
       if (lines.length) await writeOrderLines(db, conn, importFor, lines, counts)
@@ -254,14 +303,14 @@ export async function syncTikTokShop(db: any, conn: any, deadline: number): Prom
       const statementSince = Math.max(dataFromUnix, (toUnix(conn.statements_synced_to) ?? dataFromUnix - 1) + 1)
       let statementToken: string | undefined
       outer: while (Date.now() < deadline) {
-        const page = await getStatements(token, conn.shop_cipher, { statementTimeGe: statementSince, pageToken: statementToken })
+        const page = await getStatements(app, token, conn.shop_cipher, { statementTimeGe: statementSince, pageToken: statementToken })
         const statements = (page?.statements || []).filter((s: any) => s?.id && Number(s.statement_time) > 0)
         for (const statement of statements) {
           if (Date.now() >= deadline) break outer
           const rows: ApiSettlement[] = []
           let txToken: string | undefined
           do {
-            const tx = await getStatementTransactions(token, conn.shop_cipher, String(statement.id), txToken)
+            const tx = await getStatementTransactions(app, token, conn.shop_cipher, String(statement.id), txToken)
             for (const t of tx?.transactions || []) {
               const row = mapStatementTransaction(String(statement.id), Number(statement.statement_time), statement.currency ?? tx?.currency ?? null, t)
               if (row) rows.push(row)
@@ -283,7 +332,7 @@ export async function syncTikTokShop(db: any, conn: any, deadline: number): Prom
       const startedAt = new Date().toISOString()
       let withdrawalToken: string | undefined
       while (Date.now() < deadline) {
-        const page = await getWithdrawals(token, conn.shop_cipher, { createTimeGe: payoutSince, pageToken: withdrawalToken })
+        const page = await getWithdrawals(app, token, conn.shop_cipher, { createTimeGe: payoutSince, pageToken: withdrawalToken })
         const items = page?.withdrawals || []
         const rows = items.map(mapWithdrawal).filter((p): p is ApiPayout => Boolean(p?.row.request_date && p.row.request_date >= conn.data_from))
         if (rows.length) await writePayouts(db, conn, importFor, rows, counts)
@@ -291,6 +340,12 @@ export async function syncTikTokShop(db: any, conn: any, deadline: number): Prom
         if (!withdrawalToken || items.length === 0) { payoutsDone = true; break }
       }
       if (payoutsDone) await saveCursor(db, conn, { payouts_synced_to: startedAt })
+    }
+
+    if (payoutsDone) {
+      await refreshUnsettled(db, conn, app, token, deadline).catch(error => {
+        console.warn('[tiktok-sync] unsettled snapshot skipped:', describeSyncError(error))
+      })
     }
 
     done = ordersDone && statementsDone && payoutsDone

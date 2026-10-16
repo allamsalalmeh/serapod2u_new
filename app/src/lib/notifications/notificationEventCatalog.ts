@@ -5,6 +5,8 @@ export const SYSTEM_SMS_CHECK_MESSAGE = 'Serapod2U SMS check. If you received th
 export const PASSWORD_RESET_OTP_EVENT = 'password_reset_otp'
 export const REGISTRATION_OTP_EVENT = 'registration_otp'
 export const DELETE_USER_OTP_EVENT = 'delete_user_otp'
+export const TIKTOK_DAILY_REPORT_EVENT = 'tiktok_shop_daily_report'
+export const TIKTOK_DAILY_SUMMARY_EVENT = 'tiktok_shop_daily_report_sms'
 
 export const REQUIRED_NOTIFICATION_TYPES = [
     {
@@ -61,6 +63,16 @@ export const REQUIRED_NOTIFICATION_TYPES = [
         category: 'security', event_code: DELETE_USER_OTP_EVENT, event_name: 'User Deletion OTP',
         event_description: 'Verification code to organization contact when HQ removes or archives a user. Recipient: organization contact phone/email. Synchronous OTP (not outbox).',
         default_enabled: true, available_channels: ['whatsapp', 'sms', 'email'], is_system: true, sort_order: 26,
+    },
+    {
+        category: 'ecommerce', event_code: TIKTOK_DAILY_REPORT_EVENT, event_name: 'TikTok Shop Daily Shipping Report',
+        event_description: 'Full packing list per TikTok shop at 9:35 am and 12:35 pm (parcels still to ship), and what shipped today at 6:35 pm. Email or WhatsApp only; for SMS use the short summary.',
+        default_enabled: false, available_channels: ['email', 'whatsapp'], is_system: false, sort_order: 10,
+    },
+    {
+        category: 'ecommerce', event_code: TIKTOK_DAILY_SUMMARY_EVENT, event_name: 'TikTok Shop Daily Shipping Summary (short)',
+        event_description: 'One-line parcel and item totals per TikTok shop, sent at the same times as the full report. Meant for SMS or WhatsApp.',
+        default_enabled: false, available_channels: ['sms', 'whatsapp'], is_system: false, sort_order: 11,
     },
 ] as const
 

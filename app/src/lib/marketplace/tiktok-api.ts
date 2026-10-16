@@ -16,25 +16,58 @@ export const TTS_AUTHORIZE_URL = 'https://services.tiktokshop.com/open/authorize
 
 const MY_OFFSET_MS = 8 * 3600 * 1000
 
-export function getTikTokShopAppKey() {
-  return String(process.env.TIKTOK_SHOP_APP_KEY || '').trim()
+/**
+ * A Partner Center custom app. A custom app can only be authorized by the
+ * partner's own seller account, so each TikTok seller account has its own app.
+ */
+export interface TikTokShopApp {
+  appKey: string
+  appSecret: string
+  serviceId: string
+  /** Serapod shop IDs or names that use this app; empty for the default app. */
+  shops: string[]
 }
 
-export function getTikTokShopAppSecret() {
-  return String(process.env.TIKTOK_SHOP_APP_SECRET || '').trim()
+const env = (key: string) => String(process.env[key] || '').trim()
+
+function readApp(suffix: string): TikTokShopApp | null {
+  const app = {
+    appKey: env(`TIKTOK_SHOP_APP_KEY${suffix}`),
+    appSecret: env(`TIKTOK_SHOP_APP_SECRET${suffix}`),
+    serviceId: env(`TIKTOK_SHOP_SERVICE_ID${suffix}`),
+    shops: suffix ? env(`TIKTOK_SHOP_APP_SHOPS${suffix}`).split(',').map(s => s.trim()).filter(Boolean) : [],
+  }
+  if (!app.appKey || !app.appSecret || !app.serviceId) return null
+  if (suffix && !app.shops.length) return null
+  return app
 }
 
-export function getTikTokShopServiceId() {
-  return String(process.env.TIKTOK_SHOP_SERVICE_ID || '').trim()
+/** The default app (TIKTOK_SHOP_APP_KEY …) and extra apps (TIKTOK_SHOP_APP_KEY_2 … with TIKTOK_SHOP_APP_SHOPS_2). */
+export function getTikTokShopApps(): TikTokShopApp[] {
+  return ['', '_2', '_3', '_4', '_5', '_6', '_7', '_8', '_9'].map(readApp).filter((a): a is TikTokShopApp => a !== null)
+}
+
+const normalizeShopName = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '')
+
+/** The app of a Serapod shop: an extra app listing the shop's ID or name, else the default app. */
+export function tiktokAppForShop(shop: { id: string; shop_name?: string | null }): TikTokShopApp | null {
+  const apps = getTikTokShopApps()
+  const name = normalizeShopName(shop.shop_name || '')
+  const listed = apps.find(a => a.shops.some(s => s === shop.id || (name && normalizeShopName(s) === name)))
+  return listed ?? apps.find(a => a.shops.length === 0) ?? null
+}
+
+function defaultApp(): TikTokShopApp {
+  return getTikTokShopApps().find(a => a.shops.length === 0) ?? { appKey: '', appSecret: '', serviceId: '', shops: [] }
 }
 
 export function isTikTokShopApiConfigured() {
-  return Boolean(getTikTokShopAppKey() && getTikTokShopAppSecret() && getTikTokShopServiceId())
+  return getTikTokShopApps().length > 0
 }
 
-export function tiktokAuthorizeUrl(state: string) {
+export function tiktokAuthorizeUrl(state: string, app: TikTokShopApp = defaultApp()) {
   const url = new URL(TTS_AUTHORIZE_URL)
-  url.searchParams.set('service_id', getTikTokShopServiceId())
+  url.searchParams.set('service_id', app.serviceId)
   url.searchParams.set('state', state)
   return url.toString()
 }
@@ -61,6 +94,7 @@ type Fetch = typeof fetch
 export interface TikTokCallOptions {
   path: string
   method?: 'GET' | 'POST'
+  app?: TikTokShopApp
   accessToken: string
   shopCipher?: string
   query?: Record<string, string | number | undefined>
@@ -70,8 +104,7 @@ export interface TikTokCallOptions {
 }
 
 export async function callTikTokApi<T = any>(opts: TikTokCallOptions): Promise<T> {
-  const appKey = getTikTokShopAppKey()
-  const secret = getTikTokShopAppSecret()
+  const { appKey, appSecret: secret } = opts.app ?? defaultApp()
   const query: Record<string, string> = { app_key: appKey, timestamp: String(Math.floor((opts.now ?? Date.now)() / 1000)) }
   if (opts.shopCipher) query.shop_cipher = opts.shopCipher
   for (const [k, v] of Object.entries(opts.query || {})) if (v !== undefined && v !== '') query[k] = String(v)
@@ -109,8 +142,8 @@ const unixToIso = (value: unknown) => {
   return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toISOString() : null
 }
 
-async function tokenRequest(path: string, params: Record<string, string>, fetchImpl?: Fetch): Promise<TikTokTokenSet> {
-  const url = `${TTS_AUTH_ORIGIN}${path}?${new URLSearchParams({ app_key: getTikTokShopAppKey(), app_secret: getTikTokShopAppSecret(), ...params })}`
+async function tokenRequest(app: TikTokShopApp, path: string, params: Record<string, string>, fetchImpl?: Fetch): Promise<TikTokTokenSet> {
+  const url = `${TTS_AUTH_ORIGIN}${path}?${new URLSearchParams({ app_key: app.appKey, app_secret: app.appSecret, ...params })}`
   const res = await (fetchImpl ?? fetch)(url, { method: 'GET', signal: AbortSignal.timeout(30_000) })
   const json: any = await res.json().catch(() => null)
   const d = json?.data
@@ -130,12 +163,12 @@ async function tokenRequest(path: string, params: Record<string, string>, fetchI
   }
 }
 
-export function exchangeTikTokAuthCode(authCode: string, fetchImpl?: Fetch) {
-  return tokenRequest('/api/v2/token/get', { auth_code: authCode, grant_type: 'authorized_code' }, fetchImpl)
+export function exchangeTikTokAuthCode(app: TikTokShopApp, authCode: string, fetchImpl?: Fetch) {
+  return tokenRequest(app, '/api/v2/token/get', { auth_code: authCode, grant_type: 'authorized_code' }, fetchImpl)
 }
 
-export function refreshTikTokToken(refreshToken: string, fetchImpl?: Fetch) {
-  return tokenRequest('/api/v2/token/refresh', { refresh_token: refreshToken, grant_type: 'refresh_token' }, fetchImpl)
+export function refreshTikTokToken(app: TikTokShopApp, refreshToken: string, fetchImpl?: Fetch) {
+  return tokenRequest(app, '/api/v2/token/refresh', { refresh_token: refreshToken, grant_type: 'refresh_token' }, fetchImpl)
 }
 
 export interface TikTokAuthorizedShop {
@@ -147,8 +180,8 @@ export interface TikTokAuthorizedShop {
   code: string
 }
 
-export async function getAuthorizedShops(accessToken: string, fetchImpl?: Fetch): Promise<TikTokAuthorizedShop[]> {
-  const data = await callTikTokApi<{ shops?: any[] }>({ path: '/authorization/202309/shops', accessToken, fetchImpl })
+export async function getAuthorizedShops(app: TikTokShopApp, accessToken: string, fetchImpl?: Fetch): Promise<TikTokAuthorizedShop[]> {
+  const data = await callTikTokApi<{ shops?: any[] }>({ path: '/authorization/202309/shops', app, accessToken, fetchImpl })
   return (data?.shops || []).map(s => ({
     id: String(s.id || ''),
     name: String(s.name || ''),
@@ -159,10 +192,11 @@ export async function getAuthorizedShops(accessToken: string, fetchImpl?: Fetch)
   }))
 }
 
-export function searchOrders(accessToken: string, shopCipher: string, params: { updateTimeGe: number; pageToken?: string }, fetchImpl?: Fetch) {
+export function searchOrders(app: TikTokShopApp, accessToken: string, shopCipher: string, params: { updateTimeGe: number; pageToken?: string }, fetchImpl?: Fetch) {
   return callTikTokApi<{ orders?: any[]; next_page_token?: string; total_count?: number }>({
     path: '/order/202309/orders/search',
     method: 'POST',
+    app,
     accessToken,
     shopCipher,
     query: { page_size: 100, sort_field: 'update_time', sort_order: 'ASC', page_token: params.pageToken },
@@ -171,9 +205,10 @@ export function searchOrders(accessToken: string, shopCipher: string, params: { 
   })
 }
 
-export function getStatements(accessToken: string, shopCipher: string, params: { statementTimeGe: number; pageToken?: string }, fetchImpl?: Fetch) {
+export function getStatements(app: TikTokShopApp, accessToken: string, shopCipher: string, params: { statementTimeGe: number; pageToken?: string }, fetchImpl?: Fetch) {
   return callTikTokApi<{ statements?: any[]; next_page_token?: string }>({
     path: '/finance/202309/statements',
+    app,
     accessToken,
     shopCipher,
     query: { page_size: 100, sort_field: 'statement_time', sort_order: 'ASC', statement_time_ge: params.statementTimeGe, page_token: params.pageToken },
@@ -181,10 +216,11 @@ export function getStatements(accessToken: string, shopCipher: string, params: {
   })
 }
 
-export function getStatementTransactions(accessToken: string, shopCipher: string, statementId: string, pageToken?: string, fetchImpl?: Fetch) {
+export function getStatementTransactions(app: TikTokShopApp, accessToken: string, shopCipher: string, statementId: string, pageToken?: string, fetchImpl?: Fetch) {
   if (!/^\d{1,30}$/.test(statementId)) throw new TikTokApiError(`Invalid statement ID "${statementId.slice(0, 40)}"`, null, 0)
   return callTikTokApi<{ transactions?: any[]; next_page_token?: string; create_time?: number; currency?: string }>({
     path: `/finance/202501/statements/${statementId}/statement_transactions`,
+    app,
     accessToken,
     shopCipher,
     query: { page_size: 100, sort_field: 'order_create_time', sort_order: 'ASC', page_token: pageToken },
@@ -192,12 +228,25 @@ export function getStatementTransactions(accessToken: string, shopCipher: string
   })
 }
 
-export function getWithdrawals(accessToken: string, shopCipher: string, params: { createTimeGe: number; pageToken?: string }, fetchImpl?: Fetch) {
+export function getWithdrawals(app: TikTokShopApp, accessToken: string, shopCipher: string, params: { createTimeGe: number; pageToken?: string }, fetchImpl?: Fetch) {
   return callTikTokApi<{ withdrawals?: any[]; next_page_token?: string }>({
     path: '/finance/202309/withdrawals',
+    app,
     accessToken,
     shopCipher,
     query: { page_size: 100, types: 'WITHDRAW,SETTLE,TRANSFER,REVERSE', create_time_ge: params.createTimeGe, page_token: params.pageToken },
+    fetchImpl,
+  })
+}
+
+/** Order transactions TikTok has not settled yet (estimated amounts and the reason). */
+export function getUnsettledTransactions(app: TikTokShopApp, accessToken: string, shopCipher: string, pageToken?: string, fetchImpl?: Fetch) {
+  return callTikTokApi<{ transactions?: any[]; next_page_token?: string }>({
+    path: '/finance/202507/orders/unsettled',
+    app,
+    accessToken,
+    shopCipher,
+    query: { page_size: 100, sort_field: 'order_create_time', sort_order: 'DESC', page_token: pageToken },
     fetchImpl,
   })
 }
@@ -299,6 +348,7 @@ export function mapOrderToLines(order: any): ApiOrderLine[] {
       fulfillment_type: humanize(order.fulfillment_type),
       delivery_option: text(order.delivery_option_name),
       shipping_provider: text(order.shipping_provider),
+      tracking_number: text(first.tracking_number) ?? text(order.tracking_number),
       payment_method: text(order.payment_method_name),
       package_id: text(first.package_id),
       buyer_state: district('L1'),
@@ -415,6 +465,42 @@ export function mapStatementTransaction(statementId: string, statementTime: numb
       adjustment_amount: amount(tx.adjustment_amount),
       fee_breakdown: fees,
     },
+  }
+}
+
+export interface ApiUnsettled {
+  transaction_id: string
+  transaction_type: string | null
+  order_id: string | null
+  order_created_at: string | null
+  delivered_at: string | null
+  status: string | null
+  reason: string | null
+  currency: string | null
+  est_revenue: string | null
+  est_fees: string | null
+  est_shipping: string | null
+  est_settlement: string | null
+}
+
+/** One unsettled order transaction → one marketplace_unsettled row. */
+export function mapUnsettledTransaction(tx: any): ApiUnsettled | null {
+  const transactionId = text(tx?.id)
+  if (!transactionId || !/^[A-Za-z0-9_-]{1,64}$/.test(transactionId)) return null
+  const orderId = text(tx.order_id)
+  return {
+    transaction_id: transactionId,
+    transaction_type: TRANSACTION_TYPE[String(tx.type)] ?? humanize(tx.type),
+    order_id: orderId && /^\d{6,30}$/.test(orderId) ? orderId : null,
+    order_created_at: unixToIso(tx.order_create_time),
+    delivered_at: unixToIso(tx.order_delivery_time),
+    status: humanize(tx.status),
+    reason: humanize(tx.unsettled_reason),
+    currency: text(tx.currency),
+    est_revenue: amount(tx.est_revenue_amount),
+    est_fees: amount(tx.est_fee_tax_amount),
+    est_shipping: amount(tx.est_shipping_cost_amount),
+    est_settlement: amount(tx.est_settlement_amount),
   }
 }
 

@@ -1,6 +1,7 @@
 import { guardUserOperation } from '@/lib/security-access/operation'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { loadProcessableBatch } from '@/lib/qr-batch-access-server'
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
@@ -14,16 +15,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Batch ID is required' }, { status: 400 })
   }
 
-  // Check current status
-  const { data: batch, error: fetchError } = await supabase
-    .from('qr_batches')
-    .select('packing_status')
-    .eq('id', batch_id)
-    .single()
-
-  if (fetchError) {
-    return NextResponse.json({ error: fetchError.message }, { status: 500 })
-  }
+  const loaded = await loadProcessableBatch(supabase, saUser.id, batch_id, 'id, packing_status')
+  if (loaded.response) return loaded.response
+  const { admin, batch } = loaded
 
   if (batch.packing_status === 'completed') {
     return NextResponse.json({ message: 'Already packed' })
@@ -34,13 +28,17 @@ export async function POST(request: NextRequest) {
   }
 
   // Set to queued
-  const { error: updateError } = await supabase
+  const { data: queued, error: updateError } = await admin
     .from('qr_batches')
     .update({ packing_status: 'queued' })
     .eq('id', batch_id)
+    .select('id')
 
   if (updateError) {
     return NextResponse.json({ error: updateError.message }, { status: 500 })
+  }
+  if (!queued || queued.length === 0) {
+    return NextResponse.json({ error: 'Packing could not be queued for this batch' }, { status: 409 })
   }
 
   return NextResponse.json({ success: true, status: 'queued' })

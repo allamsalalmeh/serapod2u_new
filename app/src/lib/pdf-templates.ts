@@ -14,6 +14,7 @@ import { formatExpectedDelivery, resolveOrderCasesPerBox } from '@/lib/orders/pa
 import { formatOrderExpectedBoxes } from '@/lib/orders/packaging'
 import { qrCaseTotals } from '@/lib/orders/qr-buffer'
 import { formatDateKey, isDateKey } from '@/lib/orders/order-date'
+import { purchaseOrderHidesPrices } from '@/lib/orders/po-price-visibility'
 import {
   salesOrderLineDescription,
   sortSalesOrderLinesForDisplay,
@@ -500,7 +501,8 @@ export class ClassicTemplate {
 
     // 3. Items Table
     // Simple table with no borders, just lines
-    const headers = ['No', 'Description', 'Unit', 'Price', 'Amount']
+    const hidePrices = purchaseOrderHidesPrices(orderData.order_type, documentData.doc_type)
+    const headers = hidePrices ? ['No', 'Description', 'Unit'] : ['No', 'Description', 'Unit', 'Price', 'Amount']
 
     // Sales Orders group the lines Hero first, then Zero, then anything else;
     // every other document keeps the stored sequence. Presentation only — the
@@ -519,6 +521,10 @@ export class ClassicTemplate {
       // repeats inside every variant name.
       const description =
         salesOrderLineDescription(item.product?.product_name, item.variant?.variant_name) || 'Product'
+
+      if (hidePrices) {
+        return [(index + 1).toString(), description, qty.toString()]
+      }
 
       return [
         (index + 1).toString(),
@@ -600,21 +606,23 @@ export class ClassicTemplate {
     this.doc.setFont('helvetica', 'bold')
     this.doc.setTextColor(0, 0, 0)
 
-    const isBoxedOrder = ['H2M', 'D2H', 'DH'].includes(orderData.order_type)
-    if (isSalesOrderDoc || !isBoxedOrder) {
-      const totalX = this.pageWidth - this.margin - 30
-      this.doc.text('Total', totalX - 20, y, { align: 'right' })
-    } else {
-      // H2M / D2H: "Grand Total | total cases | amount", the case total centred
-      // under the Unit column and the amount under Amount (column widths from
-      // the table above: Unit 18, Price 22, Amount 28).
-      const unitColumnRight = this.pageWidth - this.margin - 28 - 22
-      const unitColumnCenter = unitColumnRight - 18 / 2
-      const totalCases = orderData.order_items.reduce((sum, item) => sum + (item.qty || 0), 0)
-      this.doc.text('Grand Total', unitColumnRight - 18 - 2, y, { align: 'right' })
-      this.doc.text(totalCases.toLocaleString('en-MY'), unitColumnCenter, y, { align: 'center' })
+    if (!hidePrices) {
+      const isBoxedOrder = ['H2M', 'D2H', 'DH'].includes(orderData.order_type)
+      if (isSalesOrderDoc || !isBoxedOrder) {
+        const totalX = this.pageWidth - this.margin - 30
+        this.doc.text('Total', totalX - 20, y, { align: 'right' })
+      } else {
+        // H2M / D2H: "Grand Total | total cases | amount", the case total centred
+        // under the Unit column and the amount under Amount (column widths from
+        // the table above: Unit 18, Price 22, Amount 28).
+        const unitColumnRight = this.pageWidth - this.margin - 28 - 22
+        const unitColumnCenter = unitColumnRight - 18 / 2
+        const totalCases = orderData.order_items.reduce((sum, item) => sum + (item.qty || 0), 0)
+        this.doc.text('Grand Total', unitColumnRight - 18 - 2, y, { align: 'right' })
+        this.doc.text(totalCases.toLocaleString('en-MY'), unitColumnCenter, y, { align: 'center' })
+      }
+      this.doc.text(this.formatCurrency(totalAmount), this.pageWidth - this.margin, y, { align: 'right' })
     }
-    this.doc.text(this.formatCurrency(totalAmount), this.pageWidth - this.margin, y, { align: 'right' })
 
     // 4b. Expected Delivery - the ordered cases in boxes, between the total and
     // the Terms. Sales Orders only; a PO or an invoice states no delivery figure.
