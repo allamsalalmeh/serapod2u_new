@@ -70,6 +70,7 @@ import {
 } from '@/components/ui/sera-modal'
 import { buildSetDefaultFulfillmentConfirmMessage } from '@/lib/organizations/distributor-fulfillment-default'
 import { ALL_STATES_VALUE, deriveStateOptions, matchesStateFilter } from '@/lib/organizations/state-filter'
+import { compareOrganizations, type OrganizationSortDirection, type OrganizationSortField } from './organization-sort'
 
 interface UserProfile {
   id: string
@@ -141,8 +142,8 @@ interface OrganizationsViewProps {
   onViewChange?: (view: string) => void
 }
 
-type SortField = 'org_name' | 'org_type_code' | 'contact_name' | 'state' | 'is_active'
-type SortDirection = 'asc' | 'desc'
+type SortField = OrganizationSortField
+type SortDirection = OrganizationSortDirection
 const PROGRAM_FILTER_OPTIONS = [
   { value: 'all', label: 'All Programs' },
   { value: 'Cellera', label: 'Cellera' },
@@ -580,37 +581,7 @@ export default function OrganizationsView({ userProfile, onViewChange }: Organiz
     const matchesState = matchesStateFilter(org, filterState)
 
     return matchesSearch && matchesType && matchesStatus && matchesProgram && matchesState && matchesManufacturerCategoryFilter(org, filterCategory, categorySummaries)
-  }).sort((a, b) => {
-    let aVal: any = a[sortField]
-    let bVal: any = b[sortField]
-
-    // Handle null values
-    if (aVal === null || aVal === undefined) return 1
-    if (bVal === null || bVal === undefined) return -1
-
-    // Handle different data types
-    if (sortField === 'org_name' || sortField === 'contact_name') {
-      aVal = (aVal || '').toLowerCase()
-      bVal = (bVal || '').toLowerCase()
-    } else if (sortField === 'state') {
-      // Sort by state name
-      aVal = (a.states?.state_name || '').toLowerCase()
-      bVal = (b.states?.state_name || '').toLowerCase()
-    } else if (sortField === 'org_type_code') {
-      // Sort by type name instead of code
-      aVal = a.org_types?.type_name || a.org_type_code
-      bVal = b.org_types?.type_name || b.org_type_code
-      aVal = aVal.toLowerCase()
-      bVal = bVal.toLowerCase()
-    } else if (sortField === 'is_active') {
-      aVal = aVal ? 1 : 0
-      bVal = bVal ? 1 : 0
-    }
-
-    if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1
-    if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1
-    return 0
-  })
+  }).sort((a, b) => compareOrganizations(a, b, sortField, sortDirection))
 
   // Pagination calculations
   const totalOrganizations = filteredOrganizations.length

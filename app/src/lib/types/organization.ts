@@ -33,6 +33,7 @@ export interface Organization {
   sells_sbox?: boolean
   sells_sbox_special_edition?: boolean
   hot_flavour_brands?: string | null
+  payment_term_id?: string | null
 }
 
 export type OrganizationFormData = Partial<Organization>
