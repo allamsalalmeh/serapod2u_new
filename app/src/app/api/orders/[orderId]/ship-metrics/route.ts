@@ -11,47 +11,56 @@ const parseUUID = (value: string | null) => {
   return uuidRegex.test(trimmed) ? trimmed : null
 }
 
-type SupabaseMasterRecord = {
+// Keeps PostgREST `in.(...)` filters well inside URL limits.
+const IN_CHUNK_SIZE = 100
+// PostgREST caps a response at its max-rows setting; read every page.
+const PAGE_SIZE = 1000
+
+const chunk = <T,>(values: T[]): T[][] => {
+  const chunks: T[][] = []
+  for (let i = 0; i < values.length; i += IN_CHUNK_SIZE) chunks.push(values.slice(i, i + IN_CHUNK_SIZE))
+  return chunks
+}
+
+type PageResult<T> = PromiseLike<{ data: T[] | null; error: unknown }>
+
+const readAllPages = async <T,>(page: (from: number, to: number) => PageResult<T>): Promise<T[]> => {
+  const rows: T[] = []
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await page(from, from + PAGE_SIZE - 1)
+    if (error) throw error
+    rows.push(...(data ?? []))
+    if (!data || data.length < PAGE_SIZE) return rows
+  }
+}
+
+type MasterRecord = {
   id: string
   status: string | null
-  warehouse_org_id: string | null
-  shipment_order_id: string | null
-  receive_order_id?: string | null
   actual_unit_count: number | null
   expected_unit_count: number | null
-  qr_batches?: Array<{ order_id: string | null }> | { order_id: string | null } | null
 }
 
-type SupabaseCodeRecord = {
-  master_code_id: string | null
-}
-
-const resolveOrderIdForMaster = (
-  record: SupabaseMasterRecord,
-  mode: 'shipment' | 'receive' = 'shipment'
-): string | null => {
-  const directOrderId = mode === 'receive' ? record.receive_order_id : record.shipment_order_id
-  if (directOrderId) {
-    return directOrderId
-  }
-
-  const batches = record.qr_batches
-  if (!batches) {
-    return null
-  }
-
-  const batchArray = Array.isArray(batches) ? batches : [batches]
-  const first = batchArray.find((batch) => batch && batch.order_id)
-  return first?.order_id ?? null
-}
-
-const resolveUnitsForMaster = (record: SupabaseMasterRecord): number => {
+const resolveUnitsForMaster = (record: MasterRecord): number => {
   const actual = typeof record.actual_unit_count === 'number' ? record.actual_unit_count : null
   const expected = typeof record.expected_unit_count === 'number' ? record.expected_unit_count : null
   const candidate = actual && actual > 0 ? actual : expected
   return candidate && candidate > 0 ? candidate : 0
 }
 
+/**
+ * D2H shipping metrics for one warehouse.
+ *
+ * - units_shipped: order_fulfillment stock movements that reference this D2H
+ *   order and leave this warehouse (written by fulfill_order_inventory).
+ * - cases_shipped: master cases scanned in this warehouse's approved shipping
+ *   sessions whose source_order_id is this D2H order (the link WarehouseShipV2
+ *   writes and confirm-shipment acts on). QR batches belong to H2M production
+ *   orders, so batch order ids are never used to attribute D2H shipments.
+ * - cases_received / units_received: H2M warehouse receiving cannot be
+ *   attributed to a D2H order, so they are null and received_metrics_available
+ *   is false.
+ */
 export async function GET(request: NextRequest, context: { params: Promise<{ orderId: string }> }) {
   try {
     const supabase = await createClient()
@@ -66,7 +75,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ord
     const saDenied = await guardUserOperation(user.id, 'inventory.report.view')
     if (saDenied) return saDenied
 
-  const { orderId: orderIdParam } = await context.params
+    const { orderId: orderIdParam } = await context.params
     const orderId = parseUUID(orderIdParam)
 
     if (!orderId) {
@@ -78,12 +87,19 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ord
     // by the browser.
     const { data: accessibleOrder, error: orderAccessError } = await supabase
       .from('orders')
-      .select('id')
+      .select('id, order_type')
       .eq('id', orderId)
       .maybeSingle()
 
     if (orderAccessError || !accessibleOrder) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
+    if (accessibleOrder.order_type !== 'D2H') {
+      return NextResponse.json(
+        { error: 'Shipping metrics are only available for D2H orders' },
+        { status: 422 }
+      )
     }
 
     const searchParams = request.nextUrl.searchParams
@@ -117,61 +133,70 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ord
       }
     }
 
-    // --- Master case information ---
-    const { data: masterRows, error: masterError } = await supabase
-      .from('qr_master_codes')
-      .select(
-        `
-          id,
-          status,
-          warehouse_org_id,
-          shipment_order_id,
-          receive_order_id,
-          actual_unit_count,
-          expected_unit_count,
-          qr_batches ( order_id )
-        `
-      )
+    // --- Master cases shipped against this D2H order ---
+    const { data: sessions, error: sessionError } = await supabase
+      .from('qr_validation_reports')
+      .select('id, master_codes_scanned')
+      .eq('source_order_id', orderId)
       .eq('warehouse_org_id', warehouseId)
-      .or(`shipment_order_id.eq.${orderId},qr_batches.order_id.eq.${orderId}`)
+      .eq('validation_status', 'approved')
 
-    if (masterError) {
+    if (sessionError) {
+      console.error('[ship-metrics] Failed to load shipping sessions', sessionError)
+      return NextResponse.json({ error: 'Unable to load shipping sessions' }, { status: 500 })
+    }
+
+    const masterCodes = Array.from(new Set(
+      (sessions || []).flatMap((session) => (Array.isArray(session.master_codes_scanned) ? session.master_codes_scanned : []))
+    ))
+
+    const mastersById = new Map<string, MasterRecord>()
+    try {
+      for (const codes of chunk(masterCodes)) {
+        const rows = await readAllPages<MasterRecord>((from, to) =>
+          supabase
+            .from('qr_master_codes')
+            .select('id, status, actual_unit_count, expected_unit_count')
+            .in('master_code', codes)
+            .eq('warehouse_org_id', warehouseId)
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+        for (const row of rows) mastersById.set(row.id, row)
+      }
+    } catch (masterError) {
       console.error('[ship-metrics] Failed to load master cases', masterError)
       return NextResponse.json({ error: 'Unable to load master case data' }, { status: 500 })
     }
 
-    const relevantMasters = (masterRows || []).filter((record) => resolveOrderIdForMaster(record) === orderId)
-    const masterIds = relevantMasters.map((record) => record.id)
-
-    // --- Shipped unique counts per master ---
-    let shippedUniquelyByMaster = new Map<string, number>()
-    if (masterIds.length > 0) {
-      const { data: shippedUniqueRows, error: shippedUniqueError } = await supabase
-        .from('qr_codes')
-        .select('master_code_id')
-        .eq('status', 'shipped_distributor')
-        .in('master_code_id', masterIds)
-
-      if (shippedUniqueError) {
-        console.error('[ship-metrics] Failed to load shipped unique codes', shippedUniqueError)
-        return NextResponse.json({ error: 'Unable to load shipped unit details' }, { status: 500 })
-      }
-
-      shippedUniquelyByMaster = (shippedUniqueRows || []).reduce((map, row: SupabaseCodeRecord) => {
-        const masterId = row.master_code_id
-        if (!masterId) {
-          return map
+    // --- Shipped (non-buffer) unique codes per master ---
+    const shippedUniquelyByMaster = new Map<string, number>()
+    try {
+      for (const ids of chunk(Array.from(mastersById.keys()))) {
+        const rows = await readAllPages<{ master_code_id: string | null }>((from, to) =>
+          supabase
+            .from('qr_codes')
+            .select('id, master_code_id')
+            .eq('status', 'shipped_distributor')
+            .eq('is_buffer', false)
+            .in('master_code_id', ids)
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+        for (const row of rows) {
+          if (!row.master_code_id) continue
+          shippedUniquelyByMaster.set(row.master_code_id, (shippedUniquelyByMaster.get(row.master_code_id) ?? 0) + 1)
         }
-        const current = map.get(masterId) ?? 0
-        map.set(masterId, current + 1)
-        return map
-      }, new Map<string, number>())
+      }
+    } catch (shippedUniqueError) {
+      console.error('[ship-metrics] Failed to load shipped unique codes', shippedUniqueError)
+      return NextResponse.json({ error: 'Unable to load shipped unit details' }, { status: 500 })
     }
 
     let casesShipped = 0
-    for (const master of relevantMasters) {
+    for (const master of mastersById.values()) {
       const caseUnits = resolveUnitsForMaster(master)
-    const masterShipped = master.status === 'shipped_distributor'
+      const masterShipped = master.status === 'shipped_distributor'
       const shippedUniqueCount = shippedUniquelyByMaster.get(master.id) ?? 0
 
       const shippedViaUnits = caseUnits > 0 && shippedUniqueCount >= caseUnits
@@ -180,53 +205,17 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ord
       }
     }
 
-    // --- Received metrics ---
-  const { data: receivedMasters, error: receivedError } = await supabase
-      .from('qr_master_codes')
-      .select(
-        `
-          id,
-          status,
-          warehouse_org_id,
-          shipment_order_id,
-          receive_order_id,
-          actual_unit_count,
-          expected_unit_count,
-          qr_batches ( order_id )
-        `
-      )
-      .eq('warehouse_org_id', warehouseId)
-      .eq('status', 'received_warehouse')
-      .or(`receive_order_id.eq.${orderId},qr_batches.order_id.eq.${orderId}`)
-
-    if (receivedError) {
-      console.error('[ship-metrics] Failed to load received metrics', receivedError)
-      return NextResponse.json({ error: 'Unable to load received metrics' }, { status: 500 })
-    }
-
-    let casesReceived = 0
-    let unitsReceived = 0
-    if (Array.isArray(receivedMasters)) {
-      for (const master of receivedMasters) {
-  const targetOrderId = resolveOrderIdForMaster(master, 'receive')
-        if (targetOrderId !== orderId) continue
-
-        casesReceived += 1
-        unitsReceived += resolveUnitsForMaster(master)
-      }
-    }
-
     return NextResponse.json({
       order_id: orderId,
       warehouse_id: warehouseId,
       cases_shipped: casesShipped,
       units_shipped: unitsShipped,
-      cases_received: casesReceived,
-      units_received: unitsReceived
+      cases_received: null,
+      units_received: null,
+      received_metrics_available: false
     })
   } catch (error: any) {
     console.error('[ship-metrics] Unexpected error', error)
-    const message = error?.message || 'Unexpected error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return NextResponse.json({ error: 'Unexpected error' }, { status: 500 })
   }
 }
