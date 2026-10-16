@@ -185,7 +185,6 @@ export default function UnifiedDocumentUpload({
               <div className="flex items-center gap-1.5 text-[11px] text-green-700 mb-1.5">
                 {isImage ? <ImageIcon className="w-3 h-3" /> : <FileIcon className="w-3 h-3" />}
                 <span className="truncate font-medium">{fileName}</span>
-                {selectedFile && <span className="text-[10px] text-green-600">({formatFileSize(selectedFile.size)})</span>}
               </div>
               <div className="flex gap-1.5 mt-2">
                 {onDownload && (

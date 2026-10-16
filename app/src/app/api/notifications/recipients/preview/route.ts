@@ -116,7 +116,7 @@ export async function GET(request: NextRequest) {
                         full_name: u.full_name || u.email || 'Unknown',
                         email: u.email,
                         phone: u.phone,
-                        type: `Dynamic: ${label} (${orgNameMap[u.organization_id] || label})`
+                        type: `Dynamic: ${label} (${(u.organization_id && orgNameMap[u.organization_id]) || label})`
                     })))
                 }
             }

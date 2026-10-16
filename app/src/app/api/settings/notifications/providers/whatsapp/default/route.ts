@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
   const configuredReadiness = getWhatsAppProviderReadiness({
     id: provider.id,
     providerName: provider.provider_name,
-    isActive: provider.is_active,
+    isActive: provider.is_active ?? undefined,
     lastTestStatus: provider.last_test_status,
     publicConfig,
     sensitiveConfig: secrets,
