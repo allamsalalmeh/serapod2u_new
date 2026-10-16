@@ -45,6 +45,8 @@ import {
   type InventorySummarySortColumn,
   type VariantInventorySummary
 } from '@/lib/inventory/inventory-view-aggregation'
+import { resolveStockCountPiecesPerCase } from '@/lib/inventory/stock-count-catalog'
+import { formatPiecesAsCases } from '@/lib/inventory/stock-count-units'
 import {
   HQ_CONSOLIDATED_LEGACY_NOTE,
   buildInventoryLocationScope,
@@ -145,6 +147,24 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
       return '0'
     }
     return new Intl.NumberFormat('en-MY').format(value)
+  }
+
+  /** Under a pcs figure, restates cartridge quantities in cases (Hero/Zero only). */
+  const renderQtyWithCases = (pcs: number, productName: string | null | undefined, opts?: { emphasize?: boolean }) => {
+    const perCase = resolveStockCountPiecesPerCase(productName)
+    const mainClass = opts?.emphasize
+      ? 'text-xs font-medium text-[var(--sera-orange)]'
+      : 'text-xs font-medium'
+    return (
+      <div>
+        <span className={mainClass}>{formatNumber(pcs)}</span>
+        {perCase && pcs !== 0 && (
+          <p className="text-[11px] text-[var(--sera-muted)] tabular-nums">
+            {formatPiecesAsCases(pcs, perCase)}
+          </p>
+        )}
+      </div>
+    )
   }
 
   useEffect(() => {
@@ -1544,6 +1564,7 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                   const incomingBreakdown = getIncomingBreakdown(
                     incomingMap.get(incomingKey(summary.organizationId, summary.variantId))
                   )
+                  const piecesPerCase = resolveStockCountPiecesPerCase(summary.productName)
                   const toggleExpanded = () => {
                     if (!configurationDetailAvailable) return
                     setExpandedVariants(current => {
@@ -1611,13 +1632,13 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span className="text-xs font-medium">{formatNumber(summary.onHand)}</span>
+                      {renderQtyWithCases(summary.onHand, summary.productName)}
                     </TableCell>
                     <TableCell>
                       <span className="text-xs text-[var(--sera-muted)]">{formatNumber(summary.allocated)}</span>
                     </TableCell>
                     <TableCell>
-                      <span className="text-xs font-medium">{formatNumber(summary.available)}</span>
+                      {renderQtyWithCases(summary.available, summary.productName)}
                     </TableCell>
                     <TableCell>
                       {summary.incoming > 0 ? (
@@ -1633,10 +1654,17 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                                 variant_name: summary.variantName,
                               })
                             }}
-                            className="text-xs font-medium text-[var(--sera-orange)] underline decoration-dotted underline-offset-2 hover:text-[var(--sera-orange-deep)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--sera-orange)]/30 focus-visible:ring-offset-1 rounded-sm" 
+                            className="text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--sera-orange)]/30 focus-visible:ring-offset-1 rounded-sm"
                             title="View incoming orders and transfers"
                           >
-                            {formatNumber(summary.incoming)}
+                            <span className="text-xs font-medium text-[var(--sera-orange)] underline decoration-dotted underline-offset-2 hover:text-[var(--sera-orange-deep)]">
+                              {formatNumber(summary.incoming)}
+                            </span>
+                            {piecesPerCase && (
+                              <p className="text-[11px] text-[var(--sera-orange)]/80 tabular-nums no-underline">
+                                {formatPiecesAsCases(summary.incoming, piecesPerCase)}
+                              </p>
+                            )}
                           </button>
                           {incomingBreakdown.transfer > 0 && (
                             <p className="text-xs text-[var(--sera-muted)]/80">
@@ -1649,9 +1677,7 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                       )}
                     </TableCell>
                     <TableCell>
-                      <span className="text-xs font-medium">
-                        {formatNumber(summary.position)}
-                      </span>
+                      {renderQtyWithCases(summary.position, summary.productName)}
                     </TableCell>
                     <TableCell>
                       <div className="space-y-2">
@@ -1731,11 +1757,11 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                                   <td className="px-4 py-2">
                                     <Badge variant="outline">{config.lifecycleStatus || 'active'}</Badge>
                                   </td>
-                                  <td className="px-4 py-2 text-right font-medium">{formatNumber(config.onHand)}</td>
+                                  <td className="px-4 py-2 text-right font-medium">{renderQtyWithCases(config.onHand, summary.productName)}</td>
                                   <td className="px-4 py-2 text-right">{config.allocated > 0 ? formatNumber(config.allocated) : <span className="text-gray-400">0</span>}</td>
-                                  <td className="px-4 py-2 text-right font-medium">{formatNumber(config.available)}</td>
-                                  <td className="px-4 py-2 text-right">{config.incoming > 0 ? formatNumber(config.incoming) : <span className="text-gray-400">0</span>}</td>
-                                  <td className="px-4 py-2 text-right">{formatNumber(config.position)}</td>
+                                  <td className="px-4 py-2 text-right font-medium">{renderQtyWithCases(config.available, summary.productName)}</td>
+                                  <td className="px-4 py-2 text-right">{config.incoming > 0 ? renderQtyWithCases(config.incoming, summary.productName, { emphasize: true }) : <span className="text-gray-400">0</span>}</td>
+                                  <td className="px-4 py-2 text-right">{renderQtyWithCases(config.position, summary.productName)}</td>
                                   {canViewTotalValue() && (
                                     <td className="px-4 py-2 text-right">RM {formatCurrency(config.value)}</td>
                                   )}

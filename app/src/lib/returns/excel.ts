@@ -12,7 +12,7 @@
  */
 
 import {
-    classifyProductLine, isDeviceLine, productLineLabel,
+    classifyProductLine, isCartridgeLine, productLineLabel,
     computePcsMode, computeBoxMode,
     type ProductLine, type EntryUnit,
 } from './format'
@@ -312,7 +312,7 @@ function buildItemsSheet(wb: any, ctx: ReturnExcelContext, rows: ReturnExcelRowI
     const modeRange = `'${METADATA_SHEET}'!$F$2:$F$3`
 
     rows.forEach((r, i) => {
-        const device = isDeviceLine(r.product_line)
+        const cartridge = isCartridgeLine(r.product_line)
         const upb = r.units_per_case > 0 ? r.units_per_case : 1
         const view = deriveExportView(r)
 
@@ -323,11 +323,11 @@ function buildItemsSheet(wb: any, ctx: ReturnExcelContext, rows: ReturnExcelRowI
             r.variant_id || '',
             r.manual_sku || '',
             r.barcode || '',
-            device ? 'PCS' : (r.entry_unit === 'box' ? 'Cases' : 'PCS'),
+            cartridge ? (r.entry_unit === 'box' ? 'Cases' : 'PCS') : 'PCS',
             view.quantity,
-            device ? '' : upb,
+            cartridge ? upb : '',
             view.loose,
-            device ? '' : view.fullBoxes,
+            cartridge ? view.fullBoxes : '',
             view.totalPcs,
             labelForCode(ctx.reasons, r.reason),
             labelForCode(ctx.conditions, r.condition),
@@ -341,12 +341,12 @@ function buildItemsSheet(wb: any, ctx: ReturnExcelContext, rows: ReturnExcelRowI
             })
         }
 
-        // Quantity Mode dropdown — devices are fixed PCS, Hero/Zero PCS/Cases.
+        // Quantity Mode dropdown — cartridges (Hero/Zero) PCS/Cases; everything else PCS only.
         excelRow.getCell(COL.mode).dataValidation = {
             type: 'list', allowBlank: false,
-            formulae: [device ? '"PCS"' : modeRange],
+            formulae: [cartridge ? modeRange : '"PCS"'],
             showErrorMessage: true,
-            error: device ? 'Devices (S.Line / S.Box) are PCS only.' : 'Choose PCS or Cases.',
+            error: cartridge ? 'Choose PCS or Cases.' : 'Cases mode is only for Cellera Hero / Zero cartridges — this product is PCS only.',
         }
         // Return Quantity — whole number ≥ 0.
         excelRow.getCell(COL.qty).dataValidation = {
@@ -411,7 +411,7 @@ function labelForCode(options: ReturnExcelMasterOption[], code: string | null): 
 function deriveExportView(r: ReturnExcelRowInput): {
     quantity: number; loose: number; fullBoxes: number; totalPcs: number
 } {
-    if (isDeviceLine(r.product_line)) {
+    if (!isCartridgeLine(r.product_line)) {
         const pcs = Math.max(0, Math.floor(r.total_units || r.entered_pcs || 0))
         return { quantity: pcs, loose: pcs, fullBoxes: 0, totalPcs: pcs }
     }
@@ -538,16 +538,18 @@ export async function parseReturnWorkbook(
         }
         seen.add(dedupeKey)
 
-        const device = isDeviceLine(matched.product_line)
+        const cartridge = isCartridgeLine(matched.product_line)
 
         // ── Quantity mode ──
         // "Cases" is the current wording; "Box" is still accepted so templates
-        // downloaded before the rename keep importing.
+        // downloaded before the rename keep importing. Cases is only for
+        // vape cartridges (Cellera Hero / Zero) — devices and other products
+        // are PCS only.
         let mode: EntryUnit
         const modeLc = modeRaw.toLowerCase()
         const isCaseMode = modeLc === 'cases' || modeLc === 'case' || modeLc === 'box'
-        if (device) {
-            if (isCaseMode) { push('error', 'Devices (S.Line / S.Box) are PCS only — Cases mode is not allowed.'); return }
+        if (!cartridge) {
+            if (isCaseMode) { push('error', 'Cases mode is only for Cellera Hero / Zero cartridges — this product is PCS only.'); return }
             mode = 'pcs'
         } else if (isCaseMode) {
             mode = 'box'
