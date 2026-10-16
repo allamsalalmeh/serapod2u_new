@@ -2,6 +2,7 @@ import { Suspense } from 'react'
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import ForgotPasswordPageClient from '@/components/auth/ForgotPasswordPageClient'
+import { asJsonObject } from '@/lib/supabase/json'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -27,7 +28,9 @@ export default async function ForgotPasswordPage() {
     } else {
       const supabase = await createClient()
       const { data: brandingData } = await supabase.rpc('get_public_branding')
-      if (brandingData?.copyrightText) branding.copyrightText = brandingData.copyrightText
+      // copyrightText comes from settings->>'copyrightText': text or null.
+      const copyrightText = asJsonObject(brandingData).copyrightText
+      if (typeof copyrightText === 'string' && copyrightText) branding.copyrightText = copyrightText
     }
   } catch {
     // keep defaults

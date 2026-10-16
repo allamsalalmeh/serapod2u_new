@@ -28,6 +28,7 @@ import { useToast } from '@/components/ui/use-toast'
 import SupplyChainPageHeader from '@/modules/supply-chain/components/SupplyChainPageHeader'
 import { triggerQRBatchProcessing } from './qrBatchProcessingClient'
 import { qrCaseTotals } from '@/lib/orders/qr-buffer'
+import { asJsonObject } from '@/lib/supabase/json'
 
 /** Upper bound on processing calls per batch from one click; the cron keeps going after that. */
 const MAX_WORKER_RUNS = 120
@@ -493,18 +494,19 @@ export default function QRBatchesView({ userProfile, onViewChange }: QRBatchesVi
           }
         } else {
           // RPC succeeded, check the response
-          if (rpcData?.success) {
+          const rpcResult = asJsonObject(rpcData)
+          if (rpcResult.success) {
             console.log('✅ Batch and codes updated via RPC:', {
-              batchUpdated: rpcData.batch_updated,
-              masterCodes: rpcData.master_codes_updated,
-              uniqueCodes: rpcData.unique_codes_updated
+              batchUpdated: rpcResult.batch_updated,
+              masterCodes: rpcResult.master_codes_updated,
+              uniqueCodes: rpcResult.unique_codes_updated
             })
-          } else if (rpcData?.error) {
-            console.error('RPC returned error:', rpcData.error)
+          } else if (rpcResult.error) {
+            console.error('RPC returned error:', rpcResult.error)
             console.warn('Partial update occurred:', {
-              batchUpdated: rpcData.batch_updated,
-              masterCodes: rpcData.master_codes_updated,
-              uniqueCodes: rpcData.unique_codes_updated
+              batchUpdated: rpcResult.batch_updated,
+              masterCodes: rpcResult.master_codes_updated,
+              uniqueCodes: rpcResult.unique_codes_updated
             })
           } else {
             console.log('✅ Batch and codes updated to "printed" via RPC')
