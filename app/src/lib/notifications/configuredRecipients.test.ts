@@ -26,9 +26,9 @@ function usersClient(users: any[]) {
 }
 
 const people = [
-  { id: 'u1', full_name: 'Una', phone: '0121111111', email: 'una@example.com', organization_id: 'org-1', role_code: 'HQ_ADMIN' },
-  { id: 'u2', full_name: 'Other Org Admin', phone: '0122222222', email: 'other@example.com', organization_id: 'org-2', role_code: 'HQ_ADMIN' },
-  { id: 'u3', full_name: 'Picked', phone: '0123333333', email: 'picked@example.com', organization_id: 'org-2', role_code: 'USER' },
+  { id: 'u1', full_name: 'Una', phone: '0121111111', email: 'una@example.com', organization_id: 'org-1', role_code: 'HQ_ADMIN', is_active: true },
+  { id: 'u2', full_name: 'Other Org Admin', phone: '0122222222', email: 'other@example.com', organization_id: 'org-2', role_code: 'HQ_ADMIN', is_active: true },
+  { id: 'u3', full_name: 'Picked', phone: '0123333333', email: 'picked@example.com', organization_id: 'org-2', role_code: 'USER', is_active: true },
 ]
 
 const payload = { created_by: 'Creator', created_by_id: 'c1', created_by_phone: '0129999999', created_by_email: 'creator@example.com', customer_phone: '0128888888' }

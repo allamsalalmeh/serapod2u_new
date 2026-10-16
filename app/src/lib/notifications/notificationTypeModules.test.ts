@@ -15,7 +15,7 @@ describe('groupByModule', () => {
     const sections = groupByModule(types)
     expect(sections.map((s) => s.name)).toEqual(['Supply Chain', 'Customer & Growth', 'Platform & Settings'])
     expect(sections[0].categories.map((c) => c.label)).toEqual(['Order Status', 'Order Document', 'Inventory & Stock', 'Return Product'])
-    expect(sections[1].categories.map((c) => c.label)).toEqual(['QR & Consumer', 'RoadTour'])
+    expect(sections[1].categories.map((c) => c.label)).toEqual(['QR & Consumer', 'RoadTour', 'E-Commerce'])
     expect(sections[2].categories.map((c) => c.label)).toEqual(['Security & OTP', 'User Account', 'Delete Organization Masterdata', 'System Check'])
     expect(sections.flatMap((s) => s.categories.flatMap((c) => c.types)).length).toBe(types.length)
   })

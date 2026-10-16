@@ -51,9 +51,9 @@ async function call(params: Record<string, string>) {
 beforeEach(() => {
   orderError = null
   users = [
-    { id: 'admin-1', organization_id: 'org-1', role_code: 'SUPER', full_name: 'Caller', phone: null },
-    { id: 'u1', organization_id: 'org-1', role_code: 'HQ_ADMIN', full_name: 'Hana Admin', phone: '0121111111', email: 'hana@example.com' },
-    { id: 'u2', organization_id: 'org-9', role_code: 'HQ_ADMIN', full_name: 'Elsewhere', phone: '0122222222', email: 'x@example.com' },
+    { id: 'admin-1', organization_id: 'org-1', role_code: 'SUPER', is_active: true, full_name: 'Caller', phone: null },
+    { id: 'u1', organization_id: 'org-1', role_code: 'HQ_ADMIN', is_active: true, full_name: 'Hana Admin', phone: '0121111111', email: 'hana@example.com' },
+    { id: 'u2', organization_id: 'org-9', role_code: 'HQ_ADMIN', is_active: true, full_name: 'Elsewhere', phone: '0122222222', email: 'x@example.com' },
   ]
   orders = [{ id: 'o-1', display_doc_no: 'ORD26000001', order_no: 'ORD-1', company_id: 'org-1', buyer_org_id: 'org-5', seller_org_id: 'org-1' }]
   buildOrderEventPayload.mockReset()

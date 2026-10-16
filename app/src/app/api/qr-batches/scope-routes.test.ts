@@ -15,7 +15,8 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: authGetUser },
     from: (table: string) => {
-      const chain: any = { select: () => chain, eq: () => chain, single: async () => ({ data: null, error: { message: 'x' } }), maybeSingle: async () => ({ data: table === 'qr_batches' ? { id: 'b1', order_id: 'o1', excel_file_url: 'https://s.test/storage/v1/object/public/qr-codes/a.xlsx' } : { order_no: 'ORD-1' }, error: null }) }
+      // The download route reads the caller's own profile through the session client.
+      const chain: any = { select: () => chain, eq: () => chain, single: async () => (table === 'users' ? { data: { is_active: true, organization_id: actor.org, organizations: { org_type_code: actor.type } }, error: null } : { data: null, error: { message: 'x' } }), maybeSingle: async () => ({ data: table === 'qr_batches' ? { id: 'b1', order_id: 'o1', excel_file_url: 'https://s.test/storage/v1/object/public/qr-codes/a.xlsx' } : { order_no: 'ORD-1' }, error: null }) }
       return chain
     },
   })),
@@ -23,8 +24,9 @@ vi.mock('@/lib/supabase/server', () => ({
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(() => ({
     storage: { from: () => ({ createSignedUrl: signedUrl }) },
+    rpc: async () => ({ data: { success: true }, error: null }),
     from: (table: string) => {
-      const chain: any = { select: () => chain, eq: () => chain, limit: () => chain, maybeSingle: async () => ({ data: table === 'users' ? { organization_id: actor.org, organizations: { org_type_code: actor.type } } : { id: 'b1', order: batchOrder }, error: null }) }
+      const chain: any = { select: () => chain, eq: () => chain, limit: () => chain, maybeSingle: async () => ({ data: table === 'users' ? { organization_id: actor.org, organizations: { org_type_code: actor.type } } : { id: 'b1', status: 'generated', excel_file_url: 'https://s.test/storage/v1/object/public/qr-codes/a.xlsx', order: { order_no: 'ORD-1', ...batchOrder } }, error: null }) }
       return chain
     },
   })),

@@ -6,6 +6,7 @@ import { STAGE2D_PERMISSION_KEYS } from './stage2d-catalog'
 import { HR_DATA_PERMISSION_KEYS } from './hr-data-catalog'
 import { USER_ADMIN_PERMISSION_KEYS } from './user-admin-catalog'
 import { SYSTEM_LOGS_PERMISSION_KEYS } from './system-logs-catalog'
+import { BANK_STATEMENT_PERMISSION_KEYS } from './bank-statement-catalog'
 import { ORDER_VIEW_PERMISSION_KEYS } from './order-view'
 import { INVENTORY_STOCK_VIEW_PERMISSION } from './inventory-stock'
 import { COMMISSION_PERMISSION_KEYS } from './commission'
@@ -107,6 +108,7 @@ export function coverageReport(): CoverageReport {
     INVENTORY_STOCK_VIEW_PERMISSION,
     ...COMMISSION_PERMISSION_KEYS,
     ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS,
+    ...BANK_STATEMENT_PERMISSION_KEYS,
   ])
   const profiles = seededProfilePermissions()
   const inProfile = new Set([...profiles.values()].flatMap(s => [...s]))
