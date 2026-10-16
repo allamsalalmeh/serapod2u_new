@@ -11,6 +11,7 @@ import { INVENTORY_STOCK_VIEW_PERMISSION, legacyInventoryStockView } from '@/lib
 import { ORDER_VIEW_PERMISSION, legacyOrderView } from '@/lib/security-access/order-view'
 import { decidedPerWarehouse } from '@/lib/security-access/warehouse-reach'
 import { grantedWarehouseIds } from '@/lib/server/warehouse-reach'
+import { commissionReleased } from '@/lib/hr/commission/release'
 import {
   FINANCE_MODULE_PERMISSION,
   NAV_DESTINATIONS,
@@ -264,6 +265,13 @@ async function decideSidebar(actor: NavActor): Promise<NavAccessSnapshot['sideba
  * The whole navigation snapshot for the caller (no decision audit rows: nothing is being authorized here). The legacy
  * role/department reads are shared by every permission of this one evaluation and discarded afterwards.
  */
+const COMMISSION_SETTINGS_DESTINATION = 'hr/payroll/commission-settings'
+
+/** Destinations of features this environment has not released stay hidden whatever the permissions say. */
+function withoutUnreleased<T extends Record<string, boolean>>(destinations: T): T {
+  return commissionReleased() ? destinations : { ...destinations, [COMMISSION_SETTINGS_DESTINATION]: false }
+}
+
 export async function evaluateNavSnapshot(actor: NavActor): Promise<NavAccessSnapshot> {
   return withPermissionEvaluationScope(async () => {
     const [answers, sidebar, policies, rootAccess] = await Promise.all([
@@ -275,7 +283,7 @@ export async function evaluateNavSnapshot(actor: NavActor): Promise<NavAccessSna
     return {
       userId: actor.userId,
       organizationId: actor.organizationId,
-      destinations: computeDestinations(answers),
+      destinations: withoutUnreleased(computeDestinations(answers)),
       sidebar,
       policies,
       rootAccess,
