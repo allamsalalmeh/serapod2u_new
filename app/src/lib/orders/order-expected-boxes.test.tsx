@@ -88,16 +88,15 @@ async function render(orderType: string, docType: string, items: any[], qrBuffer
 }
 
 describe('classic PO PDF for H2M / D2H orders', () => {
-  it('H2M: "Grand Total | 1,000 | RM 14,000.00", then Expected Boxes and the buffer', async () => {
+  it('H2M: no prices and no Grand Total row (manufacturer PO), then Expected Boxes and the buffer', async () => {
     const text = await render('H2M', 'PO', [line('Honeydew', 1000)])
-    const label = text.indexOf('Grand Total')
-    expect(label).toBeGreaterThan(-1)
-    expect(text[label + 1]).toBe('1,000')
-    expect(text[label + 2]).toBe('RM 14,000.00')
+    // purchaseOrderHidesPrices('H2M', 'PO'): the manufacturer never sees prices or amount totals.
+    expect(text).not.toContain('Grand Total')
     expect(text).not.toContain('Total')
+    expect(text.join('\n')).not.toContain('RM 14,000.00')
 
     const heading = text.indexOf('Expected Boxes:')
-    expect(heading).toBeGreaterThan(label)
+    expect(heading).toBeGreaterThan(-1)
     expect(text[heading + 1]).toBe('10 Standard Boxes')
     expect(text[heading + 2]).toBe('Manufacturer buffer: 10 cases (1%), not included in Expected Boxes')
   })
