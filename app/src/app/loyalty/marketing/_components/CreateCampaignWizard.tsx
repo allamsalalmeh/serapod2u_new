@@ -1108,12 +1108,12 @@ export function CreateCampaignWizard({ onCancel, onComplete, editingCampaign, se
                                                     {selectedCategory === 'All Categories' ? (
                                                         // Group templates by category when showing all
                                                         Object.entries(
-                                                            templatesByLanguage.reduce((acc, t) => {
+                                                            templatesByLanguage.reduce<Record<string, typeof templatesByLanguage>>((acc, t) => {
                                                                 const cat = t.category || 'General';
                                                                 if (!acc[cat]) acc[cat] = [];
                                                                 acc[cat].push(t);
                                                                 return acc;
-                                                            }, {} as Record<string, typeof templatesByLanguage>)
+                                                            }, {})
                                                         ).sort(([a], [b]) => a.localeCompare(b)).map(([category, categoryTemplates]) => (
                                                             <div key={category}>
                                                                 <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50 sticky top-0">

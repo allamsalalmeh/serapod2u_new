@@ -298,6 +298,7 @@ interface RoadtourMilestoneSummary {
 interface RoadtourClaimResponse {
     code?: string
     message?: string
+    modalTitle?: string
     error?: string
     requiresLogin?: boolean
     requiresConsumerConfirmation?: boolean
@@ -308,6 +309,17 @@ interface RoadtourClaimResponse {
     balance_after?: number
     roadtour_reward_deferred?: boolean
     roadtour_milestone?: RoadtourMilestoneSummary | null
+}
+
+// GET /api/consumer/check-lucky-draw-status
+interface LuckyDrawStatusResponse {
+    success: boolean
+    error?: string
+    is_lucky_draw_entered?: boolean
+    is_points_collected?: boolean
+    claim_mode?: string
+    is_shop_points_collected?: boolean
+    is_consumer_points_collected?: boolean
 }
 
 interface RoadtourProductQrProgressNotice {
@@ -929,14 +941,13 @@ export default function PremiumLoyaltyTemplate({
             if (!rawState) return null
 
             const parsed = JSON.parse(rawState) as Partial<PendingCollectState>
-            const isValidState = parsed?.intendedAction === 'collect_points'
+            // Inline (not a const flag) so TypeScript narrows the parsed fields below.
+            if (!(parsed?.intendedAction === 'collect_points'
                 && parsed?.preferredClaimLane === 'shop'
                 && typeof parsed?.qrCode === 'string'
                 && parsed.qrCode.trim().length > 0
                 && typeof parsed?.returnUrl === 'string'
-                && typeof parsed?.startedAt === 'number'
-
-            if (!isValidState) {
+                && typeof parsed?.startedAt === 'number')) {
                 sessionStorage.removeItem(PENDING_COLLECT_STORAGE_KEY)
                 return null
             }
@@ -1910,7 +1921,7 @@ export default function PremiumLoyaltyTemplate({
 
         try {
             const response = await fetch(`/api/consumer/check-lucky-draw-status?qr_code=${encodeURIComponent(qrCode)}`)
-            const data = await response.json() as RoadtourClaimResponse
+            const data = await response.json() as LuckyDrawStatusResponse
 
             if (data.success) {
                 return {
