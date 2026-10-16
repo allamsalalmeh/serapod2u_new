@@ -8,17 +8,19 @@ import { createClient } from '@/lib/supabase/server'
  *
  * Allowed PATCH body keys: status, priority, resolution_note, mark_rectified (bool)
  */
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 })
     const saDenied = await guardUserOperation(user.id, 'customer.support.manage')
     if (saDenied) return saDenied
+    // Next 16 passes route params as a Promise; reading params.id directly is undefined.
+    const { id } = await params
 
     const { data, error } = await supabase
         .from('consumer_scan_issues')
         .select('*')
-        .eq('id', params.id)
+        .eq('id', id)
         .maybeSingle()
 
     if (error) return NextResponse.json({ error: error.message }, { status: 400 })
@@ -26,12 +28,13 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ issue: data })
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 })
     const saDenied = await guardUserOperation(user.id, 'customer.support.manage')
     if (saDenied) return saDenied
+    const { id } = await params
 
     const body = await req.json().catch(() => ({})) as Record<string, any>
     const update: Record<string, any> = {}
@@ -65,7 +68,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const { data, error } = await supabase
         .from('consumer_scan_issues')
         .update(update)
-        .eq('id', params.id)
+        .eq('id', id)
         .select('*')
         .maybeSingle()
 
