@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { coverageReport, seededProfilePermissions } from './coverage-audit'
-import { DESTRUCTIVE_PERMISSIONS, FULL_ACCESS_POLICIES, OUTSIDE_FULL_ACCESS, fullAccessBadge, isFullAccessPolicy, permissionsOfModule, sortGroupPolicies } from './group-policies'
+import { DESTRUCTIVE_PERMISSIONS, EXPLICIT_GRANT_ONLY, FULL_ACCESS_POLICIES, OUTSIDE_FULL_ACCESS, fullAccessBadge, isFullAccessPolicy, permissionsOfModule, sortGroupPolicies } from './group-policies'
 import { classifyPermission, moduleGroupName, MODULE_TAXONOMY } from './modules'
 import { isSensitivePermission } from './profiles'
 import { resolveGroup } from './bulk-modes'
@@ -29,7 +29,7 @@ describe('standard module Full Access policies (reviewed explicit lists)', () =>
   it('each seeded list contains every registered permission that belongs to its module, and nothing else', () => {
     for (const p of FULL_ACCESS_POLICIES) {
       const keys = [...(seeded.get(p.roleKey) ?? [])].sort()
-      expect(keys, p.roleKey).toEqual(permissionsOfModule(p.moduleId, universe).filter(k => !OUTSIDE_FULL_ACCESS.includes(k)))
+      expect(keys, p.roleKey).toEqual(permissionsOfModule(p.moduleId, universe).filter(k => !OUTSIDE_FULL_ACCESS.includes(k) && !EXPLICIT_GRANT_ONLY.includes(k)))
       expect(keys.length, p.roleKey).toBe(EXPECTED_COUNTS[p.roleKey])
       for (const k of keys) expect(classifyPermission(k).groupId, k).toBe(p.moduleId)
     }
@@ -39,8 +39,23 @@ describe('standard module Full Access policies (reviewed explicit lists)', () =>
     const all = FULL_ACCESS_POLICIES.flatMap(p => [...seeded.get(p.roleKey)!])
     const reviewedOutside = ['platform.system_logs.view', ...COMMISSION_PERMISSION_KEYS, ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS, ...DESTRUCTIVE_PERMISSIONS].sort()
     expect(new Set(all).size).toBe(all.length)
-    expect(universe.filter(k => !all.includes(k))).toEqual([...reviewedOutside, 'reporting.analytics.view'].sort())
+    expect(universe.filter(k => !all.includes(k))).toEqual([...reviewedOutside, ...EXPLICIT_GRANT_ONLY, 'reporting.analytics.view'].sort())
     expect([...OUTSIDE_FULL_ACCESS].sort()).toEqual(reviewedOutside)
+  })
+
+  it('decision B: bank statement import/approve are explicit grants only, never implied by Finance Full Access', () => {
+    const has = (role: string, key: string) => seeded.get(role)?.has(key) ?? false
+    expect([...EXPLICIT_GRANT_ONLY].sort()).toEqual(['finance.statement.approve', 'finance.statement.import'])
+    for (const k of EXPLICIT_GRANT_ONLY) {
+      expect(OUTSIDE_FULL_ACCESS, k).not.toContain(k) // stays grantable next to Full Access (grant-coverage)
+      for (const p of FULL_ACCESS_POLICIES) expect(has(p.roleKey, k), `${p.roleKey} ${k}`).toBe(false)
+    }
+    expect(has('finance-full-access', 'finance.cash.view')).toBe(true) // viewing statements
+    const bank = readFileSync(resolve(process.cwd(), '..', 'supabase', 'migrations', '20261006160000_bank_statement_approval.sql'), 'utf8')
+    expect(bank).toContain("('finance-statement-preparer', array['finance.module.view','finance.cash.view','finance.statement.import'])")
+    expect(bank).toContain("('finance-statement-approver', array['finance.module.view','finance.cash.view','finance.statement.approve'])")
+    expect(bank).toMatch(/'same_document', 'finance\.statement\.import', 'finance\.statement\.approve', 'bank_statement_import', 'enforce'\)/)
+    expect(bank).toContain("perform public.sa_enforce_same_document_sod('bank-statement-maker-checker'")
   })
 
   it('cancel/reverse/emergency stay in their policy; destructive reset/delete moved to break-glass (20261110100000)', () => {

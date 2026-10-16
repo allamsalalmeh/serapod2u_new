@@ -2,6 +2,7 @@ import { MODULE_TAXONOMY, classifyPermission, moduleGroupName } from './modules'
 import { COMMISSION_PERMISSION_KEYS } from './commission'
 import { MSS_PERMISSION_KEYS } from './mss'
 import { COMPENSATION_VIEWER_PERMISSION_KEYS } from './compensation-viewer'
+import { BANK_STATEMENT_PERMISSION_KEYS } from './bank-statement-catalog'
 
 /**
  * Group Policies (the user-facing name of a business role / "Access Profile").
@@ -54,6 +55,16 @@ export const fullAccessModuleIds = FULL_ACCESS_POLICIES.map(p => p.moduleId)
  */
 export const DESTRUCTIVE_PERMISSIONS: readonly string[] = ['hr.data.reset', 'finance.data.reset', 'platform.data.destructive', 'platform.identity.delete']
 export const OUTSIDE_FULL_ACCESS: readonly string[] = ['platform.system_logs.view', ...COMMISSION_PERMISSION_KEYS, ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS, ...DESTRUCTIVE_PERMISSIONS]
+
+/**
+ * Module permissions that Full Access never implies but that stay grantable next to it (owner decision B, 2026-10-16):
+ *   finance.statement.import / finance.statement.approve — the bank statement maker and checker are explicit grants only
+ *   (finance-statement-preparer / finance-statement-approver, or finance-admin; 20261006160000) and the database keeps
+ *   them apart per statement (SoD bank-statement-maker-checker, enforce). Viewing statements is finance.cash.view, which
+ *   Finance Full Access holds. Deliberately NOT in OUTSIDE_FULL_ACCESS: the grant form must keep offering the Finance
+ *   module to a Finance Full Access holder so these two can still be granted explicitly (grant-coverage.ts).
+ */
+export const EXPLICIT_GRANT_ONLY: readonly string[] = [...BANK_STATEMENT_PERMISSION_KEYS]
 
 /**
  * Break-glass standard policies: the only standard policies holding a destructive operation (20261110100000; HR's
