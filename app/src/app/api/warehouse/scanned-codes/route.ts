@@ -101,8 +101,8 @@ export async function GET(request: NextRequest) {
       const { data: uniqueData } = await supabase
         .from('qr_codes')
         .select(`
-          qr_code,
-          product_variant_id,
+          code,
+          variant_id,
           product_variants!inner (
             variant_name,
             image_url,
@@ -111,7 +111,7 @@ export async function GET(request: NextRequest) {
             )
           )
         `)
-        .in('qr_code', uniqueCodes)
+        .in('code', uniqueCodes)
 
       for (const unique of uniqueData || []) {
         const variant = unique.product_variants
@@ -120,11 +120,11 @@ export async function GET(request: NextRequest) {
         const productObj = Array.isArray(product) ? product[0] : product
 
         details.push({
-          code: unique.qr_code,
+          code: unique.code,
           codeType: 'unique',
           productName: productObj?.product_name || null,
           variantName: variantObj?.variant_name || null,
-          variantId: unique.product_variant_id || null,
+          variantId: unique.variant_id || null,
           imageUrl: variantObj?.image_url || null,
           quantity: 1,
           scannedAt: session.created_at || new Date().toISOString()
