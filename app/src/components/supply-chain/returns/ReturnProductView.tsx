@@ -34,7 +34,7 @@ import { generateReturnPdf } from '@/lib/returns/pdf'
 import { variantAlternativeLabel, variantIdentityLabel } from '@/lib/inventory/variant-display-label'
 import {
     getVariantDisplayName, classifyProductLine, productLineLabel,
-    isDeviceLine, getRowUnitsPerCase,
+    isCartridgeLine, getRowUnitsPerCase,
     getUnitsPerCase, getUnitsPerBox, computePcsMode, computeBoxMode,
     pcsModeToStorage, boxModeToStorage, storageToPcsMode, storageToBoxMode,
     formatReturnAmount, caseUnitLabel, CASE_UNIT_LABEL,
@@ -315,9 +315,11 @@ function savedItemToExtraRow(it: ReturnCaseItem): WorksheetRow {
     const upc = Number(it.units_per_case_snapshot)
     const productName = it.product_name || 'Product'
     const line = classifyProductLine(productName)
-    const upcVal = isDeviceLine(line)
-        ? 1
-        : ((Number.isFinite(upc) && upc > 0) ? Math.floor(upc) : getUnitsPerBox(productName))
+    const upcVal = getRowUnitsPerCase(
+        line,
+        productName,
+        (Number.isFinite(upc) && upc > 0) ? Math.floor(upc) : getUnitsPerBox(productName),
+    )
     const caseQty = Number(it.case_qty || 0)
     const looseQty = Number(it.loose_piece_qty || 0)
     const total = caseQty * upcVal + looseQty
@@ -357,8 +359,8 @@ function savedItemToExtraRow(it: ReturnCaseItem): WorksheetRow {
 
 /** Recompute derived fields from the entry unit and entered values. */
 function recomputeRow(r: WorksheetRow): WorksheetRow {
-    // Device lines are PCS-only: force Pcs mode, no pack-size conversion.
-    if (isDeviceLine(r.product_line)) {
+    // Non-cartridge lines (devices and everything else) are PCS-only.
+    if (!isCartridgeLine(r.product_line)) {
         const pcs = Math.max(0, Math.floor(r.entry_unit === 'box' ? r.total_units : r.entered_pcs))
         return {
             ...r,
@@ -511,9 +513,11 @@ function ReturnCaseEditor({
             if (s) {
                 usedKeys.add(k)
                 const upc = Number(s.units_per_case_snapshot)
-                const upcVal = isDeviceLine(row.product_line)
-                    ? 1
-                    : ((Number.isFinite(upc) && upc > 0) ? Math.floor(upc) : row.units_per_case)
+                const upcVal = getRowUnitsPerCase(
+                    row.product_line,
+                    row.product_name,
+                    (Number.isFinite(upc) && upc > 0) ? Math.floor(upc) : row.units_per_case,
+                )
                 row.units_per_case = upcVal
                 const cq = Number(s.case_qty || 0)
                 const lq = Number(s.loose_piece_qty || 0)
@@ -1649,7 +1653,7 @@ function ReturnWorksheet({
                                         )}
                                     </td>
                                     <td className="px-2 py-2 text-center text-xs text-muted-foreground">
-                                        {isDeviceLine(r.product_line)
+                                        {!isCartridgeLine(r.product_line)
                                             ? '—'
                                             : entered ? `${r.case_qty} ${caseUnitLabel(r.case_qty)} + ${r.loose_piece_qty} Pc${r.loose_piece_qty !== 1 ? 's' : ''}` : '—'}
                                     </td>
@@ -1718,9 +1722,9 @@ function QuantityCell({ row, onUpdate }: { row: WorksheetRow; onUpdate: (patch: 
     const [unit, setUnit] = useState<EntryUnit>(row.entry_unit)
     const upb = row.units_per_case > 0 ? row.units_per_case : 1
 
-    // Device lines (S.Line / S.Box) are PCS-only: no mode selector, no Cases, no
-    // breakdown. Entered quantity equals Total PCS directly.
-    if (isDeviceLine(row.product_line)) {
+    // Cases / Pcs is only for vape cartridges (Cellera Hero / Zero). Devices
+    // and every other product are PCS-only — no mode selector, no Cases.
+    if (!isCartridgeLine(row.product_line)) {
         return (
             <div className="flex items-center gap-1.5">
                 <Input

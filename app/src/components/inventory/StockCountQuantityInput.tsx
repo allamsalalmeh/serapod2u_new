@@ -10,7 +10,11 @@ interface StockCountQuantityInputProps {
   disabled?: boolean
   /** Receives the count in pieces. */
   onChange: (pieces: string) => void
-  /** Known pieces per case: the row starts in Cases and the case size is fixed. */
+  /**
+   * Known pieces per case for a vape cartridge (Cellera Hero/Zero).
+   * When set, the row offers Cases / Pieces. When null/absent (devices and
+   * every other product), the row is PCS-only — no Cases option.
+   */
   piecesPerCase?: number | null
   countInputId?: string
   onEnter?: () => void
@@ -21,28 +25,52 @@ export default function StockCountQuantityInput({ value, disabled, onChange, pie
   const casesFor = (pieces: string) => (fixedSize ? piecesToWholeCases(pieces, fixedSize) : null)
   const [unit, setUnit] = useState<CountEntryUnit>(() => (fixedSize && (value === '' || casesFor(value) !== null) ? 'case' : 'pcs'))
   const [cases, setCases] = useState(() => { const n = casesFor(value); return n === null ? '' : String(n) })
-  const [perCase, setPerCase] = useState(fixedSize ? String(fixedSize) : '')
   const emitted = useRef(value)
-  const perCaseRef = useRef<HTMLInputElement>(null)
 
   // A count replaced from outside (draft reload, Excel import, reset) is restated in
   // cases when it divides evenly by a known case size, otherwise shown in pieces.
   useEffect(() => {
     if (value === emitted.current) return
     emitted.current = value
-    if (unit !== 'case') return
+    if (!fixedSize || unit !== 'case') return
     const n = casesFor(value)
     if (value === '' && fixedSize) setCases('')
     else if (n !== null) setCases(String(n))
     else setUnit('pcs')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unit, value])
+  }, [unit, value, fixedSize])
 
-  const changeCases = (nextCases: string, nextPerCase: string) => {
-    if (!isWholeNumberEntry(nextCases) || !isWholeNumberEntry(nextPerCase)) return
+  // Devices / non-cartridges: PCS only — same pattern as Returns (static PCS badge).
+  if (!fixedSize) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <Input
+          data-count-input={countInputId}
+          aria-label="Physical count in pieces"
+          inputMode="numeric"
+          min="0"
+          value={value}
+          disabled={disabled}
+          onChange={event => onChange(event.target.value)}
+          onKeyDown={event => {
+            if (event.key !== 'Enter') return
+            event.preventDefault()
+            onEnter?.()
+          }}
+          placeholder="Blank"
+          className="w-24 font-semibold tabular-nums"
+        />
+        <span className="inline-flex h-6 items-center rounded-md bg-slate-100 px-2 text-[11px] font-medium text-slate-600">
+          pcs
+        </span>
+      </div>
+    )
+  }
+
+  const changeCases = (nextCases: string) => {
+    if (!isWholeNumberEntry(nextCases)) return
     setCases(nextCases)
-    setPerCase(nextPerCase)
-    const pieces = casesToPieces(nextCases, nextPerCase)
+    const pieces = casesToPieces(nextCases, String(fixedSize))
     const next = pieces === null ? '' : String(pieces)
     emitted.current = next
     onChange(next)
@@ -57,11 +85,10 @@ export default function StockCountQuantityInput({ value, disabled, onChange, pie
     setUnit(next)
   }
 
-  const enter = (event: React.KeyboardEvent<HTMLInputElement>, field: 'main' | 'perCase') => {
+  const enter = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key !== 'Enter') return
     event.preventDefault()
-    if (field === 'main' && unit === 'case' && perCase === '') perCaseRef.current?.focus()
-    else onEnter?.()
+    onEnter?.()
   }
 
   return (
@@ -84,8 +111,8 @@ export default function StockCountQuantityInput({ value, disabled, onChange, pie
           min="0"
           value={unit === 'pcs' ? value : cases}
           disabled={disabled}
-          onChange={event => unit === 'pcs' ? onChange(event.target.value) : changeCases(event.target.value, perCase)}
-          onKeyDown={event => enter(event, 'main')}
+          onChange={event => unit === 'pcs' ? onChange(event.target.value) : changeCases(event.target.value)}
+          onKeyDown={enter}
           placeholder={unit === 'pcs' ? 'Blank' : 'Cases'}
           className="w-24 font-semibold tabular-nums"
         />
@@ -93,25 +120,7 @@ export default function StockCountQuantityInput({ value, disabled, onChange, pie
       {unit === 'case' && (
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
           <span>×</span>
-          {fixedSize ? (
-            <span>{fixedSize} pcs per case</span>
-          ) : (
-            <>
-              <Input
-                ref={perCaseRef}
-                aria-label="Pieces per case"
-                inputMode="numeric"
-                min="1"
-                value={perCase}
-                disabled={disabled}
-                onChange={event => changeCases(cases, event.target.value)}
-                onKeyDown={event => enter(event, 'perCase')}
-                placeholder="pcs"
-                className="h-7 w-16 px-2 text-xs tabular-nums"
-              />
-              <span>pcs per case</span>
-            </>
-          )}
+          <span>{fixedSize} pcs per case</span>
           <span className="font-semibold text-slate-700">= {value === '' ? '—' : Number(value).toLocaleString('en-US')} pcs</span>
         </div>
       )}

@@ -93,9 +93,15 @@ export function resolveStockCountDefaultWarehouseId(
   return ''
 }
 
-/** The shared pack-size rule (devices stay in pieces); null when a case is not more than one piece. */
+/**
+ * Pieces in one case for Stock Count / Stock Adjustment / Inventory display.
+ * Cases are only for vape cartridges (Cellera Hero / Zero). Devices, speakers,
+ * outdoor gear and every other product stay in pieces — even when master data
+ * has a units_per_case value.
+ */
 export function resolveStockCountPiecesPerCase(productName: string | null | undefined, masterUnitsPerCase?: number | null): number | null {
-  const pieces = getRowUnitsPerCase(classifyProductLine(productName), productName, masterUnitsPerCase)
+  const line = classifyProductLine(productName)
+  const pieces = getRowUnitsPerCase(line, productName, masterUnitsPerCase)
   return pieces > 1 ? pieces : null
 }
 
