@@ -38,7 +38,7 @@ function chunks<T>(values: T[], size: number) {
 }
 
 async function selectInChunks<T>(
-  buildQuery: (ids: string[]) => Promise<{ data: T[] | null; error: any }>,
+  buildQuery: (ids: string[]) => PromiseLike<{ data: T[] | null; error: any }>,
   ids: string[],
 ) {
   const rows: T[] = []
