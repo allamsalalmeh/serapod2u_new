@@ -366,7 +366,7 @@ export default function SpinWheelCampaignForm({ userProfile, campaignId, initial
 
         // Fallback to RPC if API fails or no order_id
         const { data, error } = await supabase.rpc('get_journey_qr_count', {
-            p_journey_id: journeyId
+            p_journey_config_id: journeyId
         })
 
         if (!error && typeof data === 'number') {
