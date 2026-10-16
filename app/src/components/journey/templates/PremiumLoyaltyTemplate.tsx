@@ -887,8 +887,8 @@ export default function PremiumLoyaltyTemplate({
     const signUpEmailInputRef = useRef<HTMLInputElement>(null)
     const signUpNameInputRef = useRef<HTMLInputElement>(null)
     const signUpPhoneInputRef = useRef<HTMLInputElement>(null)
-    const signUpReferenceInputRef = useRef<HTMLInputElement>(null)
-    const signUpShopInputRef = useRef<HTMLInputElement>(null)
+    const signUpReferenceInputRef = useRef<HTMLInputElement | null>(null)
+    const signUpShopInputRef = useRef<HTMLInputElement | null>(null)
     const signUpPasswordInputRef = useRef<HTMLInputElement>(null)
     const signUpConfirmPasswordInputRef = useRef<HTMLInputElement>(null)
 

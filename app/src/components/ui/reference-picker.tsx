@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback, type Ref } from 'react'
+import { useState, useRef, useEffect, useCallback, type MutableRefObject, type RefCallback } from 'react'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Loader2, UserCheck, X, Search, Phone, Mail } from 'lucide-react'
@@ -22,7 +22,7 @@ interface ReferencePickerProps {
     disabled?: boolean
     placeholder?: string
     className?: string
-    inputRef?: Ref<HTMLInputElement>
+    inputRef?: RefCallback<HTMLInputElement> | MutableRefObject<HTMLInputElement | null> | null
 }
 
 export function ReferencePicker({
@@ -44,7 +44,7 @@ export function ReferencePicker({
     const [hasTriedResolve, setHasTriedResolve] = useState(false)
     const containerRef = useRef<HTMLDivElement>(null)
     const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-    const inputRef = useRef<HTMLInputElement>(null)
+    const inputRef = useRef<HTMLInputElement | null>(null)
 
     useEffect(() => {
         if (!selectedRef && value !== searchTerm) {

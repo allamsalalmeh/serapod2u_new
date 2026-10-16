@@ -474,10 +474,11 @@ export default function ConsumerActivationsView({ userProfile, onViewChange }: C
   const loadStats = async () => {
     try {
       // Use server-side RPC to get all stats in a single query (no 1000-row cap)
+      // Unset filters are omitted so the functions' DEFAULT NULL applies.
       const { data: statsData, error: statsError } = await supabase.rpc('fn_consumer_activity_stats', {
         p_company_id: userProfile.organizations.id,
-        p_order_id: (selectedOrderId && selectedOrderId !== 'all') ? selectedOrderId : null,
-        p_activity_type: (selectedActivityType && selectedActivityType !== 'all') ? selectedActivityType : null,
+        p_order_id: (selectedOrderId && selectedOrderId !== 'all') ? selectedOrderId : undefined,
+        p_activity_type: (selectedActivityType && selectedActivityType !== 'all') ? selectedActivityType : undefined,
       })
 
       if (statsError) throw statsError
@@ -521,8 +522,8 @@ export default function ConsumerActivationsView({ userProfile, onViewChange }: C
       // Use server-side RPC to aggregate and enrich (no 1000-row cap)
       const { data, error } = await supabase.rpc('fn_consumer_unique_list', {
         p_company_id: userProfile.organizations.id,
-        p_order_id: (selectedOrderId && selectedOrderId !== 'all') ? selectedOrderId : null,
-        p_activity_type: (selectedActivityType && selectedActivityType !== 'all') ? selectedActivityType : null,
+        p_order_id: (selectedOrderId && selectedOrderId !== 'all') ? selectedOrderId : undefined,
+        p_activity_type: (selectedActivityType && selectedActivityType !== 'all') ? selectedActivityType : undefined,
       })
 
       if (error) throw error
