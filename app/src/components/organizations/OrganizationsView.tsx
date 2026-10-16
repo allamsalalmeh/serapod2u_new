@@ -41,6 +41,16 @@ import {
   ChevronRight
 } from 'lucide-react'
 import SupplyChainPageHeader from '@/modules/supply-chain/components/SupplyChainPageHeader'
+import Link from 'next/link'
+import ManufacturerCategoryBadges from './ManufacturerCategoryBadges'
+import {
+  loadCategoryOptions,
+  loadManufacturerCategorySummaries,
+  manufacturerProductsHref,
+  matchesManufacturerCategoryFilter,
+  type CategoryOption,
+  type ManufacturerCategorySummary,
+} from '@/lib/organizations/manufacturer-categories'
 import {
   Dialog,
   DialogContent,
@@ -60,6 +70,7 @@ import {
 } from '@/components/ui/sera-modal'
 import { buildSetDefaultFulfillmentConfirmMessage } from '@/lib/organizations/distributor-fulfillment-default'
 import { ALL_STATES_VALUE, deriveStateOptions, matchesStateFilter } from '@/lib/organizations/state-filter'
+import { compareOrganizations, type OrganizationSortDirection, type OrganizationSortField } from './organization-sort'
 
 interface UserProfile {
   id: string
@@ -131,8 +142,8 @@ interface OrganizationsViewProps {
   onViewChange?: (view: string) => void
 }
 
-type SortField = 'org_name' | 'org_type_code' | 'contact_name' | 'state' | 'is_active'
-type SortDirection = 'asc' | 'desc'
+type SortField = OrganizationSortField
+type SortDirection = OrganizationSortDirection
 const PROGRAM_FILTER_OPTIONS = [
   { value: 'all', label: 'All Programs' },
   { value: 'Cellera', label: 'Cellera' },
@@ -251,6 +262,10 @@ export default function OrganizationsView({ userProfile, onViewChange }: Organiz
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [filterProgram, setFilterProgram] = useState<string>('all')
   const [filterState, setFilterState] = useState<string>(ALL_STATES_VALUE)
+  // Manufacturer classification: 'all' | 'unclassified' | category id. Summaries: undefined = loading, null = unavailable.
+  const [filterCategory, setFilterCategory] = useState<string>('all')
+  const [categorySummaries, setCategorySummaries] = useState<Map<string, ManufacturerCategorySummary> | null | undefined>(undefined)
+  const [categoryFilterOptions, setCategoryFilterOptions] = useState<CategoryOption[]>([])
   const [viewMode, setViewMode] = useState<'card' | 'list'>('list')
   const [sortField, setSortField] = useState<SortField>('org_name')
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
@@ -523,12 +538,31 @@ export default function OrganizationsView({ userProfile, onViewChange }: Organiz
       }) || []
 
       setOrganizations(transformedData)
+      void refreshCategorySummaries(transformedData)
     } catch (error) {
       console.error('Error in fetchOrganizations:', error)
     } finally {
       setLoading(false)
     }
   }
+
+  // One aggregated row per loaded manufacturer (computed in SQL; products are never loaded here).
+  const refreshCategorySummaries = async (orgs: Organization[]) => {
+    const manufacturerIds = orgs.filter((org) => org.org_type_code === 'MFG').map((org) => org.id)
+    const [summaries, options] = await Promise.all([
+      loadManufacturerCategorySummaries(supabase, manufacturerIds),
+      loadCategoryOptions(supabase).catch((loadError) => {
+        console.error('Error fetching product categories:', loadError)
+        return [] as CategoryOption[]
+      }),
+    ])
+    setCategorySummaries(summaries)
+    setCategoryFilterOptions(options)
+  }
+
+  useEffect(() => {
+    if (filterType !== 'MFG') setFilterCategory('all')
+  }, [filterType])
 
   // State filter options are derived from the loaded records so the dropdown
   // reflects the states actually present (no hardcoded list).
@@ -546,38 +580,8 @@ export default function OrganizationsView({ userProfile, onViewChange }: Organiz
       filterProgram === 'all' || getProgramLabel(org) === filterProgram
     const matchesState = matchesStateFilter(org, filterState)
 
-    return matchesSearch && matchesType && matchesStatus && matchesProgram && matchesState
-  }).sort((a, b) => {
-    let aVal: any = a[sortField]
-    let bVal: any = b[sortField]
-
-    // Handle null values
-    if (aVal === null || aVal === undefined) return 1
-    if (bVal === null || bVal === undefined) return -1
-
-    // Handle different data types
-    if (sortField === 'org_name' || sortField === 'contact_name') {
-      aVal = (aVal || '').toLowerCase()
-      bVal = (bVal || '').toLowerCase()
-    } else if (sortField === 'state') {
-      // Sort by state name
-      aVal = (a.states?.state_name || '').toLowerCase()
-      bVal = (b.states?.state_name || '').toLowerCase()
-    } else if (sortField === 'org_type_code') {
-      // Sort by type name instead of code
-      aVal = a.org_types?.type_name || a.org_type_code
-      bVal = b.org_types?.type_name || b.org_type_code
-      aVal = aVal.toLowerCase()
-      bVal = bVal.toLowerCase()
-    } else if (sortField === 'is_active') {
-      aVal = aVal ? 1 : 0
-      bVal = bVal ? 1 : 0
-    }
-
-    if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1
-    if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1
-    return 0
-  })
+    return matchesSearch && matchesType && matchesStatus && matchesProgram && matchesState && matchesManufacturerCategoryFilter(org, filterCategory, categorySummaries)
+  }).sort((a, b) => compareOrganizations(a, b, sortField, sortDirection))
 
   // Pagination calculations
   const totalOrganizations = filteredOrganizations.length
@@ -589,7 +593,7 @@ export default function OrganizationsView({ userProfile, onViewChange }: Organiz
   // Reset to first page when filters change
   useEffect(() => {
     setCurrentPage(1)
-  }, [searchTerm, filterType, filterStatus, filterProgram, filterState])
+  }, [searchTerm, filterType, filterStatus, filterProgram, filterState, filterCategory])
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -1072,6 +1076,23 @@ export default function OrganizationsView({ userProfile, onViewChange }: Organiz
                 <SelectItem value="END_USER">End User</SelectItem>
               </SelectContent>
             </Select>
+            {filterType === 'MFG' && categorySummaries && (
+              <Select value={filterCategory} onValueChange={setFilterCategory}>
+                <SelectTrigger className="w-full sm:w-52 border-[var(--sera-line)]" aria-label="Product category">
+                  <Package className="w-4 h-4 mr-2" />
+                  <SelectValue placeholder="Product category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Categories</SelectItem>
+                  <SelectItem value="unclassified">Not classified</SelectItem>
+                  {categoryFilterOptions.map((category) => (
+                    <SelectItem key={category.id} value={category.id}>
+                      {category.category_name}{category.is_active === true ? '' : ' (inactive)'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             <Select value={filterStatus} onValueChange={setFilterStatus}>
               <SelectTrigger className="w-full sm:w-48 border-[var(--sera-line)]">
                 <SelectValue placeholder="Status" />
@@ -1199,6 +1220,11 @@ export default function OrganizationsView({ userProfile, onViewChange }: Organiz
                         </span>
                       )}
                   </p>
+                  {org.org_type_code === 'MFG' && categorySummaries && (
+                    <div className="mt-2">
+                      <ManufacturerCategoryBadges manufacturerId={org.id} summary={categorySummaries.get(org.id)} />
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1424,6 +1450,19 @@ export default function OrganizationsView({ userProfile, onViewChange }: Organiz
                       Shops
                     </Button>
                   )}
+                  {org.org_type_code === 'MFG' && (
+                    <Button
+                      asChild
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 h-9 text-xs font-medium hover:bg-[var(--sera-orange)]/[0.06] hover:text-[var(--sera-orange-deep)] hover:border-[var(--sera-orange)]/30"
+                    >
+                      <Link href={manufacturerProductsHref(org.id)}>
+                        <Package className="w-3.5 h-3.5 mr-1.5" />
+                        View products
+                      </Link>
+                    </Button>
+                  )}
                   {org.org_type_code === 'WH' && org.parent_org_id && isHqAdmin && (
                     <Button
                       variant="outline"
@@ -1508,6 +1547,9 @@ export default function OrganizationsView({ userProfile, onViewChange }: Organiz
                     </button>
                   </TableHead>
                   <TableHead className="text-xs">Program</TableHead>
+                  {filterType === 'MFG' && (
+                    <TableHead className="text-xs">Product Categories</TableHead>
+                  )}
                   <TableHead>
                     <button
                       onClick={() => handleSort('contact_name')}
@@ -1568,6 +1610,17 @@ export default function OrganizationsView({ userProfile, onViewChange }: Organiz
                     <TableCell className="text-xs text-gray-700">
                       {getProgramLabel(org)}
                     </TableCell>
+                    {filterType === 'MFG' && (
+                      <TableCell className="min-w-[180px]">
+                        {categorySummaries === undefined ? (
+                          <span className="text-[11px] text-gray-400">Loading…</span>
+                        ) : categorySummaries === null ? (
+                          <span className="text-[11px] text-gray-400">Unavailable</span>
+                        ) : (
+                          <ManufacturerCategoryBadges manufacturerId={org.id} summary={categorySummaries.get(org.id)} />
+                        )}
+                      </TableCell>
+                    )}
                     <TableCell>
                       <div className="text-xs">
                         <div className="font-medium">{org.contact_name || '-'}</div>
@@ -1613,6 +1666,13 @@ export default function OrganizationsView({ userProfile, onViewChange }: Organiz
                             <LinkIcon
                               className={`w-3.5 h-3.5 ${distributorsWithShops.has(org.id) ? 'text-[var(--sera-orange)]' : 'text-gray-400'}`}
                             />
+                          </Button>
+                        )}
+                        {org.org_type_code === 'MFG' && (
+                          <Button asChild variant="ghost" size="sm" className="h-7 w-7 p-0" title="View products">
+                            <Link href={manufacturerProductsHref(org.id)} aria-label={`View products of ${org.org_name}`}>
+                              <Package className="w-3.5 h-3.5" />
+                            </Link>
                           </Button>
                         )}
                         <Button
@@ -1707,7 +1767,7 @@ export default function OrganizationsView({ userProfile, onViewChange }: Organiz
             <Building2 className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-[var(--sera-ink)] mb-2">No organizations found</h3>
             <p className="text-[var(--sera-muted)] mb-4">
-              {searchTerm || filterType !== 'all' || filterStatus !== 'all' || filterProgram !== 'all' || filterState !== ALL_STATES_VALUE
+              {searchTerm || filterType !== 'all' || filterStatus !== 'all' || filterProgram !== 'all' || filterState !== ALL_STATES_VALUE || filterCategory !== 'all'
                 ? 'Try adjusting your search criteria'
                 : 'Get started by adding your first organization'
               }

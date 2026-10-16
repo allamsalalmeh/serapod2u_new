@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { userAllowed } from '@/lib/security-access/operation'
+import { ROOT_TARGET_PROTECTED_MESSAGE, rootTargetGuard } from '@/lib/security-access/root-access'
 import { normalizePhone, validatePhoneNumber } from '@/lib/utils'
 import { hasLinkedShopProfile } from '@/lib/engagement/point-claim-settings'
 import { resolveProfileLinkValidation } from '@/lib/engagement/profile-link-validation'
@@ -95,6 +96,13 @@ export async function POST(request: NextRequest) {
           { success: false, error: 'Unauthorized - Can only update your own profile' },
           { status: 403 }
         )
+      }
+      // The login phone is synced to Supabase Auth: a Root Administrator's profile is changed only by another Root Administrator.
+      const rootGuard = await rootTargetGuard(adminClient, authUser.id, requestedUserId)
+      if (!rootGuard.ok) {
+        return rootGuard.reason === 'root_target_protected'
+          ? NextResponse.json({ success: false, code: 'ROOT_TARGET_PROTECTED', error: ROOT_TARGET_PROTECTED_MESSAGE }, { status: 403 })
+          : NextResponse.json({ success: false, error: 'Access could not be verified. Please retry.' }, { status: 503 })
       }
     }
 

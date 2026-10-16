@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
+import { essGrantAllowed } from '@/lib/identity/add-user-selections'
+import { validateScopeGrant } from '@/lib/security-access/scope-grant'
 import { actorAlsoHolds, governanceError, requireSecurityActor, requireSelfServiceActor } from '@/lib/security-access/admin-api'
 
 export const dynamic = 'force-dynamic'
@@ -57,6 +59,10 @@ export async function POST(request: NextRequest) {
     if (error) return governanceError(error)
     return NextResponse.json({ ok: true })
   }
+  const ess = await essGrantAllowed(actor.admin, body.roleId, body.organizationId)
+  if (!ess.ok) return NextResponse.json({ error: ess.message, code: ess.code ?? 'ESS_HQ_ONLY' }, { status: ess.code === 'CATALOGUE_UNAVAILABLE' ? 503 : 400 })
+  const scope = await validateScopeGrant(actor.admin, { actorId: null, roleId: body.roleId, organizationId: body.organizationId, scopeIds: body.scopeIds })
+  if (!scope.ok) return NextResponse.json({ error: scope.message, code: scope.code }, { status: scope.status })
   const { data, error } = await actor.admin.rpc('sa_submit_access_request', {
     p_actor: actor.userId, p_target: body.targetUserId ?? actor.userId, p_role: body.roleId, p_org: body.organizationId,
     p_scope_ids: body.scopeIds, p_from: body.effectiveFrom ?? null, p_until: body.effectiveUntil ?? null, p_reason: body.reason,

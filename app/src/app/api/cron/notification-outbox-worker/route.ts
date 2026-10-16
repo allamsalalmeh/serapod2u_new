@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createHash, createHmac } from 'node:crypto'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getWhatsAppConfig, callGateway, sendWhatsAppMessage } from '@/app/api/settings/whatsapp/_utils'
-import { expandNotificationRoleCodes } from '@/lib/notifications/recipientRoleCodes'
+import { collectConfiguredRecipients, normalizeRecipientAddress } from '@/lib/notifications/configuredRecipients'
 import { resolveSmtpEndpoint } from '@/lib/email/smtp-endpoint'
 import { requireCronAuth } from '@/lib/cron/auth'
 import { WORKER_NAMES, withWorkerLease } from '@/lib/cron/lease'
@@ -11,7 +11,7 @@ import { getSmsTemplateBody, getSmsTemplatesForEvent } from '@/config/smsTemplat
 import { queueRoutingFallback } from '@/lib/notifications/outbox-fallback'
 import { deliveryChainForPreset, isRoutingFallbackPayload, resolveNotificationRoutingPreset, shouldAdvanceFallback, type NotificationDeliveryChannel } from '@/lib/notifications/routing'
 import { isSingleCreatorSource, ownerEmailFromPayload, ownerPhoneFromPayload, resolveRecipientTargets } from '@/lib/notifications/orderOwnerNotify'
-import { notificationPhoneKey, toSmsE164 } from '@/lib/notifications/manualPhoneNumbers'
+import { notificationPhoneKey } from '@/lib/notifications/manualPhoneNumbers'
 import { EMAIL_UI_TEST_REWRITE_LOOKBACK_MS, emailProviderBlockedByUiTest } from '@/lib/notifications/emailProviderReady'
 import { fanoutChildKeepsAddress, fanoutChildPayload, fanoutScope, isFanoutChild, selectFanoutRecipients } from '@/lib/notifications/outboxFanout'
 
@@ -72,13 +72,6 @@ function renderTemplate(template: string, payload: Record<string, any>): string 
         result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), String(value ?? ''))
     }
     return result
-}
-
-function splitConfiguredRecipients(value?: string | null): string[] {
-    return String(value || '')
-        .split(/[\n,;]+/)
-        .map((entry) => entry.trim())
-        .filter(Boolean)
 }
 
 async function ensureOrderOwnerContact(supabase: any, payload: Record<string, any>) {
@@ -532,95 +525,21 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                         recipientPhone = ownerPhoneFromPayload(payload)
                     }
                 } else if (notifSetting && !isFallbackHop && !fanoutChildKeepsAddress(payload, channel, to_phone, to_email)) {
-                    const recipients = new Set<string>()
-                    const recipientTargets = recipientConfig.recipient_targets || {}
-
+                    // Same rules as the Configure drawer's recipient preview (shared module).
+                    const configured = await collectConfiguredRecipients(supabase, {
+                        orgId: org_id,
+                        eventCode: event_code,
+                        channel,
+                        recipientConfig,
+                        setting: notifSetting,
+                        payload,
+                    })
+                    const recipients = new Set<string>(configured.map((recipient) => recipient.address))
                     const addRecipients = (values: Array<string | null | undefined>) => {
                         for (const value of values) {
-                            let normalized = String(value || '').trim()
-                            if (!normalized) continue
-                            if (channel !== 'email') {
-                                const parsed = toSmsE164(normalized)
-                                if ('e164' in parsed) normalized = parsed.e164
-                            }
-                            recipients.add(normalized)
+                            const normalized = normalizeRecipientAddress(channel, value)
+                            if (normalized) recipients.add(normalized)
                         }
-                    }
-
-                    if (targets.order_creator) {
-                        if (channel === 'email') addRecipients([ownerEmailFromPayload(payload)])
-                        else addRecipients([ownerPhoneFromPayload(payload)])
-                    }
-
-                    const configUsers = notifSetting.recipient_config?.recipient_users
-                    const legacyUsers = notifSetting.recipient_users
-                    const userIds = configUsers?.length ? configUsers : legacyUsers?.length ? legacyUsers : []
-
-                    if (targets.users && userIds.length) {
-                        const { data: users } = await supabase
-                            .from('users')
-                            .select('phone, email')
-                            .in('id', userIds)
-                            .eq('is_active', true)
-
-                        if (users) {
-                            addRecipients(users.map((u) => channel === 'email' ? u.email : u.phone))
-                        }
-                    }
-
-                    const configuredRoles = Array.isArray(recipientConfig.roles) && recipientConfig.roles.length > 0
-                        ? recipientConfig.roles
-                        : Array.isArray(notifSetting.recipient_roles) && notifSetting.recipient_roles.length > 0
-                            ? notifSetting.recipient_roles
-                            : []
-                    const resolvedRoleCodes = expandNotificationRoleCodes(configuredRoles)
-                    const hasExplicitRecipientTargets = Object.keys(recipientTargets).length > 0
-                    const rolesEnabled = targets.roles && configuredRoles.length > 0 && (
-                        hasExplicitRecipientTargets
-                            ? recipientTargets.roles === true
-                            : recipientConfig.type === 'roles' || Boolean(notifSetting.recipient_roles?.length)
-                    )
-
-                    if (rolesEnabled && resolvedRoleCodes.length > 0) {
-                        const { data: roleUsers } = await supabase
-                            .from('users')
-                            .select('phone, email')
-                            .eq('organization_id', org_id)
-                            .in('role_code', resolvedRoleCodes)
-                            .eq('is_active', true)
-
-                        if (roleUsers) {
-                            addRecipients(roleUsers.map((user) => channel === 'email' ? user.email : user.phone))
-                        }
-                    }
-
-                    if (notifSetting.recipient_custom?.length) {
-                        addRecipients(notifSetting.recipient_custom)
-                    }
-
-                    if (channel === 'email') {
-                        addRecipients(splitConfiguredRecipients(recipientConfig.custom_emails))
-                        if (Array.isArray(recipientConfig.manual_email_addresses)) {
-                            const { normalizeAndDedupeManualEmails } = await import('@/lib/notifications/manualEmailAddresses')
-                            addRecipients(normalizeAndDedupeManualEmails(recipientConfig.manual_email_addresses))
-                        }
-                    } else {
-                        addRecipients(splitConfiguredRecipients(recipientConfig.custom_phones))
-                    }
-
-                    if (channel === 'sms' && targets.consumer) {
-                        addRecipients([
-                            payload.customer_phone,
-                            payload.contact_phone,
-                            payload.phone,
-                            payload.phone_number,
-                        ])
-                    }
-
-                    if (channel === 'whatsapp' && Array.isArray(recipientConfig.manual_whatsapp_numbers)) {
-                        const { normalizeAndDedupeManualPhones } = await import('@/lib/notifications/manualPhoneNumbers')
-                        const cleaned = normalizeAndDedupeManualPhones(recipientConfig.manual_whatsapp_numbers)
-                        addRecipients(cleaned)
                     }
 
                     if (recipientPhone) addRecipients([recipientPhone])

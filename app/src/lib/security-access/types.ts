@@ -55,6 +55,7 @@ export interface ResolvedScope {
 export type AuthorizationReasonCode =
   | 'ALLOWED_BY_ASSIGNMENT'
   | 'ALLOWED_BY_DELEGATION'
+  | 'ALLOWED_BY_ROOT_ACCESS'
   | 'ACCOUNT_INACTIVE'
   | 'MISSING_MEMBERSHIP'
   | 'MISSING_ASSIGNMENT'
@@ -80,7 +81,16 @@ export interface AuthorizationDecision {
   /** New-engine reason, reported for explanation only; never used to decide. */
   newReasonCode?: AuthorizationReasonCode
   auditClass?: AuditClass
+  /**
+   * Set when an authoritative input could not be read (account state, evaluator,
+   * required audit row). The decision is still DENY (fail closed); API layers
+   * answer 503 "unavailable" instead of presenting it as a confirmed denial.
+   */
+  unavailable?: AuthorizationUnavailableReason
 }
+
+/** Why a fail-closed decision could not be evaluated (infrastructure, not policy). */
+export type AuthorizationUnavailableReason = 'account_state_unavailable' | 'policy_evaluation_failed' | 'audit_write_failed'
 
 /** Explicit catalog attribute (sa_permissions.audit_sensitivity). */
 export type AuditSensitivity = 'ordinary' | 'security_sensitive'

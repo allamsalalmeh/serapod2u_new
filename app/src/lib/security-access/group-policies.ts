@@ -1,0 +1,124 @@
+import { MODULE_TAXONOMY, classifyPermission, moduleGroupName } from './modules'
+import { COMMISSION_PERMISSION_KEYS } from './commission'
+import { MSS_PERMISSION_KEYS } from './mss'
+import { COMPENSATION_VIEWER_PERMISSION_KEYS } from './compensation-viewer'
+import { BANK_STATEMENT_PERMISSION_KEYS } from './bank-statement-catalog'
+
+/**
+ * Group Policies (the user-facing name of a business role / "Access Profile").
+ *
+ * Standard module-wide "Full Access" policies are seeded by
+ * supabase/migrations/20261009100000_sa_group_policies_full_access.sql as explicit permission lists. This file is
+ * the client-safe catalogue the UI shares: which standard policy belongs to which module, how they are ordered
+ * (module Full Access first, then narrower policies) and what each one's assignment caveats are. It decides
+ * nothing: authorization is always the database's.
+ */
+
+export const GROUP_POLICY_LABEL = { singular: 'Group Policy', plural: 'Group Policies' } as const
+
+export interface FullAccessPolicy {
+  roleKey: string
+  /** Module group id of the shared taxonomy (modules.ts). */
+  moduleId: string
+  name: string
+}
+
+/** One per top-level business module, in taxonomy order. Reporting is a single shared analytics permission, not a module. */
+export const FULL_ACCESS_POLICIES: readonly FullAccessPolicy[] = [
+  { roleKey: 'supply-chain-full-access', moduleId: 'supply_chain', name: 'Supply Chain Full Access' },
+  { roleKey: 'customer-growth-full-access', moduleId: 'customer_growth', name: 'Customer & Growth Full Access' },
+  { roleKey: 'hr-payroll-full-access', moduleId: 'hr_payroll', name: 'HR & Payroll Full Access' },
+  { roleKey: 'finance-full-access', moduleId: 'finance', name: 'Finance Full Access' },
+  { roleKey: 'security-access-full-access', moduleId: 'security_access', name: 'Security & Access Full Access' },
+  { roleKey: 'platform-settings-full-access', moduleId: 'platform_settings', name: 'Platform & Settings Full Access' },
+]
+
+const BY_KEY = new Map(FULL_ACCESS_POLICIES.map(p => [p.roleKey, p]))
+export const fullAccessPolicy = (roleKey?: string | null) => (roleKey ? BY_KEY.get(roleKey) ?? null : null)
+export const isFullAccessPolicy = (roleKey?: string | null) => Boolean(fullAccessPolicy(roleKey))
+
+/** Module (taxonomy) group ids whose permissions a Full Access policy for that module must contain. */
+export const fullAccessModuleIds = FULL_ACCESS_POLICIES.map(p => p.moduleId)
+
+/** Every registered permission that genuinely belongs to a module (by the shared taxonomy). */
+/**
+ * Registered permissions that are deliberately in NO module Full Access policy (reviewed; the drift report lists them):
+ *   platform.system_logs.view — reading other users' diagnostics is granted only through the narrow System Log Viewer
+ *   policy (20261017110000), never implied by platform administration.
+ *   hr.commission.* — Staff Sales Commission (20261102110000/20261102120000): HR & Payroll Full Access is NOT extended,
+ *   so commission is granted through its own policies only.
+ *   hr.mss.* and hr.compensation.salary/allowance.view — Manager Self-Service and the Manager Compensation Viewer are
+ *   separate, explicitly granted policies (20261103100000); being an HR administrator alone must not imply manager or
+ *   compensation access (least privilege).
+ *   DESTRUCTIVE_PERMISSIONS — removed from Full Access by 20261110100000 (recorded as reviewed exclusions in
+ *   sa_standard_policy_coverage.excluded_keys); granted only through the break-glass policies below.
+ */
+export const DESTRUCTIVE_PERMISSIONS: readonly string[] = ['hr.data.reset', 'finance.data.reset', 'platform.data.destructive', 'platform.identity.delete']
+export const OUTSIDE_FULL_ACCESS: readonly string[] = ['platform.system_logs.view', ...COMMISSION_PERMISSION_KEYS, ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS, ...DESTRUCTIVE_PERMISSIONS]
+
+/**
+ * Module permissions that Full Access never implies but that stay grantable next to it (owner decision B, 2026-10-16):
+ *   finance.statement.import / finance.statement.approve — the bank statement maker and checker are explicit grants only
+ *   (finance-statement-preparer / finance-statement-approver, or finance-admin; 20261006160000) and the database keeps
+ *   them apart per statement (SoD bank-statement-maker-checker, enforce). Viewing statements is finance.cash.view, which
+ *   Finance Full Access holds. Deliberately NOT in OUTSIDE_FULL_ACCESS: the grant form must keep offering the Finance
+ *   module to a Finance Full Access holder so these two can still be granted explicitly (grant-coverage.ts).
+ */
+export const EXPLICIT_GRANT_ONLY: readonly string[] = [...BANK_STATEMENT_PERMISSION_KEYS]
+
+/**
+ * Break-glass standard policies: the only standard policies holding a destructive operation (20261110100000; HR's
+ * predates it, 20261003100000). Grant for a planned operation, preferably with an end date.
+ */
+export const BREAK_GLASS_POLICIES: Readonly<Record<string, readonly string[]>> = {
+  'hr-data-reset-administrator': ['hr.data.reset'],
+  'finance-data-reset-administrator': ['finance.data.reset'],
+  'platform-data-maintenance-administrator': ['platform.data.destructive', 'platform.identity.delete'],
+}
+export const isBreakGlassPolicy = (roleKey?: string | null) => Boolean(roleKey && roleKey in BREAK_GLASS_POLICIES)
+export const BREAK_GLASS_POLICY_NAMES: Readonly<Record<string, string>> = {
+  'hr-data-reset-administrator': 'HR Data Reset Administrator',
+  'finance-data-reset-administrator': 'Finance Data Reset Administrator',
+  'platform-data-maintenance-administrator': 'Platform Data Maintenance Administrator',
+}
+
+/** Function-sized standard policies seeded by 20261110100000 (assigned to nobody). */
+export const FUNCTIONAL_STANDARD_POLICIES: Readonly<Record<string, readonly string[]>> = {
+  'warehouse-receiving-dispatch': ['inventory.stock.view', 'supply_chain.document.acknowledge', 'supply_chain.order.view', 'warehouse.receipt.post', 'warehouse.shipment.manage'],
+  'hr-leave-attendance-administrator': ['hr.attendance.manage', 'hr.employee.view', 'hr.expense.manage', 'hr.leave.approve', 'hr.module.view'],
+  'hr-records-officer': ['hr.contract.manage', 'hr.contract.view', 'hr.employee.manage', 'hr.employee.view', 'hr.module.view', 'hr.onboarding.manage', 'hr.recruitment.manage'],
+  'reporting-viewer': ['reporting.analytics.view'],
+}
+
+export const permissionsOfModule = (moduleId: string, keys: readonly string[]) =>
+  keys.filter(k => classifyPermission(k).groupId === moduleId).slice().sort()
+
+/**
+ * Selection order: module Full Access policies first (taxonomy order), then every other policy by name.
+ * Used by Group Policies, the Add User picker and the grant form so the module policy is always the first,
+ * most prominent choice.
+ */
+export function sortGroupPolicies<T>(items: readonly T[], roleKeyOf: (item: T) => string | null | undefined, nameOf: (item: T) => string): T[] {
+  const rank = (item: T) => {
+    const policy = fullAccessPolicy(roleKeyOf(item))
+    return policy ? MODULE_TAXONOMY.findIndex(g => g.id === policy.moduleId) : 1000
+  }
+  return items.slice().sort((a, b) => rank(a) - rank(b) || nameOf(a).localeCompare(nameOf(b)))
+}
+
+/** Short label shown beside a Full Access policy ("Full Access · Supply Chain"). */
+export const fullAccessBadge = (roleKey?: string | null) => {
+  const policy = fullAccessPolicy(roleKey)
+  return policy ? `Full Access · ${moduleGroupName(policy.moduleId)}` : null
+}
+
+/**
+ * Why a policy may be missing while creating a user. Mirrors the database rule (sa_actor_may_assign_profile, the same
+ * authority Grant Policy enforces): policies holding security administration or reset/destructive permissions are
+ * offered only to an administrator who holds those permissions in the organization.
+ */
+export const POST_CREATION_ASSIGNMENT_NOTE =
+  'Some policies hold security administration or reset permissions (Security & Access Full Access and the break-glass reset policies). They are offered here only when you hold those permissions in this organization (the same rule as Grant Policy); otherwise create the person first and ask an administrator who holds them to assign the policy in Security & Access → People & Access.'
+
+/** Standard policy coverage drift as reported by sa_standard_policy_drift(). */
+export interface PolicyDrift { roleKey: string; recordedCount: number; liveCount: number; catalogueNotCovered: string[]; liveNotRecorded: string[]; recordedNotLive: string[] }

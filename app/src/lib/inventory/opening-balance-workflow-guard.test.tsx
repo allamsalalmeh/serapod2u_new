@@ -6,6 +6,7 @@ import {
   guardedAdvanceTarget,
 } from './opening-balance-workflow-guard'
 import type { OpeningBalanceReadiness, OpeningBalanceBlocker } from './opening-balance-readiness'
+import type { OpeningBalanceBlockerDetail } from './opening-balance-blockers'
 import type { OpeningBalanceStepId } from './opening-balance-workspace'
 
 const blocker = (id: string, step: OpeningBalanceStepId): OpeningBalanceBlocker => ({
@@ -97,7 +98,7 @@ describe('guardedAdvanceTarget', () => {
 describe('transactionsGateFor — single authoritative dedup', () => {
   const ws = (transactions: number, allocationBlockers: number) => ({
     remainingByStep: remaining({ transactions }),
-    allocationBlockers: Array.from({ length: allocationBlockers }),
+    allocationBlockers: Array.from<OpeningBalanceBlockerDetail>({ length: allocationBlockers }),
   })
 
   it('does not double-count an orphan allocation (blocker also folded into remaining)', () => {

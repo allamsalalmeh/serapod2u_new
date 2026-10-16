@@ -3,6 +3,7 @@ import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { userAllowed } from '@/lib/security-access/operation'
 import QualityIssuesView from '@/components/manufacturer/QualityIssuesView'
+import AccessState from '@/components/access/AccessState'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -41,10 +42,7 @@ export default async function ManufacturerQualityIssuesPage() {
     () => userProfile.role_code === 'SA')
   if (!(isAdministrator || isManufacturerOrg)) {
     return (
-      <div className="p-8">
-        <h2 className="text-xl font-semibold">Unauthorized</h2>
-        <p>You do not have permission to view this page.</p>
-      </div>
+      <AccessState kind="denied" />
     )
   }
 

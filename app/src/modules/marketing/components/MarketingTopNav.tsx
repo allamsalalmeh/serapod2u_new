@@ -3,12 +3,13 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Megaphone, Search, ChevronRight, ChevronDown, X, Menu as MenuIcon } from 'lucide-react'
 import {
-    marketingNavGroups,
+    marketingNavGroups as all_marketingNavGroups,
     getAllMarketingNavItems,
     getMarketingBreadcrumb,
     type MarketingNavGroup,
     type MarketingNavChild,
 } from '@/modules/marketing/marketingNav'
+import { useAccessibleNavGroups } from '@/hooks/useNavAccess'
 import { cn } from '@/lib/utils'
 
 interface MarketingTopNavProps {
@@ -17,6 +18,8 @@ interface MarketingTopNavProps {
 }
 
 export default function MarketingTopNav({ currentView, onNavigate }: MarketingTopNavProps) {
+    // Only the functions this person may open (Security & Access snapshot); the server decides every page and API too.
+    const marketingNavGroups = useAccessibleNavGroups(all_marketingNavGroups)
     const [openGroupId, setOpenGroupId] = useState<string | null>(null)
     const [searchQuery, setSearchQuery] = useState('')
     const [searchOpen, setSearchOpen] = useState(false)

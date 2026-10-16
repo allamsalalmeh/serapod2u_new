@@ -15,7 +15,6 @@ interface UserInfo {
   email: string
   avatar_url: string | null
   phone: string | null
-  org_type_code: string | null
 }
 
 const NAV_LINKS = [
@@ -56,20 +55,19 @@ export default function StorefrontNavbar() {
         if (authUser) {
           const { data: profile } = await supabase
             .from('users')
-            .select('id, full_name, email, avatar_url, phone, org_type_code')
+            .select('id, full_name, email, avatar_url, phone')
             .eq('id', authUser.id)
             .single()
 
           if (profile) {
-            setUser(profile as UserInfo)
+            setUser(profile)
           } else {
             setUser({
               id: authUser.id,
               full_name: authUser.user_metadata?.full_name || null,
               email: authUser.email || '',
               avatar_url: authUser.user_metadata?.avatar_url || null,
-              phone: authUser.phone || null,
-              org_type_code: 'END_USER',
+              phone: authUser.phone || null
             })
           }
         }
@@ -86,10 +84,10 @@ export default function StorefrontNavbar() {
       if (event === 'SIGNED_IN' && session?.user) {
         const { data: profile } = await supabase
           .from('users')
-          .select('id, full_name, email, avatar_url, phone, org_type_code')
+          .select('id, full_name, email, avatar_url, phone')
           .eq('id', session.user.id)
           .single()
-        if (profile) setUser(profile as UserInfo)
+        if (profile) setUser(profile)
       } else if (event === 'SIGNED_OUT') {
         setUser(null)
       }

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_QR_BUFFER_PERCENT, qrBufferCases } from '@/lib/orders/qr-buffer'
 
 const source = readFileSync(
   path.resolve(__dirname, 'CreateOrderView.tsx'),
@@ -13,11 +14,10 @@ const source = readFileSync(
  * This suite guards the acceptance numbers and the user-facing terminology.
  */
 describe('CreateOrderView acceptance calculation', () => {
-  // Cellera example: 100 Cases @ RM14, 100 cases per box, 10% QR buffer
+  // Cellera example: 100 Cases @ RM14, 100 cases per box, 1% manufacturer buffer
   const qty = 100
   const unitPrice = 14
   const unitsPerCase = 100 // legacy internal name = cases per box
-  const qrBuffer = 10
 
   it('keeps the line total at RM1,400', () => {
     expect(qty * unitPrice).toBe(1400)
@@ -32,15 +32,20 @@ describe('CreateOrderView acceptance calculation', () => {
     expect(totalCases).toBe(1)
   })
 
-  it('keeps Unique QR at 110 with the 10% buffer', () => {
-    expect(Math.round(qty + (qty * qrBuffer) / 100)).toBe(110)
+  it('Unique QR is one per case plus the 1% buffer, rounded down as QR generation does', () => {
+    expect(qty + qrBufferCases(qty, DEFAULT_QR_BUFFER_PERCENT)).toBe(101)
+    expect(1000 + qrBufferCases(1000, DEFAULT_QR_BUFFER_PERCENT)).toBe(1010)
+    expect(150 + qrBufferCases(150, DEFAULT_QR_BUFFER_PERCENT)).toBe(151)
   })
 
   it('still uses the original formulas in the component', () => {
     // Box / Master QR count
     expect(source).toContain('Math.ceil(item.qty / (item.units_per_case || unitsPerCase))')
-    // Unique QR with buffer
-    expect(source).toContain('Math.round(item.qty + (item.qty * qrBuffer / 100))')
+    // Unique QR with buffer: the shared rule QR generation uses
+    expect(source).toContain('const bufferCases = qrBufferCases(orderedCases, resolveQrBufferPercent(qrBuffer))')
+    expect(source).toContain('allocateQrBufferCases(')
+    expect(source).not.toContain('Math.round(item.qty + (item.qty * qrBuffer / 100))')
+    expect(source).toContain('useState(DEFAULT_QR_BUFFER_PERCENT)')
     // Line total & subtotal
     expect(source).toContain('line_total: qty * item.unit_price')
     expect(source).toContain('sum + (item.qty * item.unit_price)')

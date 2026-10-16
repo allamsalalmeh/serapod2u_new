@@ -50,6 +50,7 @@ const RESOURCES: Record<string, { noun: string; group: string; resourceType: str
   'ecommerce.outdoor': { noun: 'Outdoor Store', group: 'E-Commerce', resourceType: 'outdoor_store' },
   'customer.crm': { noun: 'CRM Module', group: 'Customer & Growth', resourceType: 'crm_module' },
   'platform.notification_monitor': { noun: 'Delivery Monitors', group: 'Platform', resourceType: 'notification_monitor' },
+  'platform.system_logs': { noun: 'System Logs', group: 'Platform', resourceType: 'system_logs' },
   'supply_chain.order': { noun: 'Orders', group: 'Supply Chain', resourceType: 'order' },
   'supply_chain.document': { noun: 'Order Documents', group: 'Supply Chain', resourceType: 'document' },
   'inventory.opening_balance': { noun: 'Opening Balance', group: 'Inventory', resourceType: 'opening_balance' },
@@ -68,7 +69,15 @@ export const PERMISSION_GROUP_ORDER = [
 
 const titleCase = (value: string) => value.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 
+/** Operations whose generated "<Verb> <Noun>" reads wrongly; the display name is fixed here (presentation only). */
+const LABEL_OVERRIDES: Record<string, PermissionLabel> = {
+  'platform.user.password_reset': { label: 'Reset User Password', group: 'Identity', resourceType: 'identity' },
+  'platform.system_logs.view': { label: 'View System Logs', group: 'Platform', resourceType: 'system_logs' },
+}
+
 export function permissionLabel(permissionKey: string): PermissionLabel {
+  const override = LABEL_OVERRIDES[permissionKey]
+  if (override) return override
   const [module = '', resource = '', action = ''] = permissionKey.split('.')
   const known = RESOURCES[`${module}.${resource}`]
   const verb = ACTIONS[action] ?? titleCase(action)
@@ -88,11 +97,15 @@ export function resourceTypeLabel(resourceType: string): string {
   return RESOURCE_TYPE_LABELS[resourceType] ?? titleCase(resourceType)
 }
 
+/**
+ * ONE vocabulary for the four stored migration modes (sa_migration_modes.mode),
+ * used by every Security & Access screen. Never rename a stored value here.
+ */
 export const MODE_LABELS: Record<string, { label: string; tone: string; help: string }> = {
-  LEGACY_ENFORCED: { label: 'Legacy enforced', tone: 'bg-gray-100 text-gray-700', help: 'Existing role permissions decide. The new model is not consulted for the outcome.' },
-  SHADOW: { label: 'Shadow', tone: 'bg-blue-50 text-blue-700', help: 'Existing role permissions decide; the new model is evaluated and compared for diagnostics.' },
-  NEW_ENFORCED: { label: 'New enforced', tone: 'bg-emerald-50 text-emerald-700', help: 'The new Security & Access model decides. A legacy allow cannot override a new deny.' },
-  LEGACY_RETIRED: { label: 'Legacy retired', tone: 'bg-purple-50 text-purple-700', help: 'Only the new Security & Access model is used.' },
+  LEGACY_ENFORCED: { label: 'Legacy enforced', tone: 'bg-gray-100 text-gray-700', help: 'Legacy authorization decides. The new model is not used for the outcome.' },
+  SHADOW: { label: 'Monitoring / Shadow', tone: 'bg-blue-50 text-blue-700', help: 'Legacy authorization decides; new Security & Access decisions are evaluated and compared for diagnostics.' },
+  NEW_ENFORCED: { label: 'New Access Active', tone: 'bg-emerald-50 text-emerald-700', help: 'New Security & Access authorization decides. A legacy allow cannot override a new deny.' },
+  LEGACY_RETIRED: { label: 'Legacy Retired', tone: 'bg-purple-50 text-purple-700', help: 'Legacy authorization is retired; only the new Security & Access model is used.' },
 }
 
 export function modeLabel(mode: string) {
@@ -108,6 +121,7 @@ export const REASON_LABELS: Record<string, string> = {
   MISSING_CONTEXT: 'The request is missing context the user’s scope needs (for example a warehouse).',
   SCOPE_MISMATCH: 'The user’s role applies to a different organization or warehouse.',
   ALLOWED_BY_DELEGATION: 'Allowed through an active delegation from someone who currently holds this access.',
+  ALLOWED_BY_ROOT_ACCESS: 'Allowed by active Root Access (Full System Administrator): every active permission in every organization.',
   LEGACY_ALLOWED: 'Allowed by the existing (legacy) role permissions.',
   LEGACY_DENIED: 'Denied by the existing (legacy) role permissions.',
   POLICY_ERROR: 'The policy could not be evaluated; access is denied for safety.',

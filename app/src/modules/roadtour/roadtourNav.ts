@@ -6,6 +6,8 @@ export interface RoadtourNavChild {
     icon: any
     route?: string
     description?: string
+    /** Destination (ROADTOUR_DESTINATIONS) that must be allowed for this item; defaults to the group's. */
+    requires?: string
 }
 
 export interface RoadtourNavGroup {
@@ -13,12 +15,15 @@ export interface RoadtourNavGroup {
     label: string
     icon: any
     description?: string
+    /** Destination (ROADTOUR_DESTINATIONS) that must be allowed for this group. */
+    requires: string
     children: RoadtourNavChild[]
 }
 
 export const roadtourNavGroups: RoadtourNavGroup[] = [
     {
         id: 'rt-campaigns',
+        requires: 'roadtour:campaigns',
         label: 'Campaign Management',
         icon: Map,
         description: 'Create and manage RoadTour campaigns, assign account managers, and track performance.',
@@ -29,6 +34,7 @@ export const roadtourNavGroups: RoadtourNavGroup[] = [
     },
     {
         id: 'rt-reporting',
+        requires: 'roadtour:reporting',
         label: 'RoadTour Reporting',
         icon: BarChart3,
         description: 'One monthly view of shops visited, shop response, account manager performance, ongoing shop trend and follow-up.',
@@ -37,23 +43,47 @@ export const roadtourNavGroups: RoadtourNavGroup[] = [
             { id: 'roadtour-am-performance', label: 'AM Performance', icon: UserCheck, route: '/roadtour/reporting/am-performance' },
             { id: 'roadtour-shop-performance', label: 'Shop Performance', icon: TrendingUp, route: '/roadtour/reporting/shop-performance' },
             { id: 'roadtour-shop-follow-up', label: 'Shop Follow-Up', icon: Flag, route: '/roadtour/reporting/follow-up' },
-            { id: 'roadtour-visits', label: 'Visit Log', icon: Users, route: '/roadtour/visits' },
+            { id: 'roadtour-visits', label: 'Visit Log', icon: Users, route: '/roadtour/visits', requires: 'roadtour:visits' },
             { id: 'roadtour-monthly-kpi-report', label: 'Monthly KPI Performance Report', icon: CalendarCheck, route: '/roadtour/analytics/monthly-kpi' },
             { id: 'roadtour-whatsapp', label: 'WhatsApp Monitoring', icon: Smartphone, route: '/roadtour/whatsapp' },
         ],
     },
     {
         id: 'rt-settings',
+        requires: 'roadtour:settings',
         label: 'Settings',
         icon: Settings,
         description: 'Configure RoadTour module settings, surveys, user registration, and preferences.',
         children: [
             { id: 'roadtour-surveys', label: 'Surveys', icon: ClipboardList, route: '/roadtour/surveys' },
-            { id: 'roadtour-kpi-settings', label: 'KPI & Incentive Settings', icon: Target, route: '/roadtour/settings/kpi' },
+            { id: 'roadtour-kpi-settings', label: 'KPI & Incentive Settings', icon: Target, route: '/roadtour/settings/kpi', requires: 'roadtour:kpi-settings' },
             { id: 'roadtour-settings', label: 'RoadTour Settings', icon: Settings, route: '/roadtour/settings' },
         ],
     },
 ]
+
+/**
+ * The RoadTour menu the person may use. `allows` answers from the per-user Security & Access snapshot; a group is kept
+ * only when a child remains. Navigation only: every RoadTour page and API decides again on the server.
+ */
+export function filterRoadtourNavGroups(allows: (destinationId: string) => boolean): RoadtourNavGroup[] {
+    return roadtourNavGroups
+        .filter((group) => allows(group.requires))
+        .map((group) => ({ ...group, children: group.children.filter((child) => allows(child.requires ?? group.requires)) }))
+        .filter((group) => group.children.length > 0)
+}
+
+/** The destination a RoadTour view is decided with: its menu item's, else its group's, else the module's. */
+export function roadtourDestinationForView(viewId: string): string {
+    const id = resolveRoadtourViewId(viewId)
+    for (const group of roadtourNavGroups) {
+        const child = group.children.find((c) => c.id === id)
+        if (child) return child.requires ?? group.requires
+    }
+    const hidden = roadtourHiddenViews.find((v) => v.id === id)
+    if (hidden) return roadtourNavGroups.find((g) => g.id === hidden.groupId)?.requires ?? 'roadtour'
+    return 'roadtour'
+}
 
 /**
  * Views that are reachable and URL-addressable but are drill-downs rather than

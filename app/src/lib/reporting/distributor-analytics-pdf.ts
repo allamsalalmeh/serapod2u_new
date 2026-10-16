@@ -571,7 +571,7 @@ export async function buildDistributorAnalyticsPdf(
     {
       label: 'Approval Rate',
       value: formatPct(report.orderProcessing.approvalRatePct),
-      note: `${formatCount(report.orderProcessing.approvedOrders)} approved or closed`,
+      note: `${formatCount(report.orderProcessing.approvedOrders)} approved, packed, shipped or closed`,
     },
     {
       label: 'Completion Rate',
@@ -583,6 +583,11 @@ export async function buildDistributorAnalyticsPdf(
       value: formatPct(report.orderProcessing.cancellationRatePct),
       note: `${formatCount(report.orderProcessing.cancelledOrders)} cancelled`,
     },
+  ])
+  kpiRow([
+    { label: 'Approved Sales Value', value: formatRM(report.orderProcessing.approvedSalesValue), note: `${formatCount(report.orderProcessing.approvedOrders)} approved-stage orders` },
+    { label: 'Order Pipeline Value', value: formatRM(report.orderProcessing.pipelineValue), note: `${formatCount(report.orderProcessing.pipelineOrders)} submitted` },
+    { label: 'Cancelled Orders Value', value: formatRM(report.orderProcessing.cancelledValue), note: `${formatCount(report.orderProcessing.cancelledOrders)} cancelled — not sales` },
   ])
   if (report.orderProcessing.statuses.length === 0) {
     emptyNote('No orders recorded for the selected period.')

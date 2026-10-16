@@ -18,14 +18,6 @@ interface NotificationsCardItem {
 
 const notificationCards: NotificationsCardItem[] = [
   {
-    id: 'failed-notifications',
-    label: 'Notification Monitor',
-    description: 'Monitor WhatsApp, SMS, and Email delivery, failed notifications, provider status, and recovery actions.',
-    href: '/notifications/whatsapp-activity-recovery',
-    icon: AlertTriangle,
-    accent: landingAccents.amber,
-  },
-  {
     id: 'notification-providers',
     label: 'Notification Providers',
     description: 'Configure SMS, Email, and WhatsApp providers used by the system.',
@@ -40,6 +32,14 @@ const notificationCards: NotificationsCardItem[] = [
     href: '/notifications/types',
     icon: Megaphone,
     accent: landingAccents.rose,
+  },
+  {
+    id: 'failed-notifications',
+    label: 'Notification Monitor',
+    description: 'Monitor WhatsApp, SMS, and Email delivery, failed notifications, provider status, and recovery actions.',
+    href: '/notifications/whatsapp-activity-recovery',
+    icon: AlertTriangle,
+    accent: landingAccents.amber,
   },
 ]
 

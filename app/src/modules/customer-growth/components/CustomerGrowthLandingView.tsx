@@ -1,7 +1,10 @@
 'use client'
 
 import { ArrowRight } from 'lucide-react'
-import { customerGrowthNavGroups, type CustomerGrowthNavGroup } from '@/modules/customer-growth/customerGrowthNav'
+import { useMemo } from 'react'
+import { describeCustomerGrowthFunctions, filterCustomerGrowthNavGroups, type CustomerGrowthNavGroup } from '@/modules/customer-growth/customerGrowthNav'
+import { customerGrowthChildVisible } from '@/lib/security-access/nav-access'
+import { useNavAccess } from '@/hooks/useNavAccess'
 import CustomerGrowthHeroBanner from './CustomerGrowthHeroBanner'
 import ModuleLandingCard from '@/components/layout/ModuleLandingCard'
 import { customerGrowthLandingAccents, landingAccents, pickLandingAccent } from '@/lib/landing-accents'
@@ -16,9 +19,12 @@ interface CustomerGrowthLandingViewProps {
 const defaultIconAccent = landingAccents.orange
 
 export default function CustomerGrowthLandingView({ userName, bannerImageUrl, onViewChange }: CustomerGrowthLandingViewProps) {
+    // Only the destinations this person may open (Security & Access snapshot); the server decides every route and API too.
+    const { snapshot } = useNavAccess()
+    const customerGrowthNavGroups = useMemo(() => filterCustomerGrowthNavGroups(id => customerGrowthChildVisible(snapshot, id)), [snapshot]) // eslint-disable-line react-hooks/exhaustive-deps
     return (
         <div className="sera-module-landing">
-            <CustomerGrowthHeroBanner userName={userName ?? null} bannerImageUrl={bannerImageUrl} />
+            <CustomerGrowthHeroBanner userName={userName ?? null} bannerImageUrl={bannerImageUrl} description={describeCustomerGrowthFunctions(customerGrowthNavGroups)} />
 
             <div className="sera-module-landing__grid">
                 {customerGrowthNavGroups.map((group: CustomerGrowthNavGroup) => {

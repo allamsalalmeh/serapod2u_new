@@ -7,7 +7,7 @@ import { callApi, formatDate, toIso } from './client-api'
 
 interface Options {
   memberships: Array<{ organizationId: string; organizationName: string; heldRoleIds: string[] }>
-  scopes: Array<{ id: string; organization_id: string; scope_type: string; display_name: string }>
+  scopes: Array<{ id: string; organization_id: string; membership_organization_id?: string; scope_type: string; display_name: string; kind?: string; label?: string; coverage?: string }>
   roles: Array<{ id: string; name: string; description: string | null }>
 }
 
@@ -46,7 +46,7 @@ export default function MyAccessRequests() {
   const roleName = useMemo(() => new Map((options?.roles || []).map(r => [r.id, r.name])), [options])
   const membership = options?.memberships.find(m => m.organizationId === form.organizationId)
   const roleOptions = (options?.roles || []).filter(r => !membership?.heldRoleIds.includes(r.id))
-  const scopeOptions = (options?.scopes || []).filter(s => s.organization_id === form.organizationId)
+  const scopeOptions = (options?.scopes || []).filter(s => (s.membership_organization_id ?? s.organization_id) === form.organizationId)
   const valid = Boolean(membership && roleOptions.some(r => r.id === form.roleId) && scopeOptions.some(s => s.id === form.scopeId) && form.reason.trim().length >= 10)
 
   // Not a business member (consumer, or not yet onboarded): nothing to request.
@@ -77,7 +77,7 @@ export default function MyAccessRequests() {
     <Card className="sera-sc-panel overflow-hidden border-[var(--sera-line)] shadow-none">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base"><KeyRound className="h-4 w-4" aria-hidden />Request access</CardTitle>
-        <CardDescription>Ask for a business role you need for your work. An approver in Security &amp; Access decides; you cannot approve your own request.</CardDescription>
+        <CardDescription>Ask for a Group Policy you need for your work. An approver in Security &amp; Access decides; you cannot approve your own request.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {!options ? <p className="text-sm text-gray-500">Loading…</p> : <>
@@ -87,16 +87,17 @@ export default function MyAccessRequests() {
                 <option value="">Choose an organization</option>
                 {options.memberships.map(m => <option key={m.organizationId} value={m.organizationId}>{m.organizationName}</option>)}
               </select></label>
-            <label className="text-sm"><span className="text-gray-600">Business role</span>
-              <select aria-label="Business role" className={field} value={form.roleId} onChange={e => setForm({ ...form, roleId: e.target.value })} disabled={!form.organizationId}>
-                <option value="">{roleOptions.length ? 'Choose a role' : 'No other roles to request'}</option>
+            <label className="text-sm"><span className="text-gray-600">Group Policy</span>
+              <select aria-label="Group Policy" className={field} value={form.roleId} onChange={e => setForm({ ...form, roleId: e.target.value })} disabled={!form.organizationId}>
+                <option value="">{roleOptions.length ? 'Choose a policy' : 'No other policies to request'}</option>
                 {roleOptions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
               </select></label>
             <label className="text-sm"><span className="text-gray-600">Scope</span>
               <select aria-label="Scope" className={field} value={form.scopeId} onChange={e => setForm({ ...form, scopeId: e.target.value })} disabled={!form.organizationId}>
                 <option value="">Choose a scope</option>
-                {scopeOptions.map(s => <option key={s.id} value={s.id}>{s.display_name} ({s.scope_type.replace(/_/g, ' ')})</option>)}
-              </select></label>
+                {scopeOptions.map(s => <option key={s.id} value={s.id}>{s.label ?? `${s.display_name} (${s.scope_type.replace(/_/g, ' ')})`}</option>)}
+              </select>
+              {scopeOptions.find(s => s.id === form.scopeId)?.coverage && <span role="note" className="mt-1 block text-xs text-gray-700">Coverage: {scopeOptions.find(s => s.id === form.scopeId)?.coverage}</span>}</label>
             <label className="text-sm"><span className="text-gray-600">Needed until (optional — temporary access)</span>
               <input aria-label="Needed until" type="datetime-local" className={field} value={form.until} onChange={e => setForm({ ...form, until: e.target.value })} /></label>
             <label className="text-sm md:col-span-2"><span className="text-gray-600">Reason (at least 10 characters)</span>

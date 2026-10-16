@@ -1,7 +1,7 @@
 import 'server-only'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { authorizeOperation, organizationResource } from '@/lib/security-access/operation'
+import { navActorFromProfile, resolveDestinationAccess } from '@/lib/server/nav-access'
 
 /**
  * Server-only context helper for Catalog pages.
@@ -52,17 +52,10 @@ export async function getCatalogPageContext() {
         roles
     }
 
-    // Catalog is accessible to HQ, DIST, and SHOP org types with role level ≤ 50
-    const orgType = organization?.org_type_code
-    const roleLevel = roles?.role_level ?? 999
-    // Module entry is an S&A decision (product.catalog.view) in the user's own
-    // organization; the historical page rule is the legacy evaluator.
-    const canViewCatalog = await authorizeOperation({
-        actorId: user.id,
-        permission: 'product.catalog.view',
-        resource: organizationResource('catalog_module', organizationId),
-        legacy: () => ['HQ', 'DIST', 'SHOP'].includes(orgType) && roleLevel <= 50,
-    }).then(d => d.decision === 'ALLOW').catch(() => false)
+    // Module entry is the canonical Security & Access decision for the 'catalog' destination (see nav-access.ts), in
+    // the user's own organization. A failed check is reported as such, not as a denial.
+    const access = await resolveDestinationAccess(navActorFromProfile(transformedUserProfile), 'catalog')
+    const canViewCatalog = access.state === 'allowed'
 
-    return { user, userProfile: transformedUserProfile, canViewCatalog }
+    return { user, userProfile: transformedUserProfile, canViewCatalog, accessState: access.state }
 }

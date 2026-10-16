@@ -1,4 +1,5 @@
 import { hrSelfCan } from '@/lib/server/hrAccess'
+import { ONBOARDING_PENDING_MESSAGE, getOwnOnboardingState, isOnboardingPendingError } from '@/lib/hr/onboarding'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { getAttendanceAuthContext } from '@/lib/server/attendanceAccess'
@@ -33,6 +34,13 @@ export async function POST(request: NextRequest) {
         }
         if (!(await hrSelfCan(ctx))) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
 
+        // ESS records follow HR onboarding: an employee awaiting onboarding
+        // (or whose registration was reset) cannot record attendance yet.
+        const onboarding = await getOwnOnboardingState(ctx.userId, ctx.organizationId)
+        if (onboarding === 'pending' || onboarding === 'reset' || onboarding === 'none') {
+            return NextResponse.json({ success: false, error: ONBOARDING_PENDING_MESSAGE, code: 'HR_ONBOARDING_PENDING' }, { status: 409 })
+        }
+
         const body = await request.json()
         const action = String(body.action || '')
         const now = new Date()
@@ -66,6 +74,9 @@ export async function POST(request: NextRequest) {
                 .single()
 
             if (error) {
+                if (isOnboardingPendingError(error)) {
+                    return NextResponse.json({ success: false, error: ONBOARDING_PENDING_MESSAGE, code: 'HR_ONBOARDING_PENDING' }, { status: 409 })
+                }
                 return NextResponse.json({ success: false, error: error.message }, { status: 500 })
             }
 
@@ -104,6 +115,9 @@ export async function POST(request: NextRequest) {
                 .single()
 
             if (error) {
+                if (isOnboardingPendingError(error)) {
+                    return NextResponse.json({ success: false, error: ONBOARDING_PENDING_MESSAGE, code: 'HR_ONBOARDING_PENDING' }, { status: 409 })
+                }
                 return NextResponse.json({ success: false, error: error.message }, { status: 500 })
             }
 

@@ -1,15 +1,13 @@
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { getFinancePageContext } from '@/app/finance/_lib'
+import AccessState from '@/components/access/AccessState'
 
 export default async function FinancePermissionsPage() {
-    const { userProfile, canViewFinance } = await getFinancePageContext()
+    const { userProfile, canViewFinance, accessState } = await getFinancePageContext('finance/settings/permissions')
 
     if (!canViewFinance) {
         return (
-            <div className="p-8">
-                <h2 className="text-xl font-semibold">Unauthorized</h2>
-                <p>You do not have permission to view this page.</p>
-            </div>
+            <AccessState kind={accessState === 'unavailable' ? 'unavailable' : 'denied'} />
         )
     }
 

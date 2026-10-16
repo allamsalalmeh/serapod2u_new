@@ -3,12 +3,13 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { ShoppingCart, Search, ChevronRight, ChevronDown, X, Menu as MenuIcon } from 'lucide-react'
 import {
-    catalogNavGroups,
+    catalogNavGroups as all_catalogNavGroups,
     getAllCatalogNavItems,
     getCatalogBreadcrumb,
     type CatalogNavGroup,
     type CatalogNavChild,
 } from '@/modules/catalog/catalogNav'
+import { useAccessibleNavGroups } from '@/hooks/useNavAccess'
 import { cn } from '@/lib/utils'
 
 interface CatalogTopNavProps {
@@ -17,6 +18,8 @@ interface CatalogTopNavProps {
 }
 
 export default function CatalogTopNav({ currentView, onNavigate }: CatalogTopNavProps) {
+    // Only the functions this person may open (Security & Access snapshot); the server decides every page and API too.
+    const catalogNavGroups = useAccessibleNavGroups(all_catalogNavGroups)
     const [openGroupId, setOpenGroupId] = useState<string | null>(null)
     const [searchQuery, setSearchQuery] = useState('')
     const [searchOpen, setSearchOpen] = useState(false)

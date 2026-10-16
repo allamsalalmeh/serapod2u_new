@@ -18,6 +18,7 @@ import {
   ChevronRight,
   AlertCircle,
   Timer,
+  ListTree,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -78,7 +79,7 @@ function QuickAction({
 
 export default function HrMobileHome() {
   const router = useRouter()
-  const { userProfile, isManager, isAdmin, organizationId } = useHrMobile()
+  const { userProfile, isManager, isAdmin, canViewOrgChart, organizationId } = useHrMobile()
   const greeting = useMemo(() => getGreeting(), [])
   const supabase = createClient()
 
@@ -232,7 +233,7 @@ export default function HrMobileHome() {
           </h3>
           <button
             onClick={() => router.push('/hr/mobile/attendance')}
-            className="text-xs text-blue-600 font-medium"
+            className="min-h-11 px-2 text-xs font-medium text-blue-600"
           >
             View All
           </button>
@@ -283,7 +284,7 @@ export default function HrMobileHome() {
             </h3>
             <button
               onClick={() => router.push('/hr/mobile/leave')}
-              className="text-xs text-blue-600 font-medium"
+              className="min-h-11 px-2 text-xs font-medium text-blue-600"
             >
               View All
             </button>
@@ -326,11 +327,23 @@ export default function HrMobileHome() {
         </button>
       )}
 
+      {/* ── Organization chart (read-only staff view) ───────────── */}
+      {canViewOrgChart && (
+        <button
+          onClick={() => router.push('/hr/people/org-chart')}
+          className="flex min-h-11 w-full items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition-colors hover:bg-accent/50"
+        >
+          <ListTree className="h-5 w-5 shrink-0 text-blue-600" aria-hidden />
+          <span className="flex-1 text-sm font-medium text-foreground">Organization Chart</span>
+          <ChevronRight className="h-5 w-5 text-muted-foreground" aria-hidden />
+        </button>
+      )}
+
       {/* ── Admin shortcut ─────────────────────────────────────── */}
       {isAdmin && (
         <button
           onClick={() => router.push('/hr')}
-          className="w-full text-center text-xs text-muted-foreground py-2 hover:text-foreground transition-colors"
+          className="min-h-11 w-full py-2 text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           Switch to Admin View →
         </button>

@@ -2,16 +2,8 @@ import DashboardContent from '@/components/dashboard/DashboardContent'
 import { getHrPageContext } from '@/app/hr/_lib'
 
 export default async function HrSettingsApprovalRulesPage() {
-    const { userProfile, canViewHr, hrUnauthorizedReason } = await getHrPageContext()
-
-    if (!canViewHr) {
-        return (
-            <div className="p-8">
-                <h2 className="text-xl font-semibold">Unauthorized</h2>
-                <p>{hrUnauthorizedReason ?? 'You do not have permission to view this page.'}</p>
-            </div>
-        )
-    }
+    const { userProfile, gate } = await getHrPageContext('hr/settings/approval-rules')
+    if (gate) return <DashboardContent userProfile={userProfile} initialView="dashboard">{gate}</DashboardContent>
 
     return <DashboardContent userProfile={userProfile} initialView="hr/settings/approval-rules" />
 }

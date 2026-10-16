@@ -70,6 +70,10 @@ export interface FakeWorld {
   failDecisionInsert: boolean
   failModeLookup: boolean
   failPolicyData: boolean
+  /** Error returned by the decision insert instead of the default database error (e.g. an aborted fetch). */
+  decisionInsertError?: Row
+  /** The users lookup fails (transport/database), as opposed to an inactive account. */
+  failAccountLookup?: boolean
   rpcCalls: Array<{ fn: string; args: unknown }>
   rpc: Record<string, (args: any) => { data: unknown; error: unknown }>
   tables: Record<string, Row[]>
@@ -121,6 +125,7 @@ export function fakeClient(world: FakeWorld) {
       const resolve = () => {
         if (table === 'sa_migration_modes' && world.failModeLookup) return { data: null, error: { code: '08006', message: 'down' } }
         if (table === 'sa_role_assignments' && world.failPolicyData) return { data: null, error: { code: '08006', message: 'down' } }
+        if (table === 'users' && world.failAccountLookup) return { data: null, error: { code: '', message: 'TypeError: fetch failed' } }
         return { data: rowsFor(world, table).filter(r => filters.every(f => r[f.column] === f.value)), error: null }
       }
       const builder: any = {
@@ -131,7 +136,7 @@ export function fakeClient(world: FakeWorld) {
         single: async () => { const r = resolve(); const row = (r.data as Row[] | null)?.[0]; return row ? { data: row, error: null } : { data: null, error: r.error ?? { code: 'PGRST116' } } },
         insert: async (row: Row) => {
           if (table !== 'sa_authorization_decisions') return { data: null, error: null }
-          if (world.failDecisionInsert) return { data: null, error: { code: '23502', message: 'insert failed' } }
+          if (world.failDecisionInsert) return { data: null, error: world.decisionInsertError ?? { code: '23502', message: 'insert failed' } }
           world.decisions.push(row)
           return { data: null, error: null }
         },

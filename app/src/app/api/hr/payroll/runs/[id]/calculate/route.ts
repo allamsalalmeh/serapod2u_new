@@ -39,14 +39,25 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
         }
 
         // Get all active employees with compensation
-        const { data: comps, error: compError } = await supabase
+        const { data: activeComps, error: compError } = await supabase
             .from('hr_employee_compensation')
             .select('*, salary_band:hr_salary_bands(*)')
             .eq('organization_id', ctx.organizationId)
             .eq('status', 'active')
 
         if (compError) return NextResponse.json({ success: false, error: compError.message }, { status: 500 })
-        if (!comps || comps.length === 0) return NextResponse.json({ success: false, error: 'No employees with active compensation found' }, { status: 400 })
+
+        // Payroll covers employees HR has onboarded; employment anchors awaiting
+        // onboarding (or reset) have no payroll lines.
+        const { data: onboarded, error: onboardedError } = await supabase
+            .from('hr_employees')
+            .select('user_id')
+            .eq('organization_id', ctx.organizationId)
+            .eq('onboarding_status', 'completed')
+        if (onboardedError) return NextResponse.json({ success: false, error: onboardedError.message }, { status: 500 })
+        const onboardedIds = new Set((onboarded || []).map((e: any) => e.user_id))
+        const comps = (activeComps || []).filter((comp: any) => onboardedIds.has(comp.employee_id))
+        if (comps.length === 0) return NextResponse.json({ success: false, error: 'No onboarded employees with active compensation found' }, { status: 400 })
 
         // Delete existing items for this run (recalculate)
         await supabase.from('hr_payroll_run_items').delete().eq('payroll_run_id', runId)

@@ -70,7 +70,7 @@ export async function POST(
           .maybeSingle(),
         admin
           .from('users')
-          .select('id, organization_id, role_code, signature_url, organizations(org_type_code), roles(role_level)')
+          .select('id, organization_id, role_code, signature_url, organizations!fk_users_organization(org_type_code), roles(role_level)')
           .eq('id', user.id)
           .maybeSingle()
       ])

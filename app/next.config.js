@@ -31,9 +31,28 @@ function supabaseEnvRemotePatterns() {
   return patterns
 }
 
+/**
+ * Build identifier recorded with System Logs diagnostics (lib/system-logs/environment.ts). Explicit APP_BUILD_ID wins,
+ * then a deployment commit (SOURCE_COMMIT / GIT_COMMIT_SHA), then "<package version>-<UTC build time>". Development
+ * servers report "dev" so hot-reload sessions never look like a deployed build.
+ */
+function appBuildId() {
+  const clean = (value) => String(value || '').replace(/[^A-Za-z0-9._+-]/g, '').slice(0, 64)
+  if (clean(process.env.APP_BUILD_ID)) return clean(process.env.APP_BUILD_ID)
+  const commit = clean(process.env.SOURCE_COMMIT || process.env.GIT_COMMIT_SHA)
+  if (commit) return commit.slice(0, 12)
+  if (process.env.NODE_ENV !== 'production') return 'dev'
+  const version = require('./package.json').version || '0.0.0'
+  return clean(`${version}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')}`)
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+
+  env: {
+    NEXT_PUBLIC_APP_BUILD: appBuildId(),
+  },
 
   // Standalone output for optimized Docker/self-hosted deployments
   output: 'standalone',

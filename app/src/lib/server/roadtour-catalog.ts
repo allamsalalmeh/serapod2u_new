@@ -366,7 +366,7 @@ export async function loadAssortment(ctx: RoadtourCatalogContext): Promise<Assor
   const modeByCategory = new Map<string, InclusionMode>(
     (rulesData ?? []).map((r: any) => [r.product_category_id, r.inclusion_mode as InclusionMode]),
   )
-  const itemByProduct = new Map(
+  const itemByProduct = new Map<string, { override: VisibilityOverride | null; featured: boolean; sort_order: number }>(
     (itemsData ?? []).map((i: any) => [i.product_id, { override: i.visibility_override, featured: i.featured, sort_order: i.sort_order }]),
   )
   const products = (productsData ?? []).map(transformProduct)

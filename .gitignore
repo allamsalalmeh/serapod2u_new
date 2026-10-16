@@ -202,6 +202,11 @@ z_*
 !/docs/runbooks/
 !/docs/runbooks/**
 
+# Event Management planning docs are implementation artifacts
+!/docs/event-management/
+!/docs/event-management/**
+
+
 # Local reporting audit exports stay private
 /exports/reporting-audit/
 
@@ -230,6 +235,24 @@ z_*
 !/app/src/lib/security/phase0b-containment-contract.test.ts
 !/app/src/lib/security/phase0b-public-endpoints.test.ts
 !/app/src/app/api/admin/store/orders/route.security.test.ts
+
+# Event Management module tests are implementation artifacts
+!/app/src/modules/event-management/**/*.test.ts
+!/app/src/app/api/event-management/**/*.test.ts
+!/supabase/tests/security/event-management/
+!/supabase/tests/security/event-management/**/*.sql
+
+# ESS/MSS Manager Self-Service and Manager Compensation Viewer: security lock-step tests, SQL fixtures and docs
+!/app/src/lib/security-access/mss.test.ts
+!/app/src/lib/security-access/compensation-viewer.test.ts
+!/app/src/lib/server/hr/profile-edit.test.ts
+!/app/src/app/api/hr/mss/**/*.test.ts
+!/app/src/app/api/hr/self-service/**/*.test.ts
+!/supabase/tests/hr_mss_compensation/
+!/supabase/tests/hr_mss_compensation/**/*.sql
+!/supabase/tests/hr_mss_compensation/**/*.sh
+!/docs/security/ESS_MSS_COMPENSATION_VIEWER.md
+!/docs/security/ESS_MSS_SECURITY_ASSESSMENT.md
 
 # Vercel
 .vercel

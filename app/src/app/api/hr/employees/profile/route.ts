@@ -1,10 +1,11 @@
 import { hrCan } from '@/lib/server/hrAccess'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { completeOnboarding } from '@/lib/hr/onboarding'
 
 // ─── GET  /api/hr/employees/profile?user_id=xxx  ── fetch HR profile
 // ─── PUT  /api/hr/employees/profile               ── upsert HR profile
-// ─── POST /api/hr/employees/profile/link           ── link existing user to HR
+// ─── POST /api/hr/employees/profile                ── onboard existing users of the organization (HR onboarding)
 
 export async function GET(request: NextRequest) {
     try {
@@ -202,84 +203,30 @@ export async function POST(request: NextRequest) {
 
         const body = await request.json()
         const { user_ids, department_id, position_id, manager_user_id, employment_type } = body
+        const hire_date = body.hire_date ?? null
 
         if (!user_ids || !Array.isArray(user_ids) || user_ids.length === 0) {
             return NextResponse.json({ success: false, error: 'user_ids array required' }, { status: 400 })
         }
-
-        // Verify all users belong to the same org
-        const { data: existingUsers, error: fetchError } = await supabase
-            .from('users')
-            .select('id, full_name, employee_no')
-            .eq('organization_id', callerPost.organization_id)
-            .in('id', user_ids)
-
-        if (fetchError) {
-            return NextResponse.json({ success: false, error: fetchError.message }, { status: 500 })
+        if (!hire_date) {
+            return NextResponse.json({ success: false, error: 'The actual hire date is required.' }, { status: 400 })
         }
 
-        if (!existingUsers || existingUsers.length === 0) {
-            return NextResponse.json({ success: false, error: 'No matching users found in your organization' }, { status: 404 })
-        }
-
-        const results: { userId: string; name: string; employee_no: number | null; status: string }[] = []
-
-        for (const u of existingUsers) {
-            // Create hr_employees record if it doesn't exist
-            const { data: existing } = await supabase
-                .from('hr_employees')
-                .select('id, employee_no')
-                .eq('user_id', u.id)
-                .eq('organization_id', callerPost.organization_id)
-                .maybeSingle()
-
-            let empNo = existing?.employee_no || u.employee_no
-
-            if (!existing) {
-                const { data: newHrEmp, error: insertErr } = await supabase
-                    .from('hr_employees')
-                    .insert({
-                        user_id: u.id,
-                        organization_id: callerPost.organization_id,
-                        hire_date: new Date().toISOString().split('T')[0],
-                        status: 'active',
-                    })
-                    .select('employee_no')
-                    .single()
-
-                if (insertErr) {
-                    results.push({ userId: u.id, name: u.full_name, employee_no: null, status: `error: ${insertErr.message}` })
-                    continue
-                }
-                empNo = newHrEmp.employee_no
-
-                // Backfill employee_no to users table
-                await supabase
-                    .from('users')
-                    .update({ employee_no: empNo })
-                    .eq('id', u.id)
-            }
-
-            // Update HR fields if provided
-            const hrUpdates: Record<string, any> = {}
-            if (department_id) hrUpdates.department_id = department_id
-            if (position_id) hrUpdates.position_id = position_id
-            if (manager_user_id) hrUpdates.manager_user_id = manager_user_id
-            if (employment_type) hrUpdates.employment_type = employment_type
-
-            if (Object.keys(hrUpdates).length > 0) {
-                await supabase.from('users').update(hrUpdates).eq('id', u.id)
-            }
-
-            // Auto-create profile
-            await supabase
-                .from('hr_employee_profiles')
-                .upsert({
-                    user_id: u.id,
-                    organization_id: callerPost.organization_id,
-                }, { onConflict: 'user_id,organization_id' })
-
-            results.push({ userId: u.id, name: u.full_name, employee_no: empNo, status: 'linked' })
+        // Registration is the explicit HR onboarding state (hr_onboarding_complete):
+        // the same identity, employment record and employee number are reused;
+        // other organizations and non-employee accounts are refused there.
+        const results: { userId: string; name: string | null; employee_no: number | null; status: string }[] = []
+        for (const userId of user_ids.filter((id: unknown) => typeof id === 'string')) {
+            const onboarded = await completeOnboarding(user.id, callerPost.organization_id, userId, {
+                departmentId: department_id || null,
+                positionId: position_id || null,
+                managerUserId: manager_user_id || null,
+                employmentType: employment_type || null,
+                hireDate: hire_date,
+            }, 'hr_link_existing')
+            results.push(onboarded.ok
+                ? { userId, name: null, employee_no: onboarded.employeeNo, status: 'linked' }
+                : { userId, name: null, employee_no: null, status: `error: ${onboarded.message}` })
         }
 
         return NextResponse.json({

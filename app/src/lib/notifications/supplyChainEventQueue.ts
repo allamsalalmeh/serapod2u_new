@@ -68,6 +68,28 @@ function parseCustomerDetails(notes: string | null | undefined) {
     }
 }
 
+/**
+ * The address queued on the outbox row itself for one channel (the worker adds
+ * configured recipients on top). Shared with the Configure drawer's preview.
+ */
+export function initialOutboxAddress(
+    eventCode: string,
+    channel: string,
+    payload: Record<string, any>,
+    recipientConfig: Record<string, any> | null | undefined,
+): { phone: string | null; email: string | null } {
+    const targets = resolveRecipientTargets(eventCode, recipientConfig)
+    const ownerPhone = targets.order_creator ? ownerPhoneFromPayload(payload) : null
+    const ownerEmail = targets.order_creator ? ownerEmailFromPayload(payload) : null
+    const wantsPhone = channel === 'sms' || channel === 'whatsapp'
+    const phone = wantsPhone
+        ? (ownerPhone || (channel === 'sms' && !targets.order_creator
+            ? String(payload.customer_phone || payload.contact_phone || payload.phone || '').trim() || null
+            : null))
+        : null
+    return { phone, email: channel === 'email' ? ownerEmail : null }
+}
+
 export async function queueNotificationEvent(supabase: SupabaseLikeClient, input: QueueNotificationEventInput) {
     const { orgId, eventCode, payload, priority = 'normal', allowedChannels } = input
     const isAllowedChannel = (channel: string) => !allowedChannels || allowedChannels.includes(channel)
@@ -170,18 +192,9 @@ export async function queueNotificationEvent(supabase: SupabaseLikeClient, input
 
     let queuedCount = 0
     const errors: string[] = []
-    const targets = resolveRecipientTargets(eventCode, rawSetting?.recipient_config)
-    const ownerPhone = targets.order_creator ? ownerPhoneFromPayload(payload) : null
-    const ownerEmail = targets.order_creator ? ownerEmailFromPayload(payload) : null
 
     for (const channel of channels) {
-        const wantsPhone = channel === 'sms' || channel === 'whatsapp'
-        const recipientPhone = wantsPhone
-            ? (ownerPhone || (channel === 'sms' && !targets.order_creator
-                ? String(payload.customer_phone || payload.contact_phone || payload.phone || '').trim() || null
-                : null))
-            : null
-        const recipientEmail = channel === 'email' ? ownerEmail : null
+        const { phone: recipientPhone, email: recipientEmail } = initialOutboxAddress(eventCode, channel, payload, rawSetting?.recipient_config)
 
         const { data, error } = await supabase.rpc('queue_notification', {
             p_org_id: orgId,

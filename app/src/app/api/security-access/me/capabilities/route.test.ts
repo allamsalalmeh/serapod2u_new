@@ -6,6 +6,10 @@ const rpc = vi.fn()
 const modes: Record<string, string> = { 'finance.journal.post': 'NEW_ENFORCED', 'customer.crm.view': 'SHADOW' }
 vi.mock('@/lib/security-access/admin-api', () => ({ requireSelfServiceActor: async () => actor }))
 vi.mock('@/lib/security-access/authorization', () => ({ currentMigrationMode: async (p: string) => modes[p] ?? 'LEGACY_ENFORCED' }))
+const WH = '00000000-0000-4000-8000-00000000a002'
+vi.mock('@/lib/security-access/resource-context', () => ({
+  resolveWarehouseResourceContext: async (actorOrg: string, warehouseId: string) => ({ organizationId: actorOrg, warehouseId }),
+}))
 
 const get = async (query: string) => {
   const { GET } = await import('./route')
@@ -46,8 +50,22 @@ describe('GET /api/security-access/me/capabilities', () => {
     expect((await get('permissions=finance.journal.post&organizationId=not-a-uuid')).status).toBe(400)
   })
 
-  it('reports not allowed when the evaluator fails', async () => {
+  it('answers a warehouse-owned operation for that warehouse (warehouse-scoped grants are seen)', async () => {
+    rpc.mockResolvedValue({ data: { decision: 'ALLOW' }, error: null })
+    const body = await (await get(`permissions=inventory.stock_count.create&warehouseId=${WH}`)).json()
+    expect(rpc.mock.calls[0][1].p_context).toEqual({ organization_id: 'org-a', warehouse_id: WH })
+    expect(body.organizationId).toBe('org-a')
+    expect((await get('permissions=inventory.stock_count.create&warehouseId=nope')).status).toBe(400)
+  })
+
+  it('reports not allowed — and unavailable, not denied — when the evaluator fails', async () => {
     rpc.mockResolvedValue({ data: null, error: { code: 'X' } })
+    const body = await (await get('permissions=finance.journal.post')).json()
+    expect(body.capabilities['finance.journal.post']).toEqual({ allowed: false, enforced: true, unavailable: true })
+  })
+
+  it('a real denial carries no unavailable flag', async () => {
+    rpc.mockResolvedValue({ data: { decision: 'DENY' }, error: null })
     const body = await (await get('permissions=finance.journal.post')).json()
     expect(body.capabilities['finance.journal.post']).toEqual({ allowed: false, enforced: true })
   })

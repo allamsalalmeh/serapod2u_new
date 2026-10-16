@@ -1,7 +1,8 @@
 'use client'
 
 import { ArrowRight } from 'lucide-react'
-import { marketingNavGroups, type MarketingNavGroup } from '@/modules/marketing/marketingNav'
+import { marketingNavGroups as all_marketingNavGroups, type MarketingNavGroup } from '@/modules/marketing/marketingNav'
+import { useAccessibleNavGroups } from '@/hooks/useNavAccess'
 import MarketingHeroBanner from './MarketingHeroBanner'
 import ModuleLandingCard from '@/components/layout/ModuleLandingCard'
 import { landingAccents, marketingLandingAccents, pickLandingAccent } from '@/lib/landing-accents'
@@ -17,6 +18,8 @@ interface MarketingLandingViewProps {
 const defaultIconAccent = landingAccents.rose
 
 export default function MarketingLandingView({ userName, bannerImageUrl, onViewChange, hideHeroBanner }: MarketingLandingViewProps) {
+    // Only the functions this person may open (Security & Access snapshot); the server decides every page and API too.
+    const marketingNavGroups = useAccessibleNavGroups(all_marketingNavGroups)
     return (
         <div className="sera-module-landing">
             {!hideHeroBanner && <MarketingHeroBanner userName={userName ?? null} bannerImageUrl={bannerImageUrl} />}

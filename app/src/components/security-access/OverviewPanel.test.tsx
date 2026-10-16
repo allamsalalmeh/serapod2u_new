@@ -161,13 +161,22 @@ describe('Security & Access Overview', () => {
   it('shows every mode present, including ones outside the three rollout columns', () => {
     const withLegacy = { ...base, modes: [...modes, { permission_key: 'qr.batch.manage', mode: 'LEGACY_ENFORCED' }] }
     render(<OverviewPanel data={withLegacy} onNavigate={vi.fn()} />)
-    expect(within(screen.getByRole('table')).getAllByText('Legacy Active').length).toBeGreaterThan(0)
+    expect(within(screen.getByRole('table')).getAllByText('Legacy enforced').length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: /^Supply Chain, 2 permissions/ })).toBeTruthy()
   })
 
-  it('shows an empty state when no permissions are registered', () => {
-    render(<OverviewPanel data={{ schemaReady: false, metrics: {}, modes: [], decisions: [] }} onNavigate={vi.fn()} />)
+  it('shows "no permissions" only after a successful response confirms an empty catalogue', () => {
+    render(<OverviewPanel data={{ schemaReady: true, metrics: { businessIdentities: 0, activeAssignments: 0 }, modes: [], decisions: [] }} onNavigate={vi.fn()} />)
     expect(screen.getByText(/No permissions are registered/)).toBeTruthy()
-    expect(screen.getAllByText('—').length).toBe(2)
+    expect(screen.getByText('none in the recorded decisions')).toBeTruthy()
+  })
+
+  it('does not present unmeasured data as zero or as an empty catalogue', () => {
+    render(<OverviewPanel data={{ schemaReady: false, metrics: {}, modes: [], decisions: [] }} onNavigate={vi.fn()} />)
+    expect(screen.queryByText(/No permissions are registered/)).toBeNull()
+    expect(screen.getByText(/not available until the schema is applied/)).toBeTruthy()
+    expect(screen.getByText('not measured')).toBeTruthy()
+    expect(screen.queryByText('none in the recorded decisions')).toBeNull()
+    expect(screen.getAllByText('—').length).toBe(3) // memberships, assignments and the unmeasured differences
   })
 })

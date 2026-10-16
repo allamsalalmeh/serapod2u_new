@@ -19,7 +19,9 @@ describe('Security & Access active-account gate', () => {
 
   it('the shared administration helper applies the gate before any decision', () => {
     const helper = readFileSync(resolve(root, 'src/lib/security-access/admin-api.ts'), 'utf8')
-    expect(helper).toContain('await isActiveSecurityAccessAccount(user.id)')
+    // One read supplies the active flag and the trusted organization; a read failure is 503, never an allow.
+    expect(helper).toContain("select('is_active, organization_id')")
+    expect(helper).toMatch(/if \(error\) \{[\s\S]*?unavailableResponse[\s\S]*?if \(!isActiveAccountRecord\(data\)\)/)
   })
 
   it('is applied to every Security & Access API route', () => {

@@ -24,6 +24,8 @@ import {
     Bot,
     BarChart3,
     CreditCard,
+    ScrollText,
+    ServerCog,
     type LucideIcon,
 } from 'lucide-react'
 
@@ -138,6 +140,17 @@ export const settingsNavGroups: SettingsNavGroup[] = [
         ],
     },
     {
+        // Placed after AI Settings and before Danger Zone (landing card beside Danger Zone).
+        // Visible only to holders of platform.system_logs.view (see visibleSettingsGroups); the page and APIs decide again.
+        id: 'settings-system',
+        label: 'System',
+        icon: ServerCog,
+        description: 'System Logs — diagnostic errors and recorded user activity, with copyable reports.',
+        children: [
+            { id: 'settings/system/logs', label: 'System Logs', icon: ScrollText, href: toHref('settings/system/logs'), description: 'Errors & user activity' },
+        ],
+    },
+    {
         id: 'settings-danger-zone',
         label: 'Danger Zone',
         icon: AlertTriangle,
@@ -147,6 +160,25 @@ export const settingsNavGroups: SettingsNavGroup[] = [
         ],
     },
 ]
+
+// ── Visibility (presentation only; never authorization) ──────────
+
+export interface SettingsVisibility {
+    roleLevel?: number | null
+    /** platform.system_logs.view (from /api/system-logs/access). Unknown/false hides the System group. */
+    canViewSystemLogs?: boolean
+}
+
+/** Groups shown on the landing page and the top navigation. */
+export function visibleSettingsGroups(visibility: SettingsVisibility, groups: SettingsNavGroup[] = settingsNavGroups): SettingsNavGroup[] {
+    return groups.filter((group) => {
+        if (group.id === 'settings-authorization' || group.id === 'settings-danger-zone') {
+            return visibility.roleLevel != null && visibility.roleLevel === 1
+        }
+        if (group.id === 'settings-system') return visibility.canViewSystemLogs === true
+        return true
+    })
+}
 
 // ── Flat list helpers ────────────────────────────────────────────
 

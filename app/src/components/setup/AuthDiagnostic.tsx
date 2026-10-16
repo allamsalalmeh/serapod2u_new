@@ -47,12 +47,13 @@ export default function AuthDiagnostic() {
         steps.push({step: 'Check DB user by email', success: true, message: `Found DB user: ${userData.full_name || userData.email}`, data: userData})
       }
 
-      // Step 3: Check if UUID matches
-      if (authUserData && dbUserData) {
-        if (authUserData.id === dbUserData.id) {
+      // Step 3: Check if UUID matches (get_user_by_email returns rows)
+      const firstDbUser = Array.isArray(dbUserData) ? dbUserData[0] : dbUserData
+      if (authUserData && firstDbUser) {
+        if (authUserData.id === firstDbUser.id) {
           steps.push({step: 'UUID Match Check', success: true, message: 'Auth and DB user UUIDs match perfectly'})
         } else {
-          steps.push({step: 'UUID Match Check', success: false, message: `UUID mismatch: Auth=${authUserData.id}, DB=${dbUserData.id}`})
+          steps.push({step: 'UUID Match Check', success: false, message: `UUID mismatch: Auth=${authUserData.id}, DB=${firstDbUser.id}`})
         }
       }
 

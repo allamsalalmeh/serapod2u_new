@@ -1,5 +1,6 @@
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { getSettingsPageContext } from '@/app/settings/_lib'
+import AccessState from '@/components/access/AccessState'
 
 /**
  * /settings — Settings module landing page.
@@ -10,10 +11,7 @@ export default async function SettingsPage() {
 
     if (!canViewSettings) {
         return (
-            <div className="p-8">
-                <h2 className="text-xl font-semibold">Unauthorized</h2>
-                <p>You do not have permission to view Settings.</p>
-            </div>
+            <AccessState kind="denied" />
         )
     }
 

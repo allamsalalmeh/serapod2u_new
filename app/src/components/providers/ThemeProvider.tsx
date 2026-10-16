@@ -19,7 +19,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // Initialize from localStorage to prevent flash of wrong theme
   const [theme, setThemeState] = useState<Theme>(() => {
     if (typeof window !== 'undefined') {
-      const savedTheme = localStorage.getItem('theme') as Theme | null
+      const savedTheme = localStorage.getItem('theme')
       // Migrate 'system' to 'light' if previously saved
       if (savedTheme === 'system' || !savedTheme) return 'light'
       if (savedTheme === 'light' || savedTheme === 'dark') return savedTheme

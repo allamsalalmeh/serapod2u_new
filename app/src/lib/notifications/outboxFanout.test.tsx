@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { collectConfiguredRecipients } from './configuredRecipients'
 import {
   fanoutChildKeepsAddress,
   fanoutChildPayload,
@@ -8,7 +9,34 @@ import {
   selectFanoutRecipients,
 } from './outboxFanout'
 
-const worker = () => readFileSync(join(__dirname, '../../app/api/cron/notification-outbox-worker/route.ts'), 'utf8')
+type UserRow = { id: string; full_name: string; phone: string | null; email: string | null; organization_id: string; role_code: string; is_active: boolean }
+
+function fakeSupabase(users: UserRow[]) {
+  return {
+    from(table: string) {
+      expect(table).toBe('users')
+      const filters: Array<(row: UserRow) => boolean> = []
+      const chain: any = {
+        select: () => chain,
+        eq: (column: keyof UserRow, value: unknown) => { filters.push(row => row[column] === value); return chain },
+        in: (column: keyof UserRow, values: unknown[]) => { filters.push(row => values.includes(row[column])); return chain },
+        then: (resolve: (value: { data: UserRow[] }) => void) => resolve({ data: users.filter(row => filters.every(filter => filter(row))) }),
+      }
+      return chain
+    },
+  }
+}
+
+const tiktokRecipientConfig = {
+  type: 'roles',
+  roles: ['HQ_ADMIN'],
+  recipient_users: [],
+  recipient_targets: { roles: true, users: true, consumer: false, dynamic_org: false, order_creator: false },
+}
+
+const hq = (n: number, active = true): UserRow => ({
+  id: `u${n}`, full_name: `HQ ${n}`, phone: `+6012000000${n}`, email: null, organization_id: 'org', role_code: 'HQ', is_active: active,
+})
 
 describe('notification fan-out', () => {
   it('a child row keeps the recipient it was queued for', () => {
@@ -43,16 +71,23 @@ describe('notification fan-out', () => {
     })).toEqual([])
   })
 
-  it('the worker leaves fan-out children on their own address and scopes reports by run', () => {
-    const source = worker()
-    expect(source).toContain('!fanoutChildKeepsAddress(payload, channel, to_phone, to_email)')
-    expect(source).toContain(".contains('payload_json', siblingScope)")
-    expect(source).toContain(".contains('payload_json', duplicateScope)")
+  it('deactivated accounts are not recipients', async () => {
+    const users = [hq(1), hq(2, false), hq(3), { ...hq(4), organization_id: 'other' }]
+    const recipients = await collectConfiguredRecipients(fakeSupabase(users), {
+      orgId: 'org',
+      eventCode: 'tiktok_shop_daily_report_sms',
+      channel: 'sms',
+      recipientConfig: tiktokRecipientConfig,
+      setting: { recipient_config: tiktokRecipientConfig } as any,
+      payload: {},
+    } as any)
+    expect(recipients.map(r => r.userId)).toEqual(['u1', 'u3'])
   })
 
-  it('deactivated accounts are not recipients', () => {
-    const source = worker()
-    expect(source).toMatch(/\.in\('id', userIds\)\s*\.eq\('is_active', true\)/)
-    expect(source).toMatch(/\.in\('role_code', resolvedRoleCodes\)\s*\.eq\('is_active', true\)/)
+  it('the worker leaves fan-out children on their own address and scopes reports by run', () => {
+    const worker = readFileSync(join(__dirname, '../../app/api/cron/notification-outbox-worker/route.ts'), 'utf8')
+    expect(worker).toContain('!fanoutChildKeepsAddress(payload, channel, to_phone, to_email)')
+    expect(worker).toContain(".contains('payload_json', siblingScope)")
+    expect(worker).toContain(".contains('payload_json', duplicateScope)")
   })
 })

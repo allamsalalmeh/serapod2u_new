@@ -131,6 +131,21 @@ describe('POST /api/qr-batches/process', () => {
     expect(withWorkerLeaseMock).not.toHaveBeenCalled()
   })
 
+  it('a blocked local worker answers 409 with the confirmed batch state, runs nothing and never overrides the guard', async () => {
+    signedInAs('MFG', MFG_A)
+    batchFor(H2M_ORDER)
+    withWorkerLeaseMock.mockResolvedValue({
+      status: 'blocked',
+      response: NextResponse.json({ error: 'Background worker disabled for a local process connected to a remote database', status: 'REMOTE_DB_WORKER_BLOCKED' }, { status: 409 }),
+    })
+
+    const res = await call()
+
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ status: 'REMOTE_DB_WORKER_BLOCKED', batch_id: 'batch-1', batch_status: 'queued' })
+    expect(runQRBatchGenerationMock).not.toHaveBeenCalled()
+  })
+
   it('processes only the requested batch for the manufacturer that owns the order', async () => {
     signedInAs('MFG', MFG_A)
     batchFor(H2M_ORDER)

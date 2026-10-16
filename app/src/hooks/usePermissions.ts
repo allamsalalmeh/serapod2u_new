@@ -48,11 +48,9 @@ export function usePermissions(roleLevel?: number, roleCode?: string, department
         if (!isReady || effectiveRoleLevel === undefined) {
             // Keep loading true while waiting for supabase to be ready
             // This prevents rendering with stale/default permissions
-            console.log('[usePermissions] Waiting for supabase ready. isReady:', isReady, 'roleLevel:', effectiveRoleLevel)
             return
         }
 
-        console.log('[usePermissions] Loading permissions for roleLevel:', effectiveRoleLevel)
 
         try {
             // Try to load permissions from database
@@ -62,10 +60,8 @@ export function usePermissions(roleLevel?: number, roleCode?: string, department
                 .eq('role_level', effectiveRoleLevel)
                 .single()
 
-            console.log('[usePermissions] roleLevel:', effectiveRoleLevel, 'DB response:', { roleData, error })
 
             if (error || !roleData?.permissions) {
-                console.log('[usePermissions] Error or no permissions data, falling back to defaults for level', effectiveRoleLevel)
                 const perms = buildDefaultPermissionMap(effectiveRoleLevel)
                 let merged = perms
                 if (departmentId) {
@@ -82,10 +78,8 @@ export function usePermissions(roleLevel?: number, roleCode?: string, department
             } else {
                 // Use database permissions with proper type handling
                 const dbPerms = roleData.permissions
-                console.log('[usePermissions] Using DB permissions:', dbPerms)
                 if (dbPerms && typeof dbPerms === 'object' && !Array.isArray(dbPerms)) {
                     const validPerms = normalizeRolePermissions(effectiveRoleLevel, dbPerms)
-                    console.log('[usePermissions] Valid permissions set:', validPerms)
 
                     let merged = validPerms
                     if (departmentId) {
@@ -147,7 +141,6 @@ export function usePermissions(roleLevel?: number, roleCode?: string, department
 
         // If still loading, return false (menu will re-render when loaded)
         if (loading) {
-            console.log('[hasPermission] Still loading, returning false for:', permissionId)
             return false
         }
 
@@ -157,7 +150,6 @@ export function usePermissions(roleLevel?: number, roleCode?: string, department
 
         // Check if permission exists in the loaded permissions
         const result = permissions[permissionId] === true
-        console.log('[hasPermission]', permissionId, '=', result, 'permissions keys:', Object.keys(permissions))
         return result
     }, [permissions, effectiveRoleLevel, loading, deniedPermissions])
 

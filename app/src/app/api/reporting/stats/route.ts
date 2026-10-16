@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { malaysiaDateOf, orderBusinessDate } from '@/lib/orders/order-date'
 import { orderDateSelect, resolveOrderDateColumn } from '@/lib/reporting/business-date-query'
+import { APPROVED_SALES_STATUSES, CANCELLED_STATUS, PIPELINE_STATUSES, salesClassOf, summarizeSales } from '@/lib/reporting/sales-kpi'
 
 export const dynamic = 'force-dynamic'
 
@@ -88,7 +89,9 @@ export async function GET(request: Request) {
           line_total
         )
       `)
-      .in('status', ['approved', 'closed', 'submitted'])
+      // Approved sales, the submitted pipeline and cancellations are all read so each is reported apart; drafts are
+      // not commitments. Only approved sales feed revenue, units, trend, mix and buyer performance.
+      .in('status', [...APPROVED_SALES_STATUSES, ...PIPELINE_STATUSES, CANCELLED_STATUS])
       // Entry order: it only decides which rows the "recent" activity list shows.
       .order('created_at', { ascending: false })
 
@@ -157,7 +160,9 @@ export async function GET(request: Request) {
       })
     }
 
-    // 3. Process statistics
+    // 3. Process statistics. Status mix first (every fetched order), then confirmed sales only.
+    const orderValueOf = (order: any) => (order.order_items ?? []).reduce((sum: number, item: any) => sum + (Number(item.line_total) || 0), 0)
+    const salesSummary = summarizeSales((orders ?? []).map((order: any) => ({ status: order.status, orderType: order.order_type, value: orderValueOf(order) })))
     const stats = {
       totalUnits: 0,
       totalRevenue: 0,
@@ -172,6 +177,8 @@ export async function GET(request: Request) {
     }
 
     orders?.forEach((order: any) => {
+      // Approved Sales only: sell-side orders (H2M purchases excluded) that reached approval and are not cancelled.
+      if (salesClassOf(order.status) !== 'approved_sales' || String(order.order_type).toUpperCase() === 'H2M') return
       // Business date (Malaysia calendar day) — never the UTC day of created_at.
       const businessDate = orderBusinessDate(order) ?? ''
       const monthKey = businessDate.slice(0, 7) // YYYY-MM
@@ -183,9 +190,9 @@ export async function GET(request: Request) {
       stats.totalOrders++
       
       // Track order status
-      if (['submitted', 'approved'].includes(order.status)) {
+      if (['approved', 'warehouse_packed'].includes(order.status)) {
         stats.ordersInProgress++
-      } else if (['closed', 'shipped_distributor', 'shipped_shop'].includes(order.status)) {
+      } else if (['closed', 'shipped_distributor'].includes(order.status)) {
         stats.completedOrders++
       }
 
@@ -280,7 +287,16 @@ export async function GET(request: Request) {
     const response = {
       summary: {
         totalUnits: stats.totalUnits,
+        // totalRevenue is kept for compatibility and equals approvedSalesValue.
         totalRevenue: stats.totalRevenue,
+        approvedSalesValue: stats.totalRevenue,
+        approvedSalesOrders: stats.totalOrders,
+        pipelineValue: salesSummary.pipelineValue,
+        pipelineOrders: salesSummary.pipelineOrders,
+        cancelledValue: salesSummary.cancelledValue,
+        cancelledOrders: salesSummary.cancelledOrders,
+        purchaseValue: salesSummary.purchaseValue,
+        purchaseOrders: salesSummary.purchaseOrders,
         totalOrders: stats.totalOrders,
         ordersInProgress: stats.ordersInProgress,
         completedOrders: stats.completedOrders,

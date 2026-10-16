@@ -56,7 +56,8 @@ import {
     CheckCircle2,
     AlertCircle,
     Zap,
-    Store
+    Store,
+    XCircle,
 } from 'lucide-react'
 import { format, subDays, startOfMonth, endOfMonth, differenceInDays } from 'date-fns'
 import ConsumerAnalyticsTab from './ConsumerAnalyticsTab'
@@ -65,6 +66,9 @@ import ExecutiveKpiValue from './ExecutiveKpiValue'
 import OperationsTab from './OperationsTab'
 import ProductsTab from './ProductsTab'
 import ShopReportsTab from './ShopReportsTab'
+import CommissionReportingTab from '@/components/reporting/commission/CommissionReportingTab'
+import { APPROVED_SALES_STATUSES, SALES_ORDER_TYPES } from '@/lib/reporting/sales-kpi'
+import { useCommissionAccess } from '@/lib/hr/commission/use-commission-access'
 import ModuleLightHeader from '@/components/layout/ModuleLightHeader'
 import { SeraLoader, SeraLoadingState } from '@/components/ui/SeraLoader'
 
@@ -149,8 +153,10 @@ const AnimatedCounter = ({ value, duration = 1000, prefix = '', suffix = '', dec
 }
 
 // Metric Card — light Serapod paper chrome
-const MetricCard = ({ title, value, change, changeType, icon: Icon, color, subtitle, loading }: {
+const MetricCard = ({ title, value, change, changeType, icon: Icon, color, subtitle, loading, currency }: {
     title: string
+    /** Render as RM with 2 decimals (defaults to titles containing Revenue/Value). */
+    currency?: boolean
     value: number | string
     change?: number
     changeType?: 'increase' | 'decrease' | 'neutral'
@@ -175,8 +181,8 @@ const MetricCard = ({ title, value, change, changeType, icon: Icon, color, subti
                                 {typeof value === 'number' ? (
                                     <AnimatedCounter
                                         value={value}
-                                        prefix={title.includes('Revenue') ? 'RM' : ''}
-                                        decimals={title.includes('Revenue') ? 2 : 0}
+                                        prefix={(currency ?? /Revenue|Value/.test(title)) ? 'RM' : ''}
+                                        decimals={(currency ?? /Revenue|Value/.test(title)) ? 2 : 0}
                                     />
                                 ) : (
                                     <span className="inline-flex max-w-full min-w-0 items-baseline whitespace-nowrap leading-none">{value}</span>
@@ -224,7 +230,9 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
     const isProductAnalytics = activeTab === 'products'
     const isDistributorAnalytics = activeTab === 'distributors'
     /** Tabs that drive themselves from their own Reporting Month selector. */
-    const isMonthlyReportTab = isConsumerAnalytics || isProductAnalytics || isDistributorAnalytics
+    const isCommission = activeTab === 'commission'
+    const isMonthlyReportTab = isConsumerAnalytics || isProductAnalytics || isDistributorAnalytics || isCommission
+    const commissionAccess = useCommissionAccess()
     const [financialData, setFinancialData] = useState<any>(null)
     const supabase = createClient()
     const { resolvedTheme } = useTheme()
@@ -363,7 +371,8 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
             const { data: orders } = await supabase
                 .from('orders')
                 .select('id, order_no, status, created_at, order_items(line_total)')
-                .in('status', ['approved', 'closed'])
+                .in('status', [...APPROVED_SALES_STATUSES])
+                .in('order_type', [...SALES_ORDER_TYPES])
                 .order('created_at', { ascending: false })
                 .limit(50)
 
@@ -546,50 +555,77 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                             <Building2 className="w-4 h-4 mr-2" />
                             Distributor
                         </TabsTrigger>
+                        {commissionAccess.can('reporting.commission.view') && (
+                            <TabsTrigger value="commission" className="rounded-lg px-4 py-2 text-[var(--sera-muted)] data-[state=active]:bg-white data-[state=active]:text-[var(--sera-ink)] data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-[var(--sera-orange)]/30">
+                                <Wallet className="w-4 h-4 mr-2" />
+                                Commission
+                            </TabsTrigger>
+                        )}
                     </TabsList>
 
                     {/* Overview Tab */}
                     <TabsContent value="overview" className="space-y-6 animate-in fade-in-50 duration-500">
-                        {/* KPI Cards */}
+                        {/* KPI Cards. Approved Sales = approved, warehouse packed, shipped to distributor and closed
+                            sell-side orders (D2H/S2D) by SO date; submitted orders are pipeline, cancelled orders are
+                            reported apart and H2M purchases are never sales (lib/reporting/sales-kpi.ts). */}
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                             <MetricCard
-                                title="Total Revenue"
-                                value={data?.summary?.totalRevenue || 0}
-                                change={12.5}
-                                changeType="increase"
+                                title="Approved Sales Value"
+                                value={data?.summary?.approvedSalesValue ?? data?.summary?.totalRevenue ?? 0}
                                 icon={DollarSign}
                                 color={COLORS.success}
-                                subtitle={`in ${periodDays} days`}
+                                subtitle={`approved sales in ${periodDays} days`}
                                 loading={loading}
                             />
                             <MetricCard
-                                title="Total Orders"
+                                title="Confirmed Orders"
                                 value={data?.summary?.totalOrders || 0}
-                                change={8.3}
-                                changeType="increase"
                                 icon={ShoppingCart}
                                 color={COLORS.primary}
-                                subtitle="processed"
+                                subtitle="approved, packed, shipped or closed"
                                 loading={loading}
                             />
                             <MetricCard
                                 title="Total Units"
                                 value={data?.summary?.totalUnits || 0}
-                                change={2.1}
-                                changeType="increase"
                                 icon={Package}
                                 color={COLORS.slate}
-                                subtitle="shipped"
+                                subtitle="on confirmed orders"
                                 loading={loading}
                             />
                             <MetricCard
                                 title="Active Buyers"
                                 value={data?.summary?.activeDistributors || 0}
-                                change={5.2}
-                                changeType="increase"
                                 icon={Users}
                                 color={COLORS.warning}
                                 subtitle="distributors & shops"
+                                loading={loading}
+                            />
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <MetricCard
+                                title="Order Pipeline Value"
+                                value={data?.summary?.pipelineValue || 0}
+                                icon={Clock}
+                                color={COLORS.primary}
+                                subtitle={`${data?.summary?.pipelineOrders || 0} submitted, awaiting approval`}
+                                loading={loading}
+                            />
+                            <MetricCard
+                                title="Cancelled Orders"
+                                value={data?.summary?.cancelledOrders || 0}
+                                currency={false}
+                                icon={XCircle}
+                                color={COLORS.danger}
+                                subtitle={`RM ${(data?.summary?.cancelledValue || 0).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} not counted as sales`}
+                                loading={loading}
+                            />
+                            <MetricCard
+                                title="H2M Purchases Value"
+                                value={data?.summary?.purchaseValue || 0}
+                                icon={Truck}
+                                color={COLORS.slate}
+                                subtitle={`${data?.summary?.purchaseOrders || 0} approved manufacturer orders (not sales)`}
                                 loading={loading}
                             />
                         </div>
@@ -803,13 +839,11 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                     <TabsContent value="finance" className="space-y-6 animate-in fade-in-50 duration-500">
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                             <MetricCard
-                                title="Total Revenue"
+                                title="Approved Sales Value"
                                 value={financialMetrics?.totalRevenue || 0}
-                                change={15.3}
-                                changeType="increase"
                                 icon={DollarSign}
                                 color={COLORS.success}
-                                subtitle="collected"
+                                subtitle="latest 50 approved sales orders"
                                 loading={!financialMetrics}
                             />
                             <MetricCard
@@ -968,6 +1002,11 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                             isDark={isDark}
                         />
                     </TabsContent>
+                    {commissionAccess.can('reporting.commission.view') && (
+                        <TabsContent value="commission" className="space-y-6 animate-in fade-in-50 duration-500">
+                            {isCommission && <CommissionReportingTab canExport={commissionAccess.can('reporting.commission.export')} />}
+                        </TabsContent>
+                    )}
                 </Tabs>
 
                 {/* Footer */}

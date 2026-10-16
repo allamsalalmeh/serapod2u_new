@@ -22,7 +22,7 @@ interface HeroBanner {
   layout_slot?: string
   animation_enabled?: boolean
   animation_style?: 'none' | 'kenburns' | 'floatGlow' | 'parallax'
-  animation_intensity?: 'low' | 'medium'
+  animation_intensity?: 'low' | 'medium' | 'high'
 }
 
 interface SplitHeroLayoutProps {

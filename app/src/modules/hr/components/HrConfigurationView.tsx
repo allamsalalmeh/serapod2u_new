@@ -16,6 +16,7 @@ import { toast } from '@/components/ui/use-toast'
 import { getStorageUrl } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import AiProviderSettingsCard from './AiProviderSettingsCard'
+import HrDataManagementSection from './HrDataManagementSection'
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -229,7 +230,7 @@ export default function HrConfigurationView({ organizationId, canEdit, onNavigat
       setAudit(data)
       // In guided mode, auto-expand sections that need attention
       if (isGuided) {
-        const needsAttention = new Set(
+        const needsAttention = new Set<string>(
           (data.sections || [])
             .filter((s: AuditSection) => s.checks.some((c: AuditCheck) => c.status !== 'configured'))
             .map((s: AuditSection) => s.section)
@@ -748,6 +749,9 @@ export default function HrConfigurationView({ organizationId, canEdit, onNavigat
           </CardContent>
         </Card>
       )}
+
+      {/* ─── Data Management (pre-go-live resets; authorized on the server) ─── */}
+      <HrDataManagementSection />
     </div>
   )
 }

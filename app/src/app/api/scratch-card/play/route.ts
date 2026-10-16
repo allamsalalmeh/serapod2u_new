@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
+import { asJsonObject } from '@/lib/supabase/json'
 
 export async function POST(request: Request) {
     const supabase = await createClient()
@@ -40,8 +41,10 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: error.message }, { status: 500 })
         }
 
-        if (data.error) {
-            return NextResponse.json({ error: data.error, code: data.code }, { status: 400 })
+        // Every return path of play_scratch_card_turn is a jsonb_build_object.
+        const result = asJsonObject(data)
+        if (result.error) {
+            return NextResponse.json({ error: result.error, code: result.code }, { status: 400 })
         }
 
         return NextResponse.json(data)

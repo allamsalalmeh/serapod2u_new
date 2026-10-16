@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { assertDestructiveOpsAllowed } from '@/lib/server/destructive-ops-guard'
+import { authorizeOrganizationIdentityRemoval } from '@/lib/identity/removal-authorization'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,6 +19,14 @@ export async function POST(request: NextRequest) {
 
     if (!orgId || typeof orgId !== 'string') {
         return NextResponse.json({ error: 'orgId is required' }, { status: 400 })
+    }
+
+    // Member identities are deleted with the organization: each one must be
+    // removable by this administrator (Archive Identities, target protection).
+    if (!guard.userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const memberRemoval = await authorizeOrganizationIdentityRemoval(guard.userId, orgId)
+    if (!memberRemoval.ok) {
+        return NextResponse.json({ error: memberRemoval.error, code: memberRemoval.code }, { status: memberRemoval.status })
     }
 
     const admin = createAdminClient()

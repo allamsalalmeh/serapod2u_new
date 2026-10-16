@@ -7,6 +7,7 @@ import { ThemeProvider } from '@/components/providers/ThemeProvider'
 import { LanguageProvider } from '@/lib/i18n/LanguageProvider'
 import { Toaster } from '@/components/ui/toaster'
 import PwaBootstrap from '@/components/pwa/PwaBootstrap'
+import SystemLogsBridge from '@/components/system-logs/SystemLogsBridge'
 
 const syne = Syne({
   subsets: ['latin'],
@@ -58,6 +59,7 @@ export default function RootLayout({
     <html lang="en" className={`${syne.variable} ${manrope.variable}`}>
       <body className="font-sans antialiased">
         <PwaBootstrap />
+        <SystemLogsBridge />
         <ThemeProvider>
           <LanguageProvider>
             <AuthProvider>

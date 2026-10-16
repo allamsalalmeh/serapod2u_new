@@ -5,9 +5,9 @@ import { cn } from '@/lib/utils'
 
 const ITEMS = [
   { id: 'notifications', label: 'Overview', href: '/notifications', icon: Bell },
-  { id: 'notifications/whatsapp-activity-recovery', label: 'Monitor', href: '/notifications/whatsapp-activity-recovery', icon: MessageCircle },
   { id: 'notifications/providers', label: 'Providers', href: '/notifications/providers', icon: Bell },
   { id: 'notifications/types', label: 'Types', href: '/notifications/types', icon: Megaphone },
+  { id: 'notifications/whatsapp-activity-recovery', label: 'Monitor', href: '/notifications/whatsapp-activity-recovery', icon: MessageCircle },
 ] as const
 
 interface NotificationsTopNavProps {
@@ -40,6 +40,7 @@ export default function NotificationsTopNav({ currentView, onNavigate }: Notific
             <button
               key={item.id}
               type="button"
+              data-nav-href={item.href}
               onClick={() => onNavigate(item.href)}
               className={cn(
                 'inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium transition-colors',

@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   resolveCreateOrderTypeOptions,
+  type CreateOrderTypeAuthzInput,
   type CreateOrderTypeId,
 } from './order-type-options'
 
-const ids = (input: { orgTypeCode?: string | null; roleLevel?: number | null }): CreateOrderTypeId[] =>
-  resolveCreateOrderTypeOptions(input).map(o => o.id)
+const ids = (input: Partial<CreateOrderTypeAuthzInput>): CreateOrderTypeId[] =>
+  resolveCreateOrderTypeOptions({ orgTypeCode: input.orgTypeCode, roleLevel: input.roleLevel }).map(o => o.id)
 
 describe('Create Order type options', () => {
   // 1. Options keep a stable, fixed ordering.

@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { NextRequest } from "next/server";
 import { assertDestructiveOpsAllowed } from '@/lib/server/destructive-ops-guard'
 import { identityHistoryReferences } from '@/lib/identity/provisioning'
+import { authorizeIdentityRemoval } from '@/lib/identity/removal-authorization'
 
 // Configure route to be dynamic
 export const dynamic = "force-dynamic";
@@ -163,6 +164,24 @@ export async function POST(request: NextRequest) {
                 // Filter out the caller's own ID
                 let usersToDelete: string[] = userIds.filter((id: string) => id !== callerId);
 
+                // Each removal is also Archive Identities (platform.identity.delete)
+                // for that user's organization, with target protection; users
+                // the caller may not remove are kept and reported, never deleted.
+                const notAuthorized: string[] = [];
+                const authorized: string[] = [];
+                for (let i = 0; i < usersToDelete.length; i += 10) {
+                    const chunk = usersToDelete.slice(i, i + 10);
+                    const decisions = await Promise.all(chunk.map((id) => authorizeIdentityRemoval(callerId, id)));
+                    chunk.forEach((id, index) => (decisions[index].ok ? authorized : notAuthorized).push(id));
+                }
+                usersToDelete = authorized;
+                if (notAuthorized.length > 0) {
+                    sendEvent("progress", {
+                        current: 0, total: usersToDelete.length, progress: 1, success: 0, errors: 0,
+                        message: `${notAuthorized.length} user(s) kept: you are not authorized to remove them (Archive Identities or a more privileged account).`,
+                    });
+                }
+
                 // Identities referenced by business or audit history are never
                 // hard-deleted (the database refuses; checked first so no
                 // related data is cleaned up for them). They must be archived.
@@ -185,7 +204,7 @@ export async function POST(request: NextRequest) {
                 }
 
                 if (usersToDelete.length === 0) {
-                    sendEvent("error", { message: "No users to delete (cannot delete yourself)" });
+                    sendEvent("error", { message: "No users to delete (cannot delete yourself, users you may not remove, or users with history)" });
                     if (keepAliveInterval) clearInterval(keepAliveInterval);
                     controller.close();
                     return;

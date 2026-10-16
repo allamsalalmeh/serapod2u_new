@@ -13,11 +13,16 @@ let actorId: string
 let sessionWarehouse: string
 let userRpcCalls: string[]
 let emailsSent: number
+/** Users whose legacy post_stock_count key is withheld (S&A grants unchanged). */
+let legacyPostWithheld: Set<string>
 
 vi.mock('server-only', () => ({}))
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => fakeClient(world) }))
 vi.mock('@/lib/server/permissions', () => ({
-  checkPermissionForUser: async (userId: string, key: string) => legacyPermission(userId, key),
+  checkPermissionForUser: async (userId: string, key: string) => {
+    const legacy = legacyPermission(userId, key)
+    return key === 'post_stock_count' && legacyPostWithheld.has(userId) ? { ...legacy, allowed: false } : legacy
+  },
 }))
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
@@ -72,6 +77,7 @@ beforeEach(() => {
   userRpcCalls = []
   emailsSent = 0
   sessionWarehouse = ORG.whA1
+  legacyPostWithheld = new Set()
 })
 
 describe('verification request (OTP issue) — inventory.stock_count.verify', () => {
@@ -162,6 +168,66 @@ describe('verification (OTP consume + atomic post)', () => {
   })
 })
 
+describe('verification (OTP consume + atomic post) — inventory.stock_count.post', () => {
+  const postRows = () => world.decisions.filter(d => d.permission_key === 'inventory.stock_count.post')
+  const enforce = (mode: 'NEW_ENFORCED' | 'LEGACY_RETIRED') => {
+    world.modes['inventory.stock_count.verify'] = 'NEW_ENFORCED'
+    world.modes['inventory.stock_count.post'] = mode
+  }
+
+  it.each(['NEW_ENFORCED', 'LEGACY_RETIRED'] as const)('%s: legacy ALLOW + new DENY (other organization) stops before the posting RPC', async (mode) => {
+    enforce(mode)
+    world.modes['inventory.stock_count.verify'] = 'SHADOW' // isolate the post decision
+    actorId = USER.hqB
+    const response = await callVerify()
+    expect(response.status).toBe(403)
+    const body = await response.json()
+    expect(body.code).toBe('permission_denied')
+    expect(body.reference).toBe(postRows()[0].id)
+    expect(postRows()[0]).toMatchObject({ migration_mode: mode, decision: 'DENY', new_decision: 'DENY' })
+    expect(userRpcCalls).toEqual([])
+  })
+
+  it.each(['NEW_ENFORCED', 'LEGACY_RETIRED'] as const)('%s: warehouse-scoped poster is denied on another warehouse and allowed on its own', async (mode) => {
+    enforce(mode)
+    actorId = USER.wh1
+    sessionWarehouse = ORG.whA2
+    expect((await callVerify()).status).toBe(403)
+    expect(userRpcCalls).toEqual([])
+    sessionWarehouse = ORG.whA1
+    expect((await callVerify()).status).toBe(200)
+    expect(userRpcCalls).toEqual(['verify_and_post_stock_count'])
+    expect(postRows().at(-1)).toMatchObject({ migration_mode: mode, decision: 'ALLOW', audit_class: 'ENFORCED_DECISION' })
+  })
+
+  it.each(['NEW_ENFORCED', 'LEGACY_RETIRED'] as const)('%s: an S&A grant decides even without the legacy key (legacy no longer decides)', async (mode) => {
+    enforce(mode)
+    actorId = USER.hq
+    legacyPostWithheld.add(USER.hq)
+    expect((await callVerify()).status).toBe(200)
+    expect(userRpcCalls).toEqual(['verify_and_post_stock_count'])
+  })
+
+  it('SHADOW: the legacy key still decides — withheld legacy key is denied even with an S&A grant', async () => {
+    world.modes['inventory.stock_count.verify'] = 'NEW_ENFORCED' // verify passes through S&A; post stays SHADOW
+    actorId = USER.hq
+    legacyPostWithheld.add(USER.hq)
+    const response = await callVerify()
+    expect(response.status).toBe(403)
+    expect(userRpcCalls).toEqual([])
+    expect(postRows()[0]).toMatchObject({ migration_mode: 'SHADOW', decision: 'DENY', legacy_decision: 'DENY', new_decision: 'ALLOW' })
+  })
+
+  it('a user without any posting authority is denied in every mode', async () => {
+    actorId = USER.user
+    for (const mode of ['LEGACY_ENFORCED', 'SHADOW', 'NEW_ENFORCED', 'LEGACY_RETIRED'] as const) {
+      world.modes['inventory.stock_count.post'] = mode
+      expect((await callVerify()).status, mode).toBe(403)
+    }
+    expect(userRpcCalls).toEqual([])
+  })
+})
+
 describe('route wiring contract', () => {
   it('both verification routes use the central helper, not an ad-hoc mode check', async () => {
     const { readFileSync } = await import('node:fs')
@@ -173,5 +239,8 @@ describe('route wiring contract', () => {
       expect(source).toContain('resolveWarehouseResourceContext(')
       expect(source).not.toMatch(/[=!]==\s*'(NEW_ENFORCED|LEGACY_RETIRED|SHADOW|LEGACY_ENFORCED)'|migrationMode\s*[=!]==/)
     }
+    // Posting is enforced (not a SHADOW-only diagnostic) on the verify route.
+    const verify = readFileSync(resolve(__dirname, 'verify/route.ts'), 'utf8')
+    expect(verify).toMatch(/requireAuthorization\(\{\s*actorId: user\.id,\s*permission: 'inventory\.stock_count\.post'/)
   })
 })

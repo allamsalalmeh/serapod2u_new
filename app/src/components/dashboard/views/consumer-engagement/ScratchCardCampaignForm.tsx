@@ -189,7 +189,7 @@ export default function ScratchCardCampaignForm({ userProfile, campaignId, initi
 
         // Fallback to RPC if API fails or no order_id
         const { data, error } = await supabase.rpc('get_journey_qr_count', {
-            p_journey_id: journeyId
+            p_journey_config_id: journeyId
         })
 
         if (!error && typeof data === 'number') {
@@ -299,6 +299,8 @@ export default function ScratchCardCampaignForm({ userProfile, campaignId, initi
     }
 
     const fetchCampaign = async () => {
+        // Only called when campaignId is set (see the effect above).
+        if (!campaignId) return
         setLoading(true)
         const { data: campaign, error } = await supabase
             .from('scratch_card_campaigns')

@@ -7,6 +7,8 @@ import { Loader2, Briefcase } from 'lucide-react'
 
 interface Props {
   userProfile: any
+  /** 'hr' (administrative landing) for HR administrators, 'hr/my-workspace' for employee-only users. */
+  initialView?: string
 }
 
 /**
@@ -14,9 +16,9 @@ interface Props {
  *
  * SSR: renders a lightweight loading screen.
  * Client mobile (≤768px): redirects to /hr/mobile/home.
- * Client desktop: renders the existing DashboardContent with HR landing view.
+ * Client desktop: renders the existing DashboardContent with the HR landing view (administrators) or My Workspace.
  */
-export default function HrEntryRouter({ userProfile }: Props) {
+export default function HrEntryRouter({ userProfile, initialView = 'hr' }: Props) {
   const router = useRouter()
   const [mode, setMode] = useState<'loading' | 'desktop'>('loading')
 
@@ -43,5 +45,5 @@ export default function HrEntryRouter({ userProfile }: Props) {
     )
   }
 
-  return <DashboardContent userProfile={userProfile} initialView="hr" />
+  return <DashboardContent userProfile={userProfile} initialView={initialView} />
 }

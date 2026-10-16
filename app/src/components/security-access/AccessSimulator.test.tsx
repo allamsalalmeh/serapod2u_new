@@ -73,7 +73,7 @@ describe('Access Simulator', () => {
     expect((await screen.findAllByText('ALLOW')).length).toBeGreaterThan(0)
     expect(screen.getAllByText('Allowed by the existing (legacy) role permissions.').length).toBeGreaterThan(0)
     expect(screen.getByText('Legacy MANAGER')).toBeTruthy()
-    expect(screen.getByText('Shadow')).toBeTruthy()
+    expect(screen.getByText('Monitoring / Shadow')).toBeTruthy()
     expect(screen.getByText(/New model: The user’s role applies to a different organization or warehouse/)).toBeTruthy()
     const technical = screen.getByText('Technical details').closest('details')!
     expect(technical.open).toBe(false)

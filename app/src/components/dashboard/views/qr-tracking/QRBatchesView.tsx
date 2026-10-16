@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -27,6 +27,8 @@ import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/use-toast'
 import SupplyChainPageHeader from '@/modules/supply-chain/components/SupplyChainPageHeader'
 import { triggerQRBatchProcessing } from './qrBatchProcessingClient'
+import { qrCaseTotals } from '@/lib/orders/qr-buffer'
+import { asJsonObject } from '@/lib/supabase/json'
 
 /** Upper bound on processing calls per batch from one click; the cron keeps going after that. */
 const MAX_WORKER_RUNS = 120
@@ -57,6 +59,7 @@ export default function QRBatchesView({ userProfile, onViewChange }: QRBatchesVi
   const [selectedOrderId, setSelectedOrderId] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState<string | null>(null)
+  const generatingRef = useRef(false)
   const [workerRunning, setWorkerRunning] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
@@ -215,6 +218,13 @@ export default function QRBatchesView({ userProfile, onViewChange }: QRBatchesVi
           const outcome = await triggerQRBatchProcessing(batchId)
           await loadBatches(true)
 
+          if (outcome === 'waiting_for_worker') {
+            // Confirmed queued; this process may not run the worker. The 2s poll below shows real progress.
+            toast({ title: 'Batch queued', description: 'Batch queued. Waiting for the staging worker.' })
+            await loadBatches(true)
+            return
+          }
+
           if (outcome === 'complete' || outcome === 'idle') {
             finished++
             break
@@ -260,11 +270,17 @@ export default function QRBatchesView({ userProfile, onViewChange }: QRBatchesVi
       return
     }
 
-    await handleGenerateBatch(selectedOrderId)
-    setSelectedOrderId('') // Clear selection after generation
+    const queued = await handleGenerateBatch(selectedOrderId)
+    // Keep the order selected when generation failed so it can be retried.
+    if (queued) setSelectedOrderId('')
   }
 
-  const handleGenerateBatch = async (orderId: string) => {
+  /** Queue (or resume) the order's batch. Resolves true once a batch exists. */
+  const handleGenerateBatch = async (orderId: string): Promise<boolean> => {
+    // Ignore repeat clicks while a request is in flight (the server is also
+    // idempotent per order, this just avoids the extra round trip).
+    if (generatingRef.current) return false
+    generatingRef.current = true
     try {
       setGenerating(orderId)
       const response = await fetch('/api/qr-batches/generate', {
@@ -273,13 +289,14 @@ export default function QRBatchesView({ userProfile, onViewChange }: QRBatchesVi
         body: JSON.stringify({ order_id: orderId })
       })
 
-      const result = await response.json().catch(() => null)
+      const result = await response.json().catch(() => ({} as any))
       if (!response.ok) {
-        throw new Error([result?.error, result?.details].filter(Boolean).join(': ') || 'Failed to generate QR batch')
+        const reason = result?.error || `Failed to generate QR batch (HTTP ${response.status})`
+        throw new Error(result?.details && result.details !== reason ? `${reason} (${result.details})` : reason)
       }
 
       toast({
-        title: 'Success',
+        title: result.existing ? 'Batch Already Exists' : 'Success',
         description: result.message || 'Batch queued for generation'
       })
 
@@ -291,13 +308,18 @@ export default function QRBatchesView({ userProfile, onViewChange }: QRBatchesVi
       if (queuedBatchId && ['queued', 'processing'].includes(result.status || result.batch?.status || 'queued')) {
         runWorker([queuedBatchId], true)
       }
+      return true
     } catch (error: any) {
       toast({
-        title: 'Error',
-        description: error.message,
+        title: 'QR batch not generated',
+        description: `${error?.message || 'Failed to generate QR batch'}. The order is still selected; you can try again.`,
         variant: 'destructive'
       })
+      // A partial attempt may have created a batch; refresh so the lists show it.
+      await Promise.all([loadBatches(true), loadApprovedOrders()])
+      return false
     } finally {
+      generatingRef.current = false
       setGenerating(null)
     }
   }
@@ -372,6 +394,8 @@ export default function QRBatchesView({ userProfile, onViewChange }: QRBatchesVi
       // Check if qr_batches is null/undefined OR empty array
       if (!order.qr_batches) return true
       if (Array.isArray(order.qr_batches) && order.qr_batches.length === 0) return true
+      // A batch that failed can be retried from here (the API re-queues it).
+      if (Array.isArray(order.qr_batches) && order.qr_batches.every((b: any) => b?.status === 'failed')) return true
       return false
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -601,8 +625,8 @@ export default function QRBatchesView({ userProfile, onViewChange }: QRBatchesVi
                       .map((order) => {
                         const totalItems = order.order_items?.length || 0
                         const totalQuantity = order.order_items?.reduce((sum: number, item: any) => sum + (item.qty || 0), 0) || 0
-                        const bufferQty = Math.floor(totalQuantity * (order.qr_buffer_percent || 10) / 100)
-                        const qrCodes = totalQuantity + bufferQty
+                        // Cases, not pieces: one unique QR per case, plus the buffer cases.
+                        const { uniqueCaseQr: qrCodes } = qrCaseTotals(totalQuantity, order.qr_buffer_percent)
                         const displayOrderNo = order.display_doc_no || order.order_no
 
                         return (
@@ -610,7 +634,7 @@ export default function QRBatchesView({ userProfile, onViewChange }: QRBatchesVi
                             <div className="flex flex-col">
                               <span className="font-medium">{displayOrderNo}</span>
                               <span className="text-xs text-[var(--sera-muted)]">
-                                {totalItems} items • {totalQuantity.toLocaleString()} units • {qrCodes.toLocaleString()} QR codes
+                                {totalItems} items • {totalQuantity.toLocaleString()} {totalQuantity === 1 ? 'Case' : 'Cases'} • {qrCodes.toLocaleString()} unique case QR codes
                               </span>
                             </div>
                           </SelectItem>
@@ -645,10 +669,14 @@ export default function QRBatchesView({ userProfile, onViewChange }: QRBatchesVi
 
               const totalItems = selectedOrder.order_items?.length || 0
               const totalQuantity = selectedOrder.order_items?.reduce((sum: number, item: any) => sum + (item.qty || 0), 0) || 0
-              const bufferPercent = selectedOrder.qr_buffer_percent || 10
-              // Fixed calculation: base units + buffer (not multiplied)
-              const bufferQty = Math.floor(totalQuantity * bufferPercent / 100)
-              const qrCodes = totalQuantity + bufferQty
+              // Quantities are cases: one unique QR per case (never × pcs per
+              // case) plus the manufacturer buffer cases, rounded as QR
+              // generation rounds them. Master (box) QR codes are separate.
+              const {
+                bufferPercent,
+                bufferCases: bufferQty,
+                uniqueCaseQr: qrCodes,
+              } = qrCaseTotals(totalQuantity, selectedOrder.qr_buffer_percent)
               const displayOrderNo = selectedOrder.display_doc_no || selectedOrder.order_no
 
               return (
@@ -664,12 +692,14 @@ export default function QRBatchesView({ userProfile, onViewChange }: QRBatchesVi
                       <p className="font-medium text-gray-900">{totalItems} products</p>
                     </div>
                     <div>
-                      <p className="text-gray-600 text-xs sm:text-sm">Total Units</p>
-                      <p className="font-medium text-gray-900">{totalQuantity.toLocaleString()} pieces</p>
+                      <p className="text-gray-600 text-xs sm:text-sm">Ordered Cases</p>
+                      <p className="font-medium text-gray-900">{totalQuantity.toLocaleString()} {totalQuantity === 1 ? 'Case' : 'Cases'}</p>
                     </div>
                     <div>
-                      <p className="text-gray-600 text-xs sm:text-sm">QR Codes to Generate</p>
-                      <p className="font-medium text-blue-600 text-xs sm:text-sm">{qrCodes.toLocaleString()} ({totalQuantity} + {bufferQty} buffer)</p>
+                      <p className="text-gray-600 text-xs sm:text-sm">Unique Case QR Codes</p>
+                      <p className="font-medium text-blue-600 text-xs sm:text-sm">
+                        {qrCodes.toLocaleString()} ({totalQuantity.toLocaleString()} ordered + {bufferQty.toLocaleString()} buffer {bufferQty === 1 ? 'case' : 'cases'}, {bufferPercent}%)
+                      </p>
                     </div>
                   </div>
                 </div>

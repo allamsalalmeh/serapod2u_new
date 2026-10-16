@@ -778,7 +778,7 @@ describe('Opening Balance guided wizard', () => {
     fireEvent.click(cont)
     // Advances to Review & Post; never "Resolve blockers first".
     expect(await screen.findByText('Final Verification & Posting')).toBeTruthy()
-    const refused = stableToast.toast.mock.calls.find(([a]: [any]) => /Resolve blockers first/i.test(String(a?.title)))
+    const refused = stableToast.toast.mock.calls.find(([a]) => /Resolve blockers first/i.test(String(a?.title)))
     expect(refused).toBeFalsy()
   })
 
@@ -1724,7 +1724,7 @@ describe('Opening Balance guided wizard', () => {
     await reachOtpEntry()
     fireEvent.click(screen.getByRole('button', { name: /Verify OTP & Post Opening Balance/i }))
     await screen.findByText(/SC-Z-3/)
-    const posted = stableToast.toast.mock.calls.find(([a]: [any]) => /Opening Balance posted/i.test(String(a?.title)))
+    const posted = stableToast.toast.mock.calls.find(([a]) => /Opening Balance posted/i.test(String(a?.title)))
     expect(posted).toBeFalsy()
     expect(screen.queryByText('Official Opening Balance posted')).toBeNull()
   })

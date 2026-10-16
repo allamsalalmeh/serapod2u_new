@@ -9,7 +9,7 @@ import {
     STOCK_COUNT_POST_PERMISSION,
     stockCountVerificationError,
 } from '@/lib/inventory/stock-count-verification-errors'
-import { authorize, isAuthorizationDenied, requireAuthorization } from '@/lib/security-access/authorization'
+import { isAuthorizationDenied, requireAuthorization } from '@/lib/security-access/authorization'
 import { resolveWarehouseResourceContext } from '@/lib/security-access/resource-context'
 
 export const dynamic = 'force-dynamic'
@@ -65,8 +65,11 @@ export async function POST(request: NextRequest) {
                 message: 'Legacy Initial Classification drafts are read-only. Use Inventory Opening Balance & Initial Classification.',
             }))
         }
+        // Legacy key post_stock_count: the posting authority while inventory.stock_count.post is
+        // LEGACY_ENFORCED/SHADOW (requireAuthorization below uses it as the legacy evaluator); the
+        // organization context is needed in every mode for the code hash.
         const permission = await checkPermissionForUser(user.id, STOCK_COUNT_POST_PERMISSION)
-        if (!permission.allowed || !permission.context?.organization_id) {
+        if (!permission.context?.organization_id) {
             return jsonError(stockCountVerificationError('permission_denied', { stage: 'verify' }))
         }
         const resource = {
@@ -92,16 +95,24 @@ export async function POST(request: NextRequest) {
             }
             throw authorizationError
         }
-        // inventory.stock_count.post remains SHADOW: diagnostic only.
+        // Posting itself: inventory.stock_count.post through the same contract. LEGACY_ENFORCED/SHADOW:
+        // the legacy key decides exactly as before (SHADOW records the comparison). NEW_ENFORCED/
+        // LEGACY_RETIRED: the S&A decision for this warehouse decides; the database repeats it when the
+        // code is consumed (sa_stock_count_post_enforcement, stock_count_user_can_post).
         try {
-            await authorize({
+            await requireAuthorization({
                 actorId: user.id,
                 permission: 'inventory.stock_count.post',
                 resource,
                 context: { correlationId: requestIdForAudit },
-            })
-        } catch (shadowError: any) {
-            console.error('[sa-shadow] stock count post evaluation failed', { sessionId, requestId: requestIdForAudit, message: shadowError?.message })
+            }, { legacy: () => permission.allowed })
+        } catch (authorizationError) {
+            if (isAuthorizationDenied(authorizationError)) {
+                return jsonError(stockCountVerificationError('permission_denied', {
+                    stage: 'verify', reference: authorizationError.decisionId,
+                }))
+            }
+            throw authorizationError
         }
         const codeHash = hashStockCountCode(String(code), permission.context.organization_id, sessionId, user.id)
         const postingFunction = accessibleSession.count_type === 'opening_balance_cutoff'

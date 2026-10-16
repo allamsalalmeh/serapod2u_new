@@ -634,7 +634,7 @@ export default function ScanIssuesTab() {
     )
 }
 
-function Th({ children }: { children: React.ReactNode }) {
+function Th({ children }: { children?: React.ReactNode }) {
     return <th className="whitespace-nowrap">{children}</th>
 }
 function Td({ children, className = '', title }: { children: React.ReactNode; className?: string; title?: string }) {

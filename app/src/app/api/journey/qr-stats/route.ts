@@ -2,6 +2,7 @@ import { guardUserOperation } from '@/lib/security-access/operation'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { normalizePointClaimSettings } from '@/lib/engagement/point-claim-settings'
+import { asJsonObject } from '@/lib/supabase/json'
 
 /**
  * Get QR code statistics for a journey (order)
@@ -131,6 +132,8 @@ export async function GET(request: NextRequest) {
       })
     }
 
+    const stats = asJsonObject(statsData)
+
     let shopLinksScanned = 0
     let consumerLinksScanned = 0
     try {
@@ -201,25 +204,25 @@ export async function GET(request: NextRequest) {
     }
 
     console.log(`📊 Stats for order ${orderId}:`, {
-      total_qr_codes: statsData?.total_qr_codes || 0,
-      unique_consumer_scans: statsData?.unique_consumer_scans || 0,
-      points_collected_count: statsData?.points_collected_count || 0,
-      lucky_draw_entries: statsData?.lucky_draw_entries || 0,
-      redemptions: statsData?.redemptions || 0,
+      total_qr_codes: stats.total_qr_codes || 0,
+      unique_consumer_scans: stats.unique_consumer_scans || 0,
+      points_collected_count: stats.points_collected_count || 0,
+      lucky_draw_entries: stats.lucky_draw_entries || 0,
+      redemptions: stats.redemptions || 0,
       scratch_card_plays: scratchCardPlaysCount
     })
 
     return NextResponse.json({
       success: true,
       data: {
-        total_valid_links: Number(statsData?.total_qr_codes || 0),
-        links_scanned: Number(statsData?.unique_consumer_scans || 0),
+        total_valid_links: Number(stats.total_qr_codes || 0),
+        links_scanned: Number(stats.unique_consumer_scans || 0),
         claim_mode: claimMode,
         shop_links_scanned: shopLinksScanned,
         consumer_links_scanned: consumerLinksScanned,
-        lucky_draw_entries: Number(statsData?.lucky_draw_entries || 0),
-        redemptions: Number(statsData?.redemptions || 0),
-        points_collected: Number(statsData?.points_collected_count || 0),
+        lucky_draw_entries: Number(stats.lucky_draw_entries || 0),
+        redemptions: Number(stats.redemptions || 0),
+        points_collected: Number(stats.points_collected_count || 0),
         scratch_card_plays: scratchCardPlaysCount,
         failed_scans: 0,
         last_scan_at: lastScanAt

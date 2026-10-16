@@ -61,12 +61,21 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import UserDialogNew from "./UserDialogNew";
+import UserDialogNew, { type EditAccessSubmission } from "./UserDialogNew";
 import type { User as UserType, Role, Organization } from "@/types/user";
-import { getStorageUrl } from "@/lib/utils";
+import { getAvatarSrc } from "@/lib/utils";
 import { compressAvatar, formatFileSize } from "@/lib/utils/imageCompression";
 import { samePhone } from "@/utils/phone";
 import { SeraLoadingState } from "@/components/ui/SeraLoader";
+import {
+  buildOrgOptions,
+  buildOrgTypeOptions,
+  organizationsForType,
+  reconcileOrgSelection,
+  userMatchesOrgFilters,
+} from "./userOrgFilters";
+import { useSaCapability } from "@/hooks/useSaCapability";
+import { useNavAccess } from "@/hooks/useNavAccess";
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200, 500, 1000, -1] as const; // -1 represents "All"
 const PROGRAM_FILTER_OPTIONS = [
@@ -258,7 +267,7 @@ const hasMeaningfulUserChanges = (
     return true;
   }
 
-  if (Boolean(userData.can_be_reference) !== Boolean((existingUser as any).can_be_reference)) {
+  if ('can_be_reference' in userData && Boolean(userData.can_be_reference) !== Boolean((existingUser as any).can_be_reference)) {
     return true;
   }
 
@@ -294,11 +303,17 @@ export default function UserManagementNew({
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [organizationsLoaded, setOrganizationsLoaded] = useState(false);
+  const [organizationsLoadFailed, setOrganizationsLoadFailed] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [sortField, setSortField] = useState<SortField>("created_at");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [selectedUsers, setSelectedUsers] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
+  // Divider on the pinned Actions column only while table content is
+  // actually scrolled underneath it; on wide screens it is just noise.
+  const [usersTableEl, setUsersTableEl] = useState<HTMLTableElement | null>(null);
+  const [actionsCoverContent, setActionsCoverContent] = useState(false);
   const [pageSize, setPageSize] = useState<number>(20);
   const [organizationDialogOpen, setOrganizationDialogOpen] = useState(false);
   const [organizationLoading, setOrganizationLoading] = useState(false);
@@ -331,9 +346,18 @@ export default function UserManagementNew({
     return 999;
   };
 
-  const canManageUserDeletion = () => resolveCurrentUserLevel() <= 10;
+  // Archive Identities (platform.identity.delete): the S&A answer once enforced,
+  // the historical HQ Admin / Super Admin rule until then. The server decides
+  // every removal for the target's organization regardless.
+  const identityRemovalAllowed = useSaCapability("platform.identity.delete", resolveCurrentUserLevel() <= 10);
+  const canManageUserDeletion = () => identityRemovalAllowed;
 
   const currentUserLevel = resolveCurrentUserLevel();
+  // Root Access (server answer): the legacy role-level pre-checks below do not apply to a Root Administrator, whose
+  // legacy role stays unchanged. Display only; the server and database decide every read and change.
+  const rootAccess = useNavAccess().snapshot?.rootAccess === true;
+  // A target "outranks" the viewer for the legacy pre-checks (lower role_level = higher privilege).
+  const outranksViewer = (targetLevel: number, viewerLevel: number) => !rootAccess && targetLevel < viewerLevel;
   const canEditSelectedOrganization =
     currentUserLevel === 1 &&
     selectedOrganization?.org_type_code === "SHOP" &&
@@ -348,7 +372,25 @@ export default function UserManagementNew({
     // eslint-disable-next-line react-hooks/exhaustive-deps
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isReady]);
+  }, [isReady, rootAccess]);
+
+  useEffect(() => {
+    const scroller = usersTableEl?.parentElement;
+    if (!scroller) return;
+    const update = () =>
+      setActionsCoverContent(
+        scroller.scrollLeft + scroller.clientWidth < scroller.scrollWidth - 1,
+      );
+    update();
+    scroller.addEventListener("scroll", update, { passive: true });
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(update) : null;
+    observer?.observe(scroller);
+    observer?.observe(usersTableEl);
+    return () => {
+      scroller.removeEventListener("scroll", update);
+      observer?.disconnect();
+    };
+  }, [usersTableEl]);
 
   useEffect(() => {
     if (!isReady || !editUserId) return;
@@ -359,7 +401,7 @@ export default function UserManagementNew({
           .select('*, roles:role_code(role_name, role_level)')
           .eq('id', editUserId).single();
         const level = resolveCurrentUserLevel();
-        if (error || !data || (level > 20 && (
+        if (error || !data || (!rootAccess && level > 20 && (
           (data.roles?.role_level || 999) < level ||
           (data.organization_id && data.organization_id !== userProfile.organization_id)
         ))) throw new Error('This user is unavailable or you do not have permission to access it.');
@@ -380,7 +422,7 @@ export default function UserManagementNew({
     void load();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isReady, editUserId]);
+  }, [isReady, editUserId, rootAccess]);
 
   const loadUsers = async () => {
     if (editUserId) { onEditClose?.(); return; }
@@ -391,7 +433,7 @@ export default function UserManagementNew({
       // Get current user's role level - users can only see same level and below (higher numbers)
       const currentUserLevel = resolveCurrentUserLevel();
       // Super Admin and HQ Admin can see all users, others see filtered by level
-      const isPowerUser = currentUserLevel <= 20;
+      const isPowerUser = rootAccess || currentUserLevel <= 20;
 
       // Fetch all users using pagination to overcome Supabase 1000 row limit
       const allUsers: any[] = [];
@@ -459,7 +501,7 @@ export default function UserManagementNew({
         // }
 
         // Power users (level <= 20) can see all users
-        if (currentUserLevel <= 20) return true;
+        if (isPowerUser) return true;
         // Others can only see users at same level or below (higher number)
         return userRoleLevel >= currentUserLevel;
       });
@@ -502,6 +544,7 @@ export default function UserManagementNew({
   };
 
   const loadOrganizations = async () => {
+    setOrganizationsLoadFailed(false);
     try {
       const { data, error } = await supabase
         .from("organizations")
@@ -511,8 +554,10 @@ export default function UserManagementNew({
 
       if (error) throw error;
       setOrganizations((data || []) as Organization[]);
+      setOrganizationsLoaded(true);
     } catch (error) {
       console.error("Error loading organizations:", error);
+      setOrganizationsLoadFailed(true);
       if (editUserId) throw error;
     }
   };
@@ -764,7 +809,7 @@ export default function UserManagementNew({
     const usersToDelete = users.filter(u => ids.includes(u.id));
     const unauthorized = usersToDelete.filter(u => {
       const level = (u as any).roles?.role_level || 999;
-      return level < currentUserLevel;
+      return outranksViewer(level, currentUserLevel);
     });
 
     if (unauthorized.length > 0) {
@@ -806,7 +851,7 @@ export default function UserManagementNew({
   const handleSaveUser = async (
     userData: Partial<UserType> & { password?: string },
     avatarFile?: File | null,
-    resetPassword?: { password: string },
+    access?: EditAccessSubmission,
   ) => {
     try {
       setIsSaving(true);
@@ -826,7 +871,7 @@ export default function UserManagementNew({
       // Validate Role Level permissions
       if (userData.role_code) {
         const targetRole = roles.find(r => r.role_code === userData.role_code);
-        if (targetRole && targetRole.role_level < currentUserLevel) {
+        if (targetRole && outranksViewer(targetRole.role_level, currentUserLevel)) {
           throw new Error("You cannot assign a role level higher than your own.");
         }
       }
@@ -842,7 +887,7 @@ export default function UserManagementNew({
         const targetUserRole = roles.find(r => r.role_code === targetUserRoleCode);
         const targetUserLevel = targetUserRole?.role_level || 999;
 
-        if (targetUserLevel < currentUserLevel) {
+        if (outranksViewer(targetUserLevel, currentUserLevel)) {
           throw new Error("You cannot edit a user with a higher role level than your own.");
         }
 
@@ -855,8 +900,7 @@ export default function UserManagementNew({
           is_active: userData.is_active ?? true,
         };
 
-        const hasNonPasswordChanges = hasMeaningfulUserChanges(editingUser, userData) || Boolean(avatarFile);
-        let passwordResetSucceeded = false;
+        const hasProfileChanges = hasMeaningfulUserChanges(editingUser, userData) || Boolean(avatarFile);
 
         // Include end user / independent user fields if present
         if ("shop_name" in userData) updateData.shop_name = (userData as any).shop_name || null;
@@ -872,53 +916,6 @@ export default function UserManagementNew({
         if ("employment_type" in userData) updateData.employment_type = (userData as any).employment_type || null;
         if ("join_date" in userData) updateData.join_date = (userData as any).join_date || null;
         if ("employment_status" in userData) updateData.employment_status = (userData as any).employment_status || 'active';
-
-        // Handle password reset (admin only)
-        if (resetPassword && resetPassword.password) {
-          try {
-            const response = await fetch("/api/users/reset-password", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                user_id: editingUser.id,
-                new_password: resetPassword.password,
-              }),
-            });
-
-            const result = await response.json();
-
-            if (!response.ok || !result.success) {
-              throw new Error(result.error || "Failed to reset password");
-            }
-
-            toast({
-              title: "Password Reset",
-              description: "User password has been reset successfully",
-              variant: "default",
-            });
-            passwordResetSucceeded = true;
-          } catch (resetError: any) {
-            console.error("Password reset error:", resetError);
-            toast({
-              title: "Password Reset Failed",
-              description: resetError.message || "Failed to reset password",
-              variant: "destructive",
-            });
-
-            if (!hasNonPasswordChanges) {
-              return;
-            }
-
-            // Don't throw - continue with other updates
-          }
-        }
-
-        if (resetPassword && resetPassword.password && passwordResetSucceeded && !hasNonPasswordChanges) {
-          setDialogOpen(false);
-          setEditingUser(null);
-          await loadUsers();
-          return;
-        }
 
         // Handle avatar upload
         if (avatarFile) {
@@ -984,43 +981,60 @@ export default function UserManagementNew({
           }
         }
 
-        // Update user in database
-        const result = await updateUserWithAuth(editingUser.id, updateData, {
-          id: userProfile.id,
-          role_code: userProfile.role_code,
-        });
+        // Update the profile. When only Group Policy changes are pending nothing in the profile changed, so it is not rewritten.
+        if (hasProfileChanges || !access) {
+          const result = await updateUserWithAuth(editingUser.id, updateData, {
+            id: userProfile.id,
+            role_code: userProfile.role_code,
+          });
 
-        if (!result.success)
-          throw new Error(result.error || "Failed to update user");
+          if (!result.success)
+            throw new Error(result.error || "Failed to update user");
+        }
+
+        // Group Policy changes are applied AFTER the profile, through the same endpoint as People & Access. Success is only
+        // reported when every change was applied; a partial result keeps the form open with exactly what happened.
+        let accessMessage = "";
+        if (access) {
+          const outcome = await access.apply();
+          if (!outcome.allApplied) {
+            await loadUsers();
+            throw new Error(
+              `${hasProfileChanges ? "The profile changes were saved. " : ""}${outcome.message} The form now shows what is stored.`,
+            );
+          }
+          accessMessage = ` ${outcome.message}`;
+        }
 
         toast({
           title: "Success",
-          description: `${userData.full_name} updated successfully`,
+          description: `${userData.full_name} updated successfully.${accessMessage}`,
         });
         setDialogOpen(false);
         setEditingUser(null);
         await loadUsers();
       } else {
         // CREATE new user
+        // A linked HR employee keeps their existing login, so no password is required for them.
+        const linkedUserId = (userData as any).linked_user_id as string | undefined;
         if (
           !userData.email ||
           !userData.full_name ||
-          !userData.role_code ||
-          !userData.password
+          (!userData.password && !linkedUserId)
         ) {
-          throw new Error("Email, Name, Role, and Password are required");
+          throw new Error("Email, Name, and Password are required");
         }
 
         const result = await createUserWithAuth({
           email: userData.email,
-          password: userData.password,
+          password: userData.password || "",
           full_name: userData.full_name,
           call_name: (userData as any).call_name || undefined,
-          role_code: userData.role_code,
+          // No legacy role/level: the server creates the account without legacy access and rejects any value sent here.
           organization_id:
             userData.organization_id || undefined, // Don't auto-assign to admin's org - allow independent users
           phone: userData.phone || undefined,
-          is_active: userData.is_active ?? true,
+          is_active: true, // new users are always created Active
           shop_name: (userData as any).shop_name || undefined,
           address: (userData as any).address || undefined,
           referral_phone: (userData as any).referral_phone || undefined,
@@ -1035,14 +1049,26 @@ export default function UserManagementNew({
           employment_status: (userData as any).employment_status || 'active',
           can_be_reference: Boolean((userData as any).can_be_reference),
           // 'self' = employee self-service only: no business role is granted.
-          initial_role_id: (userData as any).initial_role_id && (userData as any).initial_role_id !== 'self' ? (userData as any).initial_role_id : null,
-          initial_access_reason: (userData as any).initial_access_reason || null,
+          // 'self' = employee self-service only; 'profiles' = the Group Policies chosen below (each with its own scope).
+          initial_role_id: (userData as any).initial_role_id && !['self', 'profiles'].includes((userData as any).initial_role_id) ? (userData as any).initial_role_id : null,
+          initial_profiles: (userData as any).initial_role_id === 'profiles'
+            ? ((userData as any).initial_profiles || []).filter((p: any) => p.roleId && p.scopeId).map((p: any) => ({ role_id: p.roleId, scope_id: p.scopeId }))
+            : null,
+          linked_user_id: linkedUserId || null,
+          // HQ only: Employee Self Service is the default (true); an explicit exclusion travels as false. Re-judged on the server.
+          ...(typeof (userData as any).include_ess === 'boolean' ? { include_ess: (userData as any).include_ess } : {}),
         }, {
           id: userProfile.id,
           role_code: userProfile.role_code,
         });
 
         if (!result.success) {
+          // The account exists but a later step failed: say so honestly and refresh the list so it is visible.
+          // A retry cannot create a duplicate (the identity check now finds the account).
+          if ((result as any).partial) {
+            await loadUsers();
+            throw new Error(`${result.error || "Provisioning was only partly completed."} The account exists, so do not create it again: open it in the list to finish.`);
+          }
           // Provide friendly error messages for common errors
           let errorMessage = result.error || "Failed to create user";
 
@@ -1064,7 +1090,7 @@ export default function UserManagementNew({
         if ((result as any).reused) {
           // Identity resolution found this person already in the organization:
           // nothing was duplicated and their existing profile is left untouched.
-          toast({ title: "Existing account kept", description: (result as any).message });
+          toast({ title: (result as any).linked ? "Employee linked" : "Existing account kept", description: (result as any).message });
           setDialogOpen(false);
           await loadUsers();
           return;
@@ -1181,7 +1207,7 @@ export default function UserManagementNew({
       // Access nested roles safely
       const targetUserLevel = (targetUser as any)?.roles?.role_level || 999;
 
-      if (targetUserLevel < currentUserLevel) {
+      if (outranksViewer(targetUserLevel, currentUserLevel)) {
         throw new Error("You cannot modify a user with a higher role level than your own.");
       }
 
@@ -1303,6 +1329,30 @@ export default function UserManagementNew({
     }
   };
 
+  const organizationById = useMemo(
+    () => new Map(organizations.map((org) => [org.id, org])),
+    [organizations],
+  );
+  const orgTypeOptions = useMemo(() => buildOrgTypeOptions(organizations), [organizations]);
+  const orgFilterOptions = useMemo(
+    () => buildOrgOptions(organizationsForType(organizations, orgTypeFilter)),
+    [organizations, orgTypeFilter],
+  );
+  const organizationsLoading = !organizationsLoaded && !organizationsLoadFailed;
+
+  // A type change drops the selected organization only when it no longer belongs to that type.
+  const handleOrgTypeFilterChange = (nextType: string) => {
+    setOrgTypeFilter(nextType);
+    setOrgFilter((current) => reconcileOrgSelection(organizations, nextType, current));
+  };
+
+  // The catalogue can change (reload, edited organization); keep the selection valid for the current type.
+  useEffect(() => {
+    if (!organizationsLoaded) return;
+    setOrgFilter((current) => reconcileOrgSelection(organizations, orgTypeFilter, current));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [organizations, organizationsLoaded]);
+
   const filteredUsers = useMemo(() => {
     return users
       .filter((user) => {
@@ -1328,17 +1378,8 @@ export default function UserManagementNew({
         // Role filter
         const matchesRole = !roleFilter || user.role_code === roleFilter;
 
-        // Organization filter
-        const matchesOrg = !orgFilter || user.organization_id === orgFilter;
-
-        // Organization Type filter
-        const userOrg = organizations.find(
-          (o) => o.id === user.organization_id,
-        );
-        const matchesOrgType =
-          !orgTypeFilter ||
-          (orgTypeFilter === "END_USER" && !user.organization_id) ||
-          (userOrg && userOrg.org_type_code === orgTypeFilter);
+        // Organization Type + Organization filters (same catalogue as the dropdowns)
+        const matchesOrganization = userMatchesOrgFilters(user, organizationById, orgTypeFilter, orgFilter);
 
         // Status filter
         const matchesStatus =
@@ -1355,8 +1396,7 @@ export default function UserManagementNew({
         return (
           matchesSearch &&
           matchesRole &&
-          matchesOrg &&
-          matchesOrgType &&
+          matchesOrganization &&
           matchesStatus &&
           matchesProgram
         );
@@ -1419,6 +1459,7 @@ export default function UserManagementNew({
     sortField,
     sortDirection,
     organizations,
+    organizationById,
     roles,
     lastScanMap,
   ]);
@@ -1476,7 +1517,7 @@ export default function UserManagementNew({
   if (editUserId) {
     return loading ? <div role="status">Loading user...</div> : (
       <UserDialogNew user={editingUser} roles={roles} organizations={organizations}
-        open={dialogOpen} isSaving={isSaving} currentUserRoleLevel={currentUserLevel}
+        open={dialogOpen} isSaving={isSaving} currentUserRoleLevel={currentUserLevel} rootAccess={rootAccess}
         onOpenChange={(open) => { setDialogOpen(open); if (!open) onEditClose?.(); }}
         onSave={handleSaveUser} />
     );
@@ -1512,10 +1553,22 @@ export default function UserManagementNew({
         user={editingUser}
         roles={roles}
         organizations={organizations}
+        organizationsLoaded={organizationsLoaded}
         open={dialogOpen}
         isSaving={isSaving}
-        currentUserRoleLevel={currentUserLevel}
+        currentUserRoleLevel={currentUserLevel} rootAccess={rootAccess}
         onOpenChange={setDialogOpen}
+        onOpenExistingUser={(userId) => {
+          // "Open existing user": leave the Add User form and open that person's record, if the list can show them.
+          const existing = users.find((u) => u.id === userId);
+          if (!existing) {
+            toast({ title: "Not in the current list", description: "Search for this person in the user list to open them." });
+            return;
+          }
+          setDialogOpen(false);
+          setEditingUser(existing);
+          setTimeout(() => setDialogOpen(true), 0);
+        }}
         onSave={handleSaveUser}
       />
 
@@ -1821,19 +1874,16 @@ export default function UserManagementNew({
               </label>
               <select
                 className="w-full px-3 py-2 border border-[var(--sera-line)] rounded-md focus:outline-none focus:ring-2 focus:ring-[var(--sera-orange)]/100 bg-white"
-                onChange={(e) => setOrgTypeFilter(e.target.value)}
+                onChange={(e) => handleOrgTypeFilterChange(e.target.value)}
                 value={orgTypeFilter}
+                aria-label="Filter by Organization Type"
               >
                 <option value="">All Types</option>
-                {Array.from(
-                  new Set(organizations.map((org) => org.org_type_code)),
-                )
-                  .filter((t): t is string => !!t)
-                  .map((typeCode) => (
-                    <option key={typeCode} value={typeCode}>
-                      {getOrgTypeName(typeCode)}
-                    </option>
-                  ))}
+                {orgTypeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -1846,13 +1896,25 @@ export default function UserManagementNew({
                 className="w-full px-3 py-2 border border-[var(--sera-line)] rounded-md focus:outline-none focus:ring-2 focus:ring-[var(--sera-orange)]/100 bg-white"
                 onChange={(e) => setOrgFilter(e.target.value)}
                 value={orgFilter}
+                aria-label="Filter by Organization"
+                aria-busy={organizationsLoading}
               >
                 <option value="">All Organizations</option>
-                {organizations.map((org) => (
-                  <option key={org.id} value={org.id}>
-                    {org.org_name}
+                {organizationsLoading ? (
+                  <option value="" disabled>Loading organizations…</option>
+                ) : organizationsLoadFailed ? (
+                  <option value="" disabled>Could not load organizations</option>
+                ) : orgFilterOptions.length === 0 ? (
+                  <option value="" disabled>
+                    {orgTypeFilter ? "No organizations of this type" : "No organizations available"}
                   </option>
-                ))}
+                ) : (
+                  orgFilterOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
 
@@ -1975,11 +2037,14 @@ export default function UserManagementNew({
           )}
           {filteredUsers.length > 0 ? (
             <>
-              <div className="border rounded-lg overflow-x-auto">
-                <Table className="min-w-[720px]">
+              {/* Fixed layout keeps column widths independent of which rows the
+                  org-type filter returns; the Table wrapper is the only horizontal
+                  scroller and Actions stays pinned right from md up. */}
+              <div className="border rounded-lg overflow-hidden">
+                <Table ref={setUsersTableEl} className="table-fixed min-w-[1200px]">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-12">
+                      <TableHead className="w-10">
                         <Checkbox
                           checked={
                             filteredUsers.filter((u) => u.id !== userProfile.id)
@@ -1996,7 +2061,7 @@ export default function UserManagementNew({
                         />
                       </TableHead>
                       <TableHead className="w-12 text-center">#</TableHead>
-                      <TableHead>
+                      <TableHead className="whitespace-nowrap">
                         <button
                           onClick={() => handleSort("full_name")}
                           className="flex items-center gap-1 hover:text-[var(--sera-ink)] transition-colors font-medium"
@@ -2013,7 +2078,7 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead>
+                      <TableHead className="w-[136px] whitespace-nowrap">
                         <button
                           onClick={() => handleSort("role_code")}
                           className="flex items-center gap-1 hover:text-[var(--sera-ink)] transition-colors font-medium"
@@ -2030,7 +2095,7 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead>
+                      <TableHead className="w-[150px] whitespace-nowrap">
                         <button
                           onClick={() => handleSort("organization_id")}
                           className="flex items-center gap-1 hover:text-[var(--sera-ink)] transition-colors font-medium"
@@ -2047,8 +2112,8 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead>Program</TableHead>
-                      <TableHead>
+                      <TableHead className="w-[120px] whitespace-nowrap">Program</TableHead>
+                      <TableHead className="w-[150px] whitespace-nowrap">
                         <button
                           onClick={() => handleSort("referral_phone")}
                           className="flex items-center gap-1 hover:text-[var(--sera-ink)] transition-colors font-medium"
@@ -2065,7 +2130,7 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead>
+                      <TableHead className="w-[164px] whitespace-nowrap overflow-hidden">
                         <button
                           onClick={() => handleSort("last_login_at")}
                           className="flex items-center gap-1 hover:text-[var(--sera-ink)] transition-colors font-medium"
@@ -2082,12 +2147,14 @@ export default function UserManagementNew({
                           )}
                         </button>
                       </TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
+                      <TableHead className={`w-[192px] px-2 text-right whitespace-nowrap bg-white md:sticky md:right-0 md:z-10 ${actionsCoverContent ? "md:shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.10)]" : ""}`}>
+                        Actions
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {paginatedUsers.map((user, index) => (
-                      <TableRow key={user.id} className="hover:bg-[var(--sera-ink)]/[0.02]">
+                      <TableRow key={user.id} className="group hover:bg-[var(--sera-ink)]/[0.02]">
                         <TableCell>
                           <Checkbox
                             checked={selectedUsers.has(user.id)}
@@ -2101,18 +2168,13 @@ export default function UserManagementNew({
                           {startIndex + index + 1}
                         </TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-3">
-                            <div className="relative">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div className="relative shrink-0">
                               <Avatar className="w-10 h-10">
                                 {user.avatar_url && (
                                   <AvatarImage
-                                    src={
-                                      getStorageUrl(
-                                        `${user.avatar_url.split("?")[0]}?t=${new Date(user.updated_at).getTime()}`,
-                                      ) || user.avatar_url
-                                    }
+                                    src={getAvatarSrc(user.avatar_url)}
                                     alt={getUserDisplayName(user)}
-                                    key={`avatar-${user.id}-${user.updated_at}`}
                                   />
                                 )}
                                 <AvatarFallback className="bg-gradient-to-br from-[var(--sera-orange)] to-[var(--sera-orange-deep)] text-white text-xs font-medium">
@@ -2149,7 +2211,7 @@ export default function UserManagementNew({
                         <TableCell>
                           <Badge
                             variant="outline"
-                            className={getRoleBadgeColor(user.role_code)}
+                            className={`max-w-full ${getRoleBadgeColor(user.role_code)}`}
                           >
                             {roles.find((r) => r.role_code === user.role_code)
                               ?.role_name || user.role_code}
@@ -2162,16 +2224,16 @@ export default function UserManagementNew({
                               if (!org) return <span className="text-[var(--sera-muted)]/70 italic">End User</span>;
                               if (org.org_type_code === 'SHOP') {
                                 return (
-                                  <div>
+                                  <div className="min-w-0">
                                     <button
                                       type="button"
                                       onClick={() => handleOpenOrganizationDialog(user, org)}
-                                      className="text-left text-[var(--sera-ink)] font-medium hover:text-[var(--sera-orange)] hover:underline"
-                                      title="View organization master data"
+                                      className="block max-w-full truncate text-left text-[var(--sera-ink)] font-medium hover:text-[var(--sera-orange)] hover:underline"
+                                      title={org.org_name}
                                     >
                                       {org.org_name}
                                     </button>
-                                    {org.branch && <span className="text-[var(--sera-muted)] text-xs ml-1">({org.branch})</span>}
+                                    {org.branch && <span className="block truncate text-[var(--sera-muted)] text-xs" title={org.branch}>({org.branch})</span>}
                                   </div>
                                 );
                               }
@@ -2179,7 +2241,7 @@ export default function UserManagementNew({
                                 <button
                                   type="button"
                                   onClick={() => handleOpenOrganizationDialog(user, org)}
-                                  className="text-left text-[var(--sera-ink)] hover:text-[var(--sera-orange)] hover:underline"
+                                  className="block max-w-full truncate text-left text-[var(--sera-ink)] hover:text-[var(--sera-orange)] hover:underline"
                                   title="View organization master data"
                                 >
                                   {getOrgTypeName(org.org_type_code || "")}
@@ -2205,7 +2267,7 @@ export default function UserManagementNew({
                             });
 
                             if (!referenceUser) {
-                              return <span className="text-[var(--sera-ink)]">{user.referral_phone}</span>;
+                              return <span className="block truncate text-[var(--sera-ink)]">{user.referral_phone}</span>;
                             }
 
                             return (
@@ -2220,8 +2282,8 @@ export default function UserManagementNew({
                             );
                           })()}
                         </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
+                        <TableCell className="overflow-hidden">
+                          <div className="flex flex-wrap items-center gap-1">
                             {isUserOnline(getLatestActivityAt(user)) && (
                               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
                                 <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full mr-1 animate-pulse" />
@@ -2240,13 +2302,13 @@ export default function UserManagementNew({
                             </span>
                           </div>
                         </TableCell>
-                        <TableCell className="text-right">
+                        <TableCell className={`px-2 text-right bg-white group-hover:[background-color:color-mix(in_srgb,var(--sera-ink)_2%,white)] md:sticky md:right-0 md:z-10 ${actionsCoverContent ? "md:shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.10)]" : ""}`}>
                           <TooltipProvider delayDuration={150}>
-                            <div className="flex items-center justify-end gap-1">
+                            <div className="flex flex-nowrap items-center justify-end gap-1">
                               {hasConsumerLaneConfirmation(user) && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
-                                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-amber-200 bg-amber-50 text-amber-600">
+                                    <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-amber-200 bg-amber-50 text-amber-600">
                                       <Shield className="w-4 h-4" />
                                     </span>
                                   </TooltipTrigger>
@@ -2261,7 +2323,7 @@ export default function UserManagementNew({
                                   size="sm"
                                   onClick={() => handleAccountStatus(user.id, "ACTIVE", user.full_name || user.email)}
                                   disabled={isSaving || user.id === userProfile.id}
-                                  className="text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                                  className="h-8 w-8 shrink-0 p-0 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
                                   title="Resume user (restores the access they had)"
                                 >
                                   <PlayCircle className="w-4 h-4" />
@@ -2272,7 +2334,7 @@ export default function UserManagementNew({
                                   size="sm"
                                   onClick={() => handleAccountStatus(user.id, "SUSPENDED", user.full_name || user.email)}
                                   disabled={isSaving || user.id === userProfile.id}
-                                  className="text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                                  className="h-8 w-8 shrink-0 p-0 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
                                   title={user.id === userProfile.id ? "Cannot suspend yourself" : "Suspend user (temporary; keeps their access)"}
                                 >
                                   <PauseCircle className="w-4 h-4" />
@@ -2290,9 +2352,9 @@ export default function UserManagementNew({
                                 }
                                 disabled={isSaving || user.id === userProfile.id}
                                 className={
-                                  user.is_active
+                                  "h-8 w-8 shrink-0 p-0 " + (user.is_active
                                     ? "text-green-600 hover:text-green-700 hover:bg-green-50"
-                                    : "text-[var(--sera-muted)]/70 hover:text-[var(--sera-muted)] hover:bg-[var(--sera-ink)]/[0.02]"
+                                    : "text-[var(--sera-muted)]/70 hover:text-[var(--sera-muted)] hover:bg-[var(--sera-ink)]/[0.02]")
                                 }
                                 title={
                                   user.id === userProfile.id
@@ -2312,7 +2374,7 @@ export default function UserManagementNew({
                                   setDialogOpen(true);
                                 }}
                                 disabled={isSaving}
-                                className="text-[var(--sera-orange)] hover:text-[var(--sera-orange-deep)] hover:bg-[var(--sera-orange)]/[0.06]"
+                                className="h-8 w-8 shrink-0 p-0 text-[var(--sera-orange)] hover:text-[var(--sera-orange-deep)] hover:bg-[var(--sera-orange)]/[0.06]"
                                 title="Edit user"
                               >
                                 <Edit className="w-4 h-4" />
@@ -2328,7 +2390,7 @@ export default function UserManagementNew({
                                     )
                                   }
                                   disabled={isSaving || user.id === userProfile.id}
-                                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                  className="h-8 w-8 shrink-0 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
                                   title={
                                     user.id === userProfile.id
                                       ? "Cannot delete yourself"
@@ -2452,7 +2514,7 @@ export default function UserManagementNew({
               {deleteOtpStep === 'otp' && (
                 <>
                   A 4-digit code was sent via {deleteOtpChannel === 'email' ? 'email' : deleteOtpChannel === 'sms' ? 'SMS' : 'WhatsApp'} to <strong>{deleteOtpMaskedRecipient}</strong>. Enter it below to confirm.
-                  {deleteOtpRemovalMode === 'archive' && ' This account has business history, so it will be archived and its original email and phone will be released for reuse.'}
+                  {deleteOtpRemovalMode === 'archive' && ' This account has business history, so it will be archived: its history is kept and its email and phone stay reserved (reactivate the account if the person returns).'}
                 </>
               )}
               {deleteOtpStep === 'deleting' && 'Please wait while the user is being removed...'}

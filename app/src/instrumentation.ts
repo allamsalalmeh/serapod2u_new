@@ -22,3 +22,22 @@ export async function register() {
     }
   }
 }
+
+/**
+ * Next.js server error hook: uncaught failures in server component renders, route handlers and server actions.
+ * Recorded in System Logs (sanitized, bounded, never throws); Next.js's own error handling and logging are unchanged.
+ * Handled failures (a route that catches and returns 500) are reported explicitly with reportServerError.
+ */
+export async function onRequestError(
+  error: unknown,
+  request: { path: string; method: string; headers: Record<string, string | string[] | undefined> },
+  context: { routerKind: string; routePath: string; routeType: string; renderSource?: string },
+) {
+  if (process.env.NEXT_RUNTIME !== 'nodejs') return
+  try {
+    const { reportRequestError } = await import('@/lib/system-logs/server')
+    await reportRequestError(error, request, context)
+  } catch {
+    // Diagnostics must never change how Next.js handles the original error.
+  }
+}

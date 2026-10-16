@@ -82,6 +82,7 @@ import { ReferenceChangeLog } from './ReferenceChangeLog'
 import { ReferralDetail } from './ReferralDetail'
 import { ShopPointsReport } from './ShopPointsReport'
 import { DEFAULT_REPORT_STATUS_SETTINGS, normalizeReportStatusSettings, type ReportStatusSettings } from '@/lib/engagement/report-status-settings'
+import { referenceSuffix, reportClientError } from '@/lib/system-logs/client'
 
 type RedeemItemRow = Database["public"]["Tables"]["redeem_items"]["Row"]
 type PointsTransactionRow = Database["public"]["Tables"]["points_transactions"]["Row"]
@@ -148,7 +149,6 @@ export function AdminCatalogPage({ userProfile }: AdminCatalogPageProps) {
   const supabase = createClient()
   const [rewards, setRewards] = useState<RedeemItemRow[]>([])
   const [transactions, setTransactions] = useState<PointsTransactionRow[]>([])
-  const [shopUsers, setShopUsers] = useState<ShopUser[]>([])
   const [shopStaffUsers, setShopStaffUsers] = useState<any[]>([])
   const [consumerUsers, setConsumerUsers] = useState<any[]>([])
   const [shopStaffLoadError, setShopStaffLoadError] = useState<string | null>(null)
@@ -159,7 +159,6 @@ export function AdminCatalogPage({ userProfile }: AdminCatalogPageProps) {
   const [statusFilter, setStatusFilter] = useState<"all" | RewardStatus>("all")
   const [categoryFilter, setCategoryFilter] = useState<"all" | RewardCategory>("all")
   const [searchTerm, setSearchTerm] = useState("")
-  const [userSearchTerm, setUserSearchTerm] = useState("")
   const [sortOption, setSortOption] = useState<string>("updated-desc")
   const [activeTab, setActiveTab] = useState<"rewards" | "users" | "staff" | "consumers" | "settings" | "redemptions" | "feedback" | "referral">("rewards")
 
@@ -271,11 +270,10 @@ export function AdminCatalogPage({ userProfile }: AdminCatalogPageProps) {
     }
   }, [companyId])
 
-  // Load shop users when switching to users tab
+  // The 'users' tab (Shop Points Monitor) loads its own data through
+  // /api/admin/shop-points-report, so only staff/consumer tabs are loaded here.
   useEffect(() => {
-    if (activeTab === 'users' && shopUsers.length === 0) {
-      loadShopUsers()
-    } else if (activeTab === 'staff' && shopStaffUsers.length === 0) {
+    if (activeTab === 'staff' && shopStaffUsers.length === 0) {
       loadShopStaffUsers()
     } else if (activeTab === 'consumers' && consumerUsers.length === 0) {
       loadConsumerUsers()
@@ -340,168 +338,6 @@ export function AdminCatalogPage({ userProfile }: AdminCatalogPageProps) {
     }
   }
 
-  async function loadShopUsers() {
-    setUsersLoading(true)
-    const supabaseClient = createClient()
-
-    try {
-      console.log("🔍 Loading shops for company:", companyId, userProfile.organizations.org_name)
-
-      // Step 1: Get all distributors under this HQ/company
-      const { data: distributors, error: distError } = await supabaseClient
-        .from("organizations")
-        .select("id, org_name, org_type_code")
-        .eq("parent_org_id", companyId)
-        .in("org_type_code", ["DIST"])
-        .eq("is_active", true)
-
-      if (distError) {
-        console.error("❌ Failed to load distributors", distError)
-      }
-
-      console.log("✅ Found distributors:", distributors?.length || 0)
-      const distributorIds = distributors?.map(d => d.id) || []
-
-      // Step 2: Get all shops under those distributors (and direct shops under HQ)
-      let shopOrgIds: string[] = []
-
-      if (distributorIds.length > 0) {
-        const { data: shopOrgs, error: orgsError } = await supabaseClient
-          .from("organizations")
-          .select("id, org_name, org_type_code, parent_org_id")
-          .or(`parent_org_id.in.(${distributorIds.join(',')}),parent_org_id.eq.${companyId}`)
-          .in("org_type_code", ["SHOP"])
-          .eq("is_active", true)
-
-        if (orgsError) {
-          console.error("❌ Failed to load shop organizations", orgsError)
-          setUsersLoading(false)
-          return
-        }
-
-        console.log("✅ Found shop organizations:", shopOrgs?.length || 0)
-        shopOrgs?.forEach(shop => {
-          console.log(`  📍 Shop: ${shop.org_name} (ID: ${shop.id}, Parent: ${shop.parent_org_id})`)
-        })
-
-        shopOrgIds = shopOrgs?.map(org => org.id) || []
-      } else {
-        // No distributors, check for shops directly under HQ
-        const { data: shopOrgs, error: orgsError } = await supabaseClient
-          .from("organizations")
-          .select("id, org_name, org_type_code, parent_org_id")
-          .eq("parent_org_id", companyId)
-          .in("org_type_code", ["SHOP"])
-          .eq("is_active", true)
-
-        if (orgsError) {
-          console.error("❌ Failed to load shop organizations", orgsError)
-          setUsersLoading(false)
-          return
-        }
-
-        console.log("✅ Found shop organizations (direct under HQ):", shopOrgs?.length || 0)
-        shopOrgIds = shopOrgs?.map(org => org.id) || []
-      }
-
-      if (shopOrgIds.length === 0) {
-        console.log("⚠️ No shop organizations found in company hierarchy")
-        setShopUsers([])
-        setUsersLoading(false)
-        return
-      }
-
-      // Get shop users from these organizations
-      const { data: shopUsersData, error: usersError } = await supabaseClient
-        .from("users")
-        .select(`
-          id,
-          email,
-          phone,
-          organization_id,
-          role_code,
-          organizations!fk_users_organization (
-            id,
-            org_name,
-            org_type_code
-          )
-        `)
-        .in("organization_id", shopOrgIds)
-        .eq("is_active", true)
-
-      if (usersError) {
-        console.error("❌ Failed to load shop users", usersError)
-        setUsersLoading(false)
-        return
-      }
-
-      console.log("✅ Loaded shop users:", shopUsersData?.length || 0)
-
-      // Query v_shop_points_balance view for accurate real-time balances
-      const { data: shopBalances, error: balanceError } = await (supabaseClient as any)
-        .from("v_shop_points_balance")
-        .select("*")
-        .in("shop_id", shopOrgIds)
-
-      if (balanceError) {
-        console.error("❌ Failed to load shop balances from view", balanceError)
-      }
-
-      console.log("✅ Loaded shop balances:", shopBalances?.length || 0)
-
-      // Create organization ID to user mapping
-      const orgIdToUserMap = new Map<string, any>()
-
-      shopUsersData?.forEach((user) => {
-        if (user.organization_id) {
-          orgIdToUserMap.set(user.organization_id, user)
-        }
-      })
-
-      // Build user list from balances
-      const users: ShopUser[] = []
-
-      shopBalances?.forEach((balance: any) => {
-        const shopUser = orgIdToUserMap.get(balance.shop_id)
-
-        if (!shopUser) {
-          console.log("⚠️ Shop org not found for balance:", balance.shop_id)
-          return
-        }
-
-        const org = shopUser.organizations as any
-        users.push({
-          user_id: shopUser.id,
-          shop_name: org?.org_name || 'Unknown Shop',
-          shop_phone: shopUser.phone || '',
-          shop_email: shopUser.email || null,
-          organization_id: shopUser.organization_id || '',
-          current_balance: balance.current_balance || 0,
-          total_collected: balance.total_earned_scans + balance.total_manual_adjustments || 0,
-          total_collected_system: balance.total_earned_scans || 0,
-          total_collected_manual: balance.total_manual_adjustments || 0,
-          total_redeemed: balance.total_redeemed || 0,
-          last_transaction_date: balance.last_transaction_at,
-          transaction_count: balance.transaction_count || 0
-        })
-      })
-
-      // Sort by current balance (highest first)
-      users.sort((a, b) => b.current_balance - a.current_balance)
-
-      console.log("🎯 Final shop users with points:", users.length)
-      users.forEach(u => {
-        console.log(`  - ${u.shop_name}: ${u.total_collected} collected, ${u.current_balance} balance, ${u.total_redeemed} redeemed`)
-      })
-
-      setShopUsers(users)
-    } catch (error) {
-      console.error("Error loading shop users:", error)
-    } finally {
-      setUsersLoading(false)
-    }
-  }
-
   async function loadConsumerUsers() {
     setUsersLoading(true)
     setConsumerLoadError(null)
@@ -510,14 +346,15 @@ export function AdminCatalogPage({ userProfile }: AdminCatalogPageProps) {
       const result = await response.json()
 
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to load consumer performance')
+        throw Object.assign(new Error(result.error || 'Failed to load consumer performance'), { response, body: result })
       }
 
       setConsumerUsers(result.data || [])
     } catch (error: any) {
       console.error("Error loading consumer users:", error)
       setConsumerUsers([])
-      setConsumerLoadError(error?.message || 'Failed to load consumer performance')
+      const ref = reportClientError(error, { module: 'Product Catalog', action: 'Load consumer performance', response: error?.response, body: error?.body, method: 'GET', apiRoute: '/api/admin/consumer-performance' })
+      setConsumerLoadError(`${error?.message || 'Failed to load consumer performance'}${referenceSuffix(ref)}`)
     } finally {
       setUsersLoading(false)
     }
@@ -531,14 +368,15 @@ export function AdminCatalogPage({ userProfile }: AdminCatalogPageProps) {
       const result = await response.json()
 
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to load shop staff performance')
+        throw Object.assign(new Error(result.error || 'Failed to load shop staff performance'), { response, body: result })
       }
 
       setShopStaffUsers(result.data || [])
     } catch (error: any) {
       console.error('Error loading shop staff users:', error)
       setShopStaffUsers([])
-      setShopStaffLoadError(error?.message || 'Failed to load shop staff performance')
+      const ref = reportClientError(error, { module: 'Product Catalog', action: 'Load shop staff performance', response: error?.response, body: error?.body, method: 'GET', apiRoute: '/api/admin/shop-staff-performance' })
+      setShopStaffLoadError(`${error?.message || 'Failed to load shop staff performance'}${referenceSuffix(ref)}`)
     } finally {
       setUsersLoading(false)
     }
@@ -697,7 +535,7 @@ export function AdminCatalogPage({ userProfile }: AdminCatalogPageProps) {
       if (isConsumer) {
         await loadConsumerUsers()
       } else {
-        await loadShopUsers()
+        await loadShopStaffUsers()
       }
 
       setShowAdjustPointsModal(false)
@@ -868,20 +706,6 @@ export function AdminCatalogPage({ userProfile }: AdminCatalogPageProps) {
       }
     })
   }, [categoryFilter, enrichedRewards, searchTerm, sortOption, statusFilter, rewardSortConfig])
-
-  const filteredUsers = useMemo(() => {
-    const term = userSearchTerm.trim().toLowerCase()
-    if (!term) return shopUsers
-
-    return shopUsers.filter((user) => {
-      return (
-        user.shop_name.toLowerCase().includes(term) ||
-        user.shop_phone.toLowerCase().includes(term) ||
-        (user.shop_email ?? '').toLowerCase().includes(term) ||
-        user.organization_id.toLowerCase().includes(term)
-      )
-    })
-  }, [shopUsers, userSearchTerm])
 
   // Reward Pagination & Sorting Helpers
   const rewardTotalPages = Math.ceil(filteredRewards.length / rewardItemsPerPage)

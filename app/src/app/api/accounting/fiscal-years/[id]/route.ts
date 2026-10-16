@@ -71,7 +71,7 @@ export async function PUT(
 
     const { data: userData } = await supabase
       .from('users')
-      .select('roles!inner(role_level)')
+      .select('organization_id, roles!inner(role_level)')
       .eq('id', user.id)
       .single()
 
@@ -142,7 +142,7 @@ export async function DELETE(
 
     const { data: userData } = await supabase
       .from('users')
-      .select('roles!inner(role_level)')
+      .select('organization_id, roles!inner(role_level)')
       .eq('id', user.id)
       .single()
 

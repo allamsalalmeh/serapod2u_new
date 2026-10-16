@@ -5,6 +5,7 @@
  */
 
 import { generateSecureQRCode, generateQRHash } from './security/qr-hash'
+import { qrBufferCases } from './orders/qr-buffer'
 
 /**
  * Generate unique QR code string for individual products
@@ -113,8 +114,9 @@ export function generateQRBatch(params: QRCodeGenerationParams): QRBatchResult {
   // Calculate total base units (actual order quantity)
   const totalBaseUnits = orderItems.reduce((sum, item) => sum + item.qty, 0)
 
-  // Calculate buffer quantity (extra codes for damaged/lost QR codes)
-  const bufferQuantity = Math.floor(totalBaseUnits * bufferPercent / 100)
+  // Calculate buffer quantity (extra codes for damaged/lost QR codes):
+  // floor(ordered cases × percent ÷ 100), the shared rule in lib/orders/qr-buffer
+  const bufferQuantity = qrBufferCases(totalBaseUnits, bufferPercent)
 
   // Total unique codes = base units + buffer
   const totalUniqueCodes = totalBaseUnits + bufferQuantity

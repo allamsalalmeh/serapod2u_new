@@ -1,164 +1,100 @@
 import { guardUserOperation } from '@/lib/security-access/operation'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { buildOrderEventPayload, initialOutboxAddress } from '@/lib/notifications/supplyChainEventQueue'
+import { RESOLVABLE_ORDER_EVENTS, previewNotificationRecipients, sourcesNotUsedWhenSending, type ResolvableOrderEvent } from '@/lib/notifications/configuredRecipients'
+
+/**
+ * GET /api/notifications/resolve
+ *
+ * Who would receive this notification for one real record, on one channel,
+ * using the draft recipient config from the Configure drawer. Recipients are
+ * resolved by the same rules the outbox worker uses; nothing is invented.
+ *
+ * Query: eventCode, sampleId (order number or id), channel, recipientConfig (JSON)
+ *
+ * Response `status`:
+ *   resolved     recipients found
+ *   empty        the record exists but no recipient resolves
+ *   not_found    no such record in the caller's organization
+ *   unsupported  this notification type has no sample-record lookup
+ *   error        the lookup failed (HTTP 4xx/5xx)
+ */
+
+const CHANNELS = ['whatsapp', 'sms', 'email']
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+const fail = (status: number, error: string) => NextResponse.json({ success: false, status: 'error', error }, { status })
 
 export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams
-    const eventCode = searchParams.get('eventCode')
-    // We use 'sampleId' generic param, but it could be orderId, sku, etc.
-    const sampleId = searchParams.get('sampleId')
+    const eventCode = searchParams.get('eventCode') || ''
+    const sampleId = (searchParams.get('sampleId') || '').trim()
+    const channel = searchParams.get('channel') || 'whatsapp'
     const recipientConfigStr = searchParams.get('recipientConfig')
 
-    if (!eventCode) {
-        return NextResponse.json({ error: 'Missing eventCode' }, { status: 400 })
-    }
+    if (!eventCode) return fail(400, 'Missing eventCode')
+    if (!CHANNELS.includes(channel)) return fail(400, 'Unknown channel')
 
     const supabase = await createClient()
     const { data: { user: saUser } } = await supabase.auth.getUser()
-    if (!saUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!saUser) return fail(401, 'Unauthorized')
     const saDenied = await guardUserOperation(saUser.id, 'platform.settings.manage')
     if (saDenied) return saDenied
 
+    if (!(RESOLVABLE_ORDER_EVENTS as readonly string[]).includes(eventCode)) {
+        return NextResponse.json({
+            success: true,
+            status: 'unsupported',
+            recipients: [],
+            message: 'Recipient lookup from a sample record is available for Order Submitted, Approved, Rejected and Closed only.',
+        })
+    }
+    if (!sampleId) return fail(400, 'Enter an order number')
+
+    let recipientConfig: Record<string, any> = {}
+    if (recipientConfigStr) {
+        try { recipientConfig = JSON.parse(recipientConfigStr) || {} } catch { return fail(400, 'Invalid recipient configuration') }
+    }
+
     try {
-        let recipientConfig = {}
-        if (recipientConfigStr) {
-            try { recipientConfig = JSON.parse(recipientConfigStr) } catch (e) { }
+        const { data: profile } = await supabase.from('users').select('organization_id').eq('id', saUser.id).single()
+        const orgId = profile?.organization_id
+        if (!orgId) return fail(404, 'Organization not found')
+
+        // Exact matches only — never interpolate user input into a filter string.
+        const orderColumns = 'id, company_id, buyer_org_id, seller_org_id'
+        const lookups = UUID.test(sampleId) ? ['id'] : ['display_doc_no', 'order_no']
+        let order: any = null
+        for (const column of lookups) {
+            const { data, error } = await supabase.from('orders').select(orderColumns).eq(column, sampleId).limit(1).maybeSingle()
+            if (error) throw new Error(error.message)
+            if (data) { order = data; break }
+        }
+        const inOrg = order && [order.company_id, order.buyer_org_id, order.seller_org_id].includes(orgId)
+        if (!order || !inOrg) {
+            return NextResponse.json({ success: true, status: 'not_found', recipients: [], message: `No order ${sampleId} found in your organization.` })
         }
 
-        const recipients = []
+        const { payload } = await buildOrderEventPayload(supabase, { orderId: order.id, eventCode: eventCode as ResolvableOrderEvent })
+        const recipients = await previewNotificationRecipients(supabase, {
+            orgId,
+            eventCode,
+            channel,
+            recipientConfig,
+            payload,
+            eventAddress: initialOutboxAddress(eventCode, channel, payload, recipientConfig),
+        })
 
-        // Mock sample data if no sampleId provided, or resolve real data
-        // Case 1: Order Events
-        if (eventCode.startsWith('order') && sampleId) {
-            // Fetch order to get relations
-            const { data: order } = await supabase
-                .from('orders')
-                .select('*, consumer:users!orders_created_by_fkey(*)')
-                .or(`order_no.eq.${sampleId},id.eq.${sampleId}`)
-                .single()
-
-            if (order) {
-                // Logic based on recipientConfig
-                const config = recipientConfig as any
-
-                // Helper to check if target enabled (supports new 'recipient_targets' and legacy 'type')
-                const isEnabled = (target: string) => {
-                    if (config.recipient_targets) {
-                        return !!config.recipient_targets[target]
-                    }
-                    // Legacy fallback
-                    if (target === 'roles') return config.type === 'roles'
-                    if (target === 'dynamic_org') return config.type === 'dynamic'
-                    if (target === 'users') return config.type === 'users'
-                    if (target === 'consumer') return config.include_consumer
-                    return false
-                }
-
-                // 1. Dynamic Organization (Manufacturer/Distributor/Warehouse)
-                if (isEnabled('dynamic_org')) {
-                    const targetType = config.dynamic_target // e.g. manufacturer
-
-                    if (targetType === 'manufacturer' && order.seller_org_id) {
-                        const { data: users } = await supabase
-                            .from('users')
-                            .select('id, full_name, email, phone')
-                            .eq('organization_id', order.seller_org_id)
-
-                        if (users) recipients.push(...users.map(u => ({
-                            user_id: u.id,
-                            full_name: u.full_name,
-                            email: u.email,
-                            phone: u.phone,
-                            type: 'Manufacturer Staff'
-                        })))
-                    }
-
-                    if (targetType === 'distributor' && order.buyer_org_id) {
-                        const { data: users } = await supabase
-                            .from('users')
-                            .select('id, full_name, email, phone')
-                            .eq('organization_id', order.buyer_org_id)
-
-                        if (users) recipients.push(...users.map(u => ({
-                            user_id: u.id,
-                            full_name: u.full_name,
-                            email: u.email,
-                            phone: u.phone,
-                            type: 'Distributor Staff'
-                        })))
-                    }
-                }
-
-                // 2. Specific Users
-                if (isEnabled('users') && config.recipient_users?.length > 0) {
-                    const { data: users } = await supabase
-                        .from('users')
-                        .select('id, full_name, email, phone')
-                        .in('id', config.recipient_users)
-
-                    if (users) recipients.push(...users.map(u => ({
-                        user_id: u.id,
-                        full_name: u.full_name,
-                        email: u.email,
-                        phone: u.phone,
-                        type: 'Specific User'
-                    })))
-                }
-
-                // 3. Roles (Best effort attempt if 'role' column exists or ignore for now)
-                if (isEnabled('roles') && config.roles?.length > 0) {
-                    // Trying to query by role if feasible. 
-                    // Assuming 'role_code' column exists on users table based on UI selection
-                    const { data: users, error } = await supabase
-                        .from('users')
-                        .select('id, full_name, email, phone, role_code')
-                        .in('role_code', config.roles)
-
-                    if (!error && users) {
-                        recipients.push(...users.map(u => ({
-                            user_id: u.id,
-                            full_name: u.full_name,
-                            email: u.email,
-                            phone: u.phone,
-                            type: `Role: ${u.role_code}`
-                        })))
-                    }
-                }
-
-                // 4. Consumer
-                if ((isEnabled('consumer') || config.include_consumer) && order.consumer) {
-                    const consumer = order.consumer as any
-                    recipients.push({
-                        user_id: consumer.id,
-                        full_name: consumer.full_name || 'Consumer',
-                        email: consumer.email,
-                        phone: consumer.phone,
-                        type: 'Consumer'
-                    })
-                }
-
-                // Deduplicate recipients by user_id
-                const uniqueRecipients = Array.from(new Map(recipients.map(item => [item.user_id, item])).values())
-
-                // Replace recipients array
-                recipients.length = 0
-                recipients.push(...uniqueRecipients)
-            }
-        }
-
-        // Fallback/Mock for preview if real resolution returns empty or for other events
-        if (recipients.length === 0) {
-            // Return dummy data for UI preview purposes if we can't resolve real data
-            recipients.push(
-                { user_id: 'mock-1', full_name: 'Alice Manager', email: 'alice@manufacturer.com', phone: '+60123456789', type: 'Manufacturer Admin' },
-                { user_id: 'mock-2', full_name: 'Bob Warehouse', email: 'bob@warehouse.com', phone: '+60198765432', type: 'Warehouse Staff' }
-            )
-        }
-
-        return NextResponse.json({ success: true, recipients })
-
+        return NextResponse.json({
+            success: true,
+            status: recipients.length ? 'resolved' : 'empty',
+            channel,
+            recipients,
+            notUsedWhenSending: sourcesNotUsedWhenSending(recipientConfig),
+        })
     } catch (error: any) {
         console.error('Resolve error:', error)
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        return fail(500, error?.message || 'Recipient lookup failed')
     }
 }

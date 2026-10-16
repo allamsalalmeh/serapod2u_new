@@ -19,6 +19,11 @@ import {
 } from '@/lib/inventory/stock-movement-history'
 import { canonicalOrderNumber, orderIdsForMovements, resolveMovementReferenceNo } from '@/lib/inventory/stock-movement-reference'
 import {
+  STOCK_MOVEMENT_ACCESS_DENIED_MESSAGE,
+  STOCK_MOVEMENT_REPORT_SOURCE,
+  isStockMovementAccessDenied,
+} from '@/lib/inventory/stock-movement-access'
+import {
   BarChart3,
   Search,
   Filter,
@@ -95,6 +100,7 @@ interface StockMovementReportViewProps {
 export default function StockMovementReportView({ userProfile, onViewChange, initialSearch }: StockMovementReportViewProps) {
   const [movements, setMovements] = useState<StockMovement[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState(initialSearch || '')
   const [movementTypeFilter, setMovementTypeFilter] = useState('all')
   const [referenceTypeFilter, setReferenceTypeFilter] = useState('all')
@@ -295,6 +301,7 @@ export default function StockMovementReportView({ userProfile, onViewChange, ini
   const loadMovements = async () => {
     try {
       setLoading(true)
+      setLoadError(null)
 
       // Pre-fetch variants matching the search query if present
       let matchingVariantIds: string[] = []
@@ -319,10 +326,11 @@ export default function StockMovementReportView({ userProfile, onViewChange, ini
         matchingOrderIds = (matchingOrders || []).map((order: any) => order.id)
       }
 
-      // Try using the optimized ordered view first, fallback to base table if unavailable
-      let tableName = 'vw_stock_movements_ordered'
+      // The report reads the movement view only: it filters rows to the caller's
+      // inventory scope and masks costs/balances the caller may not see. The
+      // stock_movements table never exposes those columns to the browser.
       let query = (supabase as any)
-        .from(tableName)
+        .from(STOCK_MOVEMENT_REPORT_SOURCE)
         .select('*')
         .order('created_at', { ascending: false, nullsFirst: false })
         .order('id', { ascending: false })
@@ -375,82 +383,14 @@ export default function StockMovementReportView({ userProfile, onViewChange, ini
         query = query.lte('created_at', `${dateTo}T23:59:59`)
       }
 
-      let { data, error } = await query
-
-      // If view doesn't exist, fallback to stock_movements table
-      if (error && (error.message?.includes('does not exist') || error.code === '42P01')) {
-        console.log('View not found, using stock_movements table as fallback')
-        tableName = 'stock_movements'
-        query = (supabase as any)
-          .from(tableName)
-          .select(`
-            id,
-            movement_type,
-            reference_type,
-            reference_id,
-            reference_no,
-            quantity_change,
-            quantity_before,
-            quantity_after,
-            unit_cost,
-            total_cost,
-            reason,
-            notes,
-            warehouse_location,
-            created_at,
-            variant_id,
-            from_organization_id,
-            to_organization_id,
-            manufacturer_id,
-            created_by,
-            stock_config_id,
-            inventory_stock_configurations!stock_movements_stock_config_fk(id, config_code, config_label, stock_sku, volume_ml, packaging, status)
-          `)
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false })
-          .range((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage - 1)
-
-        // Re-apply filters
-        if (searchQuery) {
-          const textSearchConditions = [
-            'reference_no',
-            'notes',
-            'movement_type',
-            'reason',
-            'warehouse_location'
-          ].map((column) => `${column}.ilike.%${searchQuery}%`)
-
-          if (matchingVariantIds.length > 0) {
-            textSearchConditions.push(`variant_id.in.(${matchingVariantIds.join(',')})`)
-          }
-          if (matchingOrderIds.length > 0) {
-            textSearchConditions.push(`reference_id.in.(${matchingOrderIds.join(',')})`)
-          }
-
-          query = query.or(textSearchConditions.join(','))
-        }
-        if (movementTypeFilter !== 'all') {
-          query = query.eq('movement_type', movementTypeFilter)
-        }
-        if (locationFilter !== 'all') {
-          query = query.or(`from_organization_id.eq.${locationFilter},to_organization_id.eq.${locationFilter}`)
-        }
-        if (referenceTypeFilter !== 'all') {
-          query = query.eq('reference_type', referenceTypeFilter)
-        }
-        if (dateFrom) {
-          query = query.gte('created_at', `${dateFrom}T00:00:00`)
-        }
-        if (dateTo) {
-          query = query.lte('created_at', `${dateTo}T23:59:59`)
-        }
-
-        const result = await query
-        data = result.data
-        error = result.error
-      }
+      const { data, error } = await query
 
       if (error) {
+        if (isStockMovementAccessDenied(error)) {
+          setMovements([])
+          setLoadError(STOCK_MOVEMENT_ACCESS_DENIED_MESSAGE)
+          return
+        }
         console.error('Query error details:', error)
         throw error
       }
@@ -494,7 +434,7 @@ export default function StockMovementReportView({ userProfile, onViewChange, ini
       if (variantIds.length > 0) {
         const { data: variants } = await supabase
           .from('product_variants')
-          .select('id, variant_code, variant_name, image_url, base_cost, products(product_name)')
+          .select('id, variant_code, variant_name, image_url, products(product_name)')
           .in('id', variantIds)
 
         variants?.forEach((v: any) => {
@@ -774,7 +714,8 @@ export default function StockMovementReportView({ userProfile, onViewChange, ini
 
       setMovements(filteredData)
     } catch (error: any) {
-      console.error('Failed to load movements:', error)
+      console.error('Failed to load movements:', error?.message ?? error, error?.code ?? '', error?.details ?? '')
+      setLoadError('Failed to load stock movements. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -1356,7 +1297,7 @@ export default function StockMovementReportView({ userProfile, onViewChange, ini
                 ) : movements.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={10} className="text-center py-8 text-[var(--sera-muted)]">
-                      No movements found
+                      {loadError ?? 'No movements found'}
                     </TableCell>
                   </TableRow>
                 ) : (

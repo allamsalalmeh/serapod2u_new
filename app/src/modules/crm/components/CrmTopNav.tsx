@@ -3,12 +3,13 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { HeadphonesIcon, Search, ChevronRight, ChevronDown, X, Menu as MenuIcon } from 'lucide-react'
 import {
-    crmNavGroups,
+    crmNavGroups as all_crmNavGroups,
     getAllCrmNavItems,
     getCrmBreadcrumb,
     type CrmNavGroup,
     type CrmNavChild,
 } from '@/modules/crm/crmNav'
+import { useAccessibleNavGroups } from '@/hooks/useNavAccess'
 import { cn } from '@/lib/utils'
 
 interface CrmTopNavProps {
@@ -17,6 +18,8 @@ interface CrmTopNavProps {
 }
 
 export default function CrmTopNav({ currentView, onNavigate }: CrmTopNavProps) {
+    // Only the functions this person may open (Security & Access snapshot); the server decides every page and API too.
+    const crmNavGroups = useAccessibleNavGroups(all_crmNavGroups)
     const [openGroupId, setOpenGroupId] = useState<string | null>(null)
     const [searchQuery, setSearchQuery] = useState('')
     const [searchOpen, setSearchOpen] = useState(false)

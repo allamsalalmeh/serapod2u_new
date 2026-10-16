@@ -12,6 +12,8 @@ export const QR_BATCH_PROCESS_PATH = '/api/qr-batches/process'
 
 /** Same marker as LEASE_SKIPPED in '@/lib/cron/lease' (kept local: that module is server-only). */
 const LEASE_SKIPPED = 'SKIPPED_ALREADY_RUNNING'
+/** Body marker of lib/cron/remote-db-guard (HTTP 409). */
+export const REMOTE_DB_WORKER_BLOCKED = 'REMOTE_DB_WORKER_BLOCKED'
 
 export type QRWorkerRunOutcome =
   /** Nothing left to process. */
@@ -22,6 +24,8 @@ export type QRWorkerRunOutcome =
   | 'progress'
   /** The batch is no longer queued/processing. */
   | 'complete'
+  /** This (local) process may not run workers against the remote DB; the batch is confirmed queued for the deployed worker. */
+  | 'waiting_for_worker'
 
 export class QRWorkerRequestError extends Error {
   readonly status: number
@@ -39,6 +43,7 @@ type WorkerBody = {
   details?: unknown
   status?: unknown
   hasMore?: unknown
+  batch_status?: unknown
 }
 
 function describeFailure(status: number, body: WorkerBody | null): string {
@@ -55,6 +60,12 @@ export async function interpretQRWorkerResponse(response: Response): Promise<QRW
     body = (await response.json()) as WorkerBody
   } catch {
     body = null
+  }
+
+  // The one 409 that is not a failure: the guard refused to run here AND the API confirmed the batch is still
+  // queued/processing. Any other 409 (or a guard reply without that confirmation) stays an error.
+  if (response.status === 409 && body?.status === REMOTE_DB_WORKER_BLOCKED && (body.batch_status === 'queued' || body.batch_status === 'processing')) {
+    return 'waiting_for_worker'
   }
 
   if (!response.ok) {

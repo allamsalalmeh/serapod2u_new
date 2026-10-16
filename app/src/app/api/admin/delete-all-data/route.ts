@@ -14,6 +14,10 @@ export async function POST(request: NextRequest) {
     // Centralized environment + auth + role guard
     const guard = await assertDestructiveOpsAllowed(request, 'delete-all-data')
     if (guard.blocked) return guard.response
+    // The preserved Super Admin is the verified caller from the guard. Without it nothing is deleted: the steps below
+    // keep exactly this account and its organization.
+    if (!guard.userId) return NextResponse.json({ success: false, error: 'Caller could not be verified' }, { status: 401 })
+    const user = { id: guard.userId, email: guard.userEmail ?? null }
 
     const supabase = await createClient()
 

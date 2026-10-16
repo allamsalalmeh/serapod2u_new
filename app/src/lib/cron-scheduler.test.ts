@@ -53,6 +53,7 @@ const WORKERS = [
   '/api/cron/notification-outbox-worker',
   '/api/cron/sa-decision-retention',
   '/api/cron/sa-governance-maintenance',
+  '/api/cron/system-log-retention',
   '/api/cron/storefront-unpaid-expiry',
   '/api/cron/tiktok-shop-sync',
   '/api/cron/tiktok-daily-report',

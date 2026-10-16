@@ -1,4 +1,4 @@
-import { guardUserOperation } from '@/lib/security-access/operation'
+import { guardUserOperationInReach } from '@/lib/server/warehouse-reach'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -29,7 +29,8 @@ export async function POST(request: NextRequest) {
     if (!user) {
         return NextResponse.json({ error: 'authentication_required' }, { status: 401 })
     }
-    const saDenied = await guardUserOperation(user.id, 'inventory.stock_count.view')
+    // Module entry: own organization or a granted warehouse; the rows below are limited to the caller's scope.
+    const saDenied = await guardUserOperationInReach(user.id, 'inventory.stock_count.view')
     if (saDenied) return saDenied
 
     let sessionIds: unknown

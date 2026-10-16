@@ -53,6 +53,35 @@ describe('provisionIdentity', () => {
     expect(deleteUser).not.toHaveBeenCalled()
   })
 
+  it('without legacy access: checks the database support first, then sends no legacy role', async () => {
+    routeRpc({
+      identity_provision_capabilities: () => ({ data: { no_legacy_access: true } }),
+      identity_resolve: () => ({ data: { outcome: 'NO_MATCH' } }),
+      identity_provision: () => ({ data: { status: 'ok', outcome: 'CREATED', user_id: 'new-user', principal_type: 'MANUFACTURER_USER', legacy_role_code: 'GUEST' } }),
+    })
+    const { provisionIdentity } = await import('./provisioning')
+    const result = await provisionIdentity({ ...base, noLegacyAccess: true })
+    expect(result).toMatchObject({ ok: true, legacyRoleCode: 'GUEST' })
+    const payload = rpc.mock.calls.find(c => c[0] === 'identity_provision')![1].p_payload
+    expect(payload).toMatchObject({ no_legacy_access: true, legacy_role_code: null })
+  })
+
+  it('fails closed before creating any login when the database support is missing (never a silent USER default)', async () => {
+    routeRpc({ identity_provision_capabilities: () => ({ error: { code: 'PGRST202', message: 'function not found' } }) })
+    const { provisionIdentity } = await import('./provisioning')
+    const result = await provisionIdentity({ ...base, noLegacyAccess: true })
+    expect(result).toMatchObject({ ok: false, code: 'PROVISIONING_FAILED', status: 503 })
+    expect(createUser).not.toHaveBeenCalled()
+    expect(rpc.mock.calls.some(c => c[0] === 'identity_provision')).toBe(false)
+  })
+
+  it('refuses to combine "no legacy access" with an explicit legacy role', async () => {
+    routeRpc({})
+    const { provisionIdentity } = await import('./provisioning')
+    expect(await provisionIdentity({ ...base, noLegacyAccess: true, legacyRoleCode: 'SA' })).toMatchObject({ ok: false, code: 'INVALID_INPUT' })
+    expect(createUser).not.toHaveBeenCalled()
+  })
+
   it('reuses an existing identity: no second login, no password returned', async () => {
     routeRpc({
       identity_resolve: () => ({ data: { outcome: 'MATCH', user_id: 'existing', matched_by: 'email', has_profile: true } }),
@@ -65,6 +94,52 @@ describe('provisionIdentity', () => {
     expect(createUser).not.toHaveBeenCalled()
     expect((result as any).tempPassword).toBeUndefined()
     expect(rpc.mock.calls.find(c => c[0] === 'identity_provision')![1].p_payload.created_identity).toBe(false)
+  })
+
+  describe('Add User guards (requireNewIdentity / linkUserId)', () => {
+    const match = { data: { outcome: 'MATCH', user_id: 'existing', matched_by: 'email', has_profile: true } }
+    const noRpcWrites = () => {
+      expect(createUser).not.toHaveBeenCalled()
+      expect(rpc.mock.calls.some(c => c[0] === 'identity_provision')).toBe(false)
+    }
+
+    it('stops instead of silently reusing an existing account when no link was chosen', async () => {
+      routeRpc({ identity_resolve: () => match })
+      const { provisionIdentity } = await import('./provisioning')
+      const result = await provisionIdentity({ ...base, requireNewIdentity: true })
+      expect(result).toMatchObject({ ok: false, code: 'IDENTITY_ALREADY_EXISTS', status: 409 })
+      noRpcWrites()
+    })
+
+    it('still completes a login that has no profile yet (a retry never creates a second account)', async () => {
+      routeRpc({
+        identity_resolve: () => ({ data: { outcome: 'MATCH', user_id: 'orphan', has_profile: false } }),
+        identity_provision: (args) => ({ data: { status: 'ok', outcome: 'CREATED', user_id: args.p_user, principal_type: 'INTERNAL_EMPLOYEE' } }),
+      })
+      const { provisionIdentity } = await import('./provisioning')
+      const result = await provisionIdentity({ ...base, requireNewIdentity: true })
+      expect(result).toMatchObject({ ok: true, userId: 'orphan' })
+      expect(createUser).not.toHaveBeenCalled()
+    })
+
+    it('links exactly the chosen identity: the same id proceeds without creating a login', async () => {
+      routeRpc({ identity_resolve: () => match, identity_provision: (args) => ({ data: { status: 'ok', outcome: 'REUSED', user_id: args.p_user, principal_type: 'INTERNAL_EMPLOYEE' } }) })
+      const { provisionIdentity } = await import('./provisioning')
+      const result = await provisionIdentity({ ...base, requireNewIdentity: true, linkUserId: 'existing' })
+      expect(result).toMatchObject({ ok: true, outcome: 'REUSED', userId: 'existing' })
+      expect(createUser).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['another person', { data: { outcome: 'MATCH', user_id: 'someone-else', has_profile: true } }],
+      ['nobody any more', { data: { outcome: 'NO_MATCH' } }],
+    ])('rejects a link when the email/phone now resolve to %s', async (_label, resolved) => {
+      routeRpc({ identity_resolve: () => resolved })
+      const { provisionIdentity } = await import('./provisioning')
+      const result = await provisionIdentity({ ...base, requireNewIdentity: true, linkUserId: 'existing' })
+      expect(result).toMatchObject({ ok: false, code: 'IDENTITY_LINK_MISMATCH', status: 409 })
+      noRpcWrites()
+    })
   })
 
   it('blocks an email/phone conflict before creating anything and records it', async () => {
@@ -141,6 +216,38 @@ describe('provisionIdentity', () => {
     await provisionIdentity({ ...base, source: 'hr', authorizingPermission: 'hr.employee.manage', hr: { departmentId: 'd-1', joinDate: '2026-10-01' } })
     const payload = rpc.mock.calls.find(c => c[0] === 'identity_provision')![1].p_payload
     expect(payload).toMatchObject({ authorizing_permission: 'hr.employee.manage', department_id: 'd-1', join_date: '2026-10-01', legacy_role_code: null, source: 'hr' })
+  })
+})
+
+describe('provisionIdentity — initial Group Policy audit context', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    createUser.mockResolvedValue({ data: { user: { id: 'new-user' } }, error: null })
+    routeRpc({
+      identity_resolve: () => ({ data: { outcome: 'NO_MATCH' } }),
+      identity_provision: () => ({ data: { status: 'ok', outcome: 'CREATED', user_id: 'new-user', principal_type: 'INTERNAL_EMPLOYEE' } }),
+    })
+  })
+  const payload = () => rpc.mock.calls.find(c => c[0] === 'identity_provision')![1].p_payload
+
+  it('stamps every selected policy with the server-generated reason, ignoring any client-supplied one', async () => {
+    const { provisionIdentity, INITIAL_POLICY_AUDIT_REASON } = await import('./provisioning')
+    await provisionIdentity({ ...base, initialProfiles: [
+      { roleId: 'r1', scopeIds: ['s1'], reason: 'typed by client' } as any, { roleId: 'r2', scopeIds: ['s2'] },
+    ] })
+    expect(INITIAL_POLICY_AUDIT_REASON).toBe('Group Policy assigned during user creation.')
+    expect(payload().initial_access).toEqual([
+      { role_id: 'r1', scope_ids: ['s1'], reason: INITIAL_POLICY_AUDIT_REASON },
+      { role_id: 'r2', scope_ids: ['s2'], reason: INITIAL_POLICY_AUDIT_REASON },
+    ])
+  })
+
+  it('sends no policy-assignment context at all when no Group Policy is chosen', async () => {
+    const { provisionIdentity } = await import('./provisioning')
+    await provisionIdentity({ ...base })
+    expect(payload().initial_access).toEqual([])
+    expect(payload().initial_reason).toBeNull()
+    expect(payload().initial_role_id).toBeNull()
   })
 })
 

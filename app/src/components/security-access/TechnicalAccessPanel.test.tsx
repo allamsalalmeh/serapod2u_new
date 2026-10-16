@@ -24,10 +24,10 @@ describe('Technical Access → Service identities', () => {
   it('groups by module, collapsed, with credential and lifecycle summaries', () => {
     render(<TechnicalAccessPanel governance={governance} />)
     const groups = screen.getAllByRole('button', { name: /service(s)?, expand$/ }).map(b => b.getAttribute('aria-label'))
-    // Shared taxonomy: E-Commerce is an area of Customer & Growth; Platform and Security are Platform & Security.
+    // Shared taxonomy: E-Commerce is an area of Customer & Growth; Platform is Platform & Settings.
     expect(groups).toEqual([
       'Supply Chain, 2 services, expand', 'Customer & Growth, 2 services, expand',
-      'Platform & Security, 1 service, expand', 'Other / Unmapped, 1 service, expand',
+      'Platform & Settings, 1 service, expand', 'Other / Unmapped, 1 service, expand',
     ])
     expect(screen.queryByText('QR generation worker')).toBeNull()
     expect(screen.getByText('2 configured here')).toBeTruthy()
@@ -39,7 +39,7 @@ describe('Technical Access → Service identities', () => {
   it('expands several groups, shows service columns and existing details', async () => {
     render(<TechnicalAccessPanel governance={governance} />)
     await userEvent.click(screen.getByRole('button', { name: /^Supply Chain, 2 services/ }))
-    await userEvent.click(screen.getByRole('button', { name: /^Platform & Security, 1 service/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^Platform & Settings, 1 service/ }))
     expect(screen.getByText('QR generation worker')).toBeTruthy()
     expect(screen.getAllByText('Queue Worker').length).toBe(2)
     expect(screen.getAllByText('No usage recorded').length).toBe(2)
@@ -53,7 +53,7 @@ describe('Technical Access → Service identities', () => {
 
   it('combines search, type and credential filters, auto-opens matches and restores on clear', async () => {
     render(<TechnicalAccessPanel governance={governance} />)
-    await userEvent.click(screen.getByRole('button', { name: /^Platform & Security, 1 service/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^Platform & Settings, 1 service/ }))
     await userEvent.type(screen.getByRole('textbox', { name: 'Search service identities' }), 'supply')
     expect(screen.getByText('QR generation worker')).toBeTruthy()
     expect(screen.getByText(/Showing 2 of 6 services/)).toBeTruthy()

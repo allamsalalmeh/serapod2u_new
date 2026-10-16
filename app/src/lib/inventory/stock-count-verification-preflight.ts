@@ -61,6 +61,12 @@ export interface StockCountPreflightDependencies {
         sessionId: string,
     ) => Promise<Array<{ variant_id: string; target_stock_config_id: string }>>
     checkPermission: (userId: string, permission: string) => Promise<{ allowed: boolean; context: { organization_id: string | null } | null }>
+    /**
+     * Authoritative decision for inventory.stock_count.post on this session's warehouse, through the S&A contract:
+     * LEGACY_ENFORCED/SHADOW → `legacyAllowed` decides (and SHADOW records the comparison); NEW_ENFORCED/
+     * LEGACY_RETIRED → the S&A decision for the warehouse decides. Absent (unit tests) → legacy only.
+     */
+    authorizePost?: (input: { userId: string; organizationId: string; warehouseId: string; sessionId: string; legacyAllowed: boolean }) => Promise<boolean>
     loadEvent: () => Promise<any | null>
     loadSetting: (orgId: string) => Promise<any | null>
     loadUsers: (ids: string[]) => Promise<any[]>
@@ -110,7 +116,14 @@ export async function evaluateStockCountPreflight(
     }
 
     const permission = await deps.checkPermission(userId, STOCK_COUNT_POST_PERMISSION)
-    if (!permission.allowed || !permission.context?.organization_id) return { ok: false, code: 'permission_denied' }
+    if (!permission.context?.organization_id) return { ok: false, code: 'permission_denied' }
+    const mayPost = deps.authorizePost
+        ? await deps.authorizePost({
+            userId, organizationId: permission.context.organization_id, warehouseId: session.warehouse_organization_id,
+            sessionId: session.id ?? sessionId, legacyAllowed: permission.allowed,
+        })
+        : permission.allowed
+    if (!mayPost) return { ok: false, code: 'permission_denied' }
 
     const items: StockCountSessionItem[] = Array.isArray(session.stock_count_session_items)
         ? session.stock_count_session_items
@@ -315,6 +328,19 @@ export function createStockCountPreflightDependencies(supabase: any, admin: any)
             return data || []
         },
         checkPermission: (userId, permission) => checkPermissionForUser(userId, permission) as any,
+        authorizePost: async ({ userId, organizationId, warehouseId, sessionId, legacyAllowed }) => {
+            // Loaded lazily: the S&A helper is server-only.
+            const [{ authorize }, { resolveWarehouseResourceContext }] = await Promise.all([
+                import('@/lib/security-access/authorization'),
+                import('@/lib/security-access/resource-context'),
+            ])
+            const decision = await authorize({
+                actorId: userId,
+                permission: 'inventory.stock_count.post',
+                resource: { type: 'stock_count', id: sessionId, ...(await resolveWarehouseResourceContext(organizationId, warehouseId)) },
+            }, { legacy: () => legacyAllowed })
+            return decision.decision === 'ALLOW'
+        },
         loadEvent: async () => {
             const { data } = await admin.from('notification_types').select('event_code,available_channels').eq('event_code', STOCK_COUNT_EVENT_CODE).maybeSingle()
             return data || null

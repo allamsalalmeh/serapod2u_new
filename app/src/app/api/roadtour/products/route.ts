@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
         .eq('code', 'ellbow')
         .maybeSingle()
       if (prog) { program = prog as any; break }
-      const { data: org } = await supabaseAdmin
+      const { data: org }: { data: { parent_org_id: string | null } | null } = await supabaseAdmin
         .from('organizations')
         .select('parent_org_id')
         .eq('id', cursor)

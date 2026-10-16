@@ -1,7 +1,7 @@
 import 'server-only'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { authorizeOperation, organizationResource } from '@/lib/security-access/operation'
+import { navActorFromProfile, resolveDestinationAccess } from '@/lib/server/nav-access'
 
 /**
  * Server-only context helper for Marketing pages.
@@ -52,17 +52,10 @@ export async function getMarketingPageContext() {
         roles
     }
 
-    // Marketing is accessible to HQ org type with role level ≤ 30
-    const orgType = organization?.org_type_code
-    const roleLevel = roles?.role_level ?? 999
-    // Module entry is an S&A decision (marketing.module.view) in the user's own
-    // organization; the historical page rule is the legacy evaluator.
-    const canViewMarketing = await authorizeOperation({
-        actorId: user.id,
-        permission: 'marketing.module.view',
-        resource: organizationResource('marketing_module', organizationId),
-        legacy: () => orgType === 'HQ' && roleLevel <= 30,
-    }).then(d => d.decision === 'ALLOW').catch(() => false)
+    // Module entry is the canonical Security & Access decision for the 'mktg' destination (see nav-access.ts), in
+    // the user's own organization. A failed check is reported as such, not as a denial.
+    const access = await resolveDestinationAccess(navActorFromProfile(transformedUserProfile), 'mktg')
+    const canViewMarketing = access.state === 'allowed'
 
-    return { user, userProfile: transformedUserProfile, canViewMarketing }
+    return { user, userProfile: transformedUserProfile, canViewMarketing, accessState: access.state }
 }

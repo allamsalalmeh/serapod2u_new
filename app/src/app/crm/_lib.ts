@@ -1,7 +1,7 @@
 import 'server-only'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { authorizeOperation, organizationResource } from '@/lib/security-access/operation'
+import { navActorFromProfile, resolveDestinationAccess } from '@/lib/server/nav-access'
 
 /**
  * Server-only context helper for CRM pages.
@@ -52,17 +52,10 @@ export async function getCrmPageContext() {
         roles
     }
 
-    // CRM is accessible to HQ org type with role level ≤ 50
-    const orgType = organization?.org_type_code
-    const roleLevel = roles?.role_level ?? 999
-    // Module entry is an S&A decision (customer.crm.view) in the user's own
-    // organization; the historical page rule is the legacy evaluator.
-    const canViewCrm = await authorizeOperation({
-        actorId: user.id,
-        permission: 'customer.crm.view',
-        resource: organizationResource('crm_module', organizationId),
-        legacy: () => orgType === 'HQ' && roleLevel <= 50,
-    }).then(d => d.decision === 'ALLOW').catch(() => false)
+    // Module entry is the canonical Security & Access decision for the 'crm' destination (see nav-access.ts), in
+    // the user's own organization. A failed check is reported as such, not as a denial.
+    const access = await resolveDestinationAccess(navActorFromProfile(transformedUserProfile), 'crm')
+    const canViewCrm = access.state === 'allowed'
 
-    return { user, userProfile: transformedUserProfile, canViewCrm }
+    return { user, userProfile: transformedUserProfile, canViewCrm, accessState: access.state }
 }

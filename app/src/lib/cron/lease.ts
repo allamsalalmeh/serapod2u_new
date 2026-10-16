@@ -23,6 +23,7 @@ export const WORKER_NAMES = {
   notificationOutbox: 'notification-outbox-worker',
   saDecisionRetention: 'sa-decision-retention',
   saGovernanceMaintenance: 'sa-governance-maintenance',
+  systemLogRetention: 'system-log-retention',
 } as const
 
 export type WorkerName = (typeof WORKER_NAMES)[keyof typeof WORKER_NAMES]

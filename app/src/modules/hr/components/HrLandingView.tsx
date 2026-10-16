@@ -1,8 +1,10 @@
 'use client'
 
+import { useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowRight } from 'lucide-react'
-import { hrNavGroups, type HrNavGroup } from '@/modules/hr/hrNav'
+import { filterHrNavGroups, type HrNavGroup } from '@/modules/hr/hrNav'
+import { useNavAccess } from '@/hooks/useNavAccess'
 import HrHeroBanner from './HrHeroBanner'
 import SetupReadinessBanner from '@/components/shared/SetupReadinessBanner'
 import ModuleLandingCard from '@/components/layout/ModuleLandingCard'
@@ -27,6 +29,12 @@ const defaultIconAccent = landingAccents.orange
 
 export default function HrLandingView({ userName, bannerImageUrl }: HrLandingViewProps) {
     const router = useRouter()
+    // Administrative setup cards appear only for destinations this person may open; the employee entry is My Workspace.
+    const { snapshot, allowsAny } = useNavAccess()
+    const groups = useMemo(
+        () => filterHrNavGroups(allowsAny).filter((group) => group.id !== 'hr-workspace'),
+        [snapshot], // eslint-disable-line react-hooks/exhaustive-deps
+    )
 
     return (
         <div className="sera-module-landing">
@@ -40,7 +48,7 @@ export default function HrLandingView({ userName, bannerImageUrl }: HrLandingVie
             />
 
             <div className="sera-module-landing__grid">
-                {hrNavGroups.map((group: HrNavGroup) => {
+                {groups.map((group: HrNavGroup) => {
                     const Icon = group.icon
                     const description = cardDescriptions[group.id]
                     const accent = pickLandingAccent(hrLandingAccents, group.id, defaultIconAccent)

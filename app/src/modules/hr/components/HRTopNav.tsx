@@ -4,13 +4,14 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { Briefcase, Search, ChevronRight, ChevronDown, X, Menu as MenuIcon, Bot } from 'lucide-react'
 import {
-    hrNavGroups,
+    filterHrNavGroups,
     getAllHrNavItems,
     getHrBreadcrumb,
     type HrNavGroup,
     type HrNavChild,
 } from '@/modules/hr/hrNav'
 import { cn } from '@/lib/utils'
+import { useNavAccess } from '@/hooks/useNavAccess'
 
 // ── Props ────────────────────────────────────────────────────────
 
@@ -25,6 +26,9 @@ interface HRTopNavProps {
 
 export default function HRTopNav({ currentView, onNavigate }: HRTopNavProps) {
     const router = useRouter()
+    // Only the destinations this person may open (Security & Access snapshot); nothing while it loads or is unavailable.
+    const { snapshot, allowsAny } = useNavAccess()
+    const hrNavGroups = useMemo(() => filterHrNavGroups(allowsAny), [snapshot]) // eslint-disable-line react-hooks/exhaustive-deps
     const [openGroupId, setOpenGroupId] = useState<string | null>(null)
     const [searchQuery, setSearchQuery] = useState('')
     const [searchOpen, setSearchOpen] = useState(false)
@@ -75,7 +79,7 @@ export default function HRTopNav({ currentView, onNavigate }: HRTopNavProps) {
 
     // ── Search ────────────────────────────────────────────────────
 
-    const allItems = useMemo(() => getAllHrNavItems(), [])
+    const allItems = useMemo(() => getAllHrNavItems(hrNavGroups), [hrNavGroups])
 
     const filteredItems = useMemo(() => {
         if (!searchQuery.trim()) return []

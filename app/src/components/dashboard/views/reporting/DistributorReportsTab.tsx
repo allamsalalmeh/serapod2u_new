@@ -1413,7 +1413,7 @@ export default function DistributorReportsTab({
               <div className="rounded-xl border border-[var(--sera-line)] p-3">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Approval Rate</p>
                 <p className="mt-1 text-2xl font-bold text-[var(--sera-ink)]">{formatPct(report.orderProcessing.approvalRatePct)}</p>
-                <p className="mt-0.5 text-[10px] text-[var(--sera-muted)]">{formatCount(report.orderProcessing.approvedOrders)} approved or closed</p>
+                <p className="mt-0.5 text-[10px] text-[var(--sera-muted)]">{formatCount(report.orderProcessing.approvedOrders)} approved, packed, shipped or closed</p>
               </div>
               <div className="rounded-xl border border-[var(--sera-line)] p-3">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Completion Rate</p>
@@ -1424,6 +1424,25 @@ export default function DistributorReportsTab({
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Cancellation Rate</p>
                 <p className="mt-1 text-2xl font-bold text-[var(--sera-ink)]">{formatPct(report.orderProcessing.cancellationRatePct)}</p>
                 <p className="mt-0.5 text-[10px] text-[var(--sera-muted)]">{formatCount(report.orderProcessing.cancelledOrders)} cancelled</p>
+              </div>
+            </div>
+
+            {/* Values: Approved Sales are approved-stage orders only; submitted orders are pipeline; cancelled orders never count. */}
+            <div className="mb-4 grid grid-cols-1 gap-2.5 sm:grid-cols-3 sm:gap-3">
+              <div className="rounded-xl border border-[var(--sera-line)] p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Approved Sales Value</p>
+                <p className="mt-1 text-xl font-bold text-[var(--sera-ink)]">{formatRM(report.orderProcessing.approvedSalesValue)}</p>
+                <p className="mt-0.5 text-[10px] text-[var(--sera-muted)]">{formatCount(report.orderProcessing.approvedOrders)} approved-stage orders</p>
+              </div>
+              <div className="rounded-xl border border-[var(--sera-line)] p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Order Pipeline Value</p>
+                <p className="mt-1 text-xl font-bold text-[var(--sera-ink)]">{formatRM(report.orderProcessing.pipelineValue)}</p>
+                <p className="mt-0.5 text-[10px] text-[var(--sera-muted)]">{formatCount(report.orderProcessing.pipelineOrders)} submitted, awaiting approval</p>
+              </div>
+              <div className="rounded-xl border border-[var(--sera-line)] p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Cancelled Orders Value</p>
+                <p className="mt-1 text-xl font-bold text-[var(--sera-ink)]">{formatRM(report.orderProcessing.cancelledValue)}</p>
+                <p className="mt-0.5 text-[10px] text-[var(--sera-muted)]">{formatCount(report.orderProcessing.cancelledOrders)} cancelled — not sales</p>
               </div>
             </div>
 

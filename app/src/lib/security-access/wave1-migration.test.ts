@@ -17,7 +17,7 @@ describe('S&A Wave 1 migration security contract', () => {
   it('backfills compatibility rows only for active portal identities, never consumers', () => {
     expect(sql).toContain("u.account_scope='portal'")
     expect(sql).toContain('u.is_active=true')
-    expect(sql).not.toMatch(/account_scope\s*=\s*['"]store['"].*insert/is)
+    expect(sql).not.toMatch(/account_scope\s*=\s*['"]store['"][\s\S]*insert/i)
     expect(sql).toContain("'legacy_portal'")
   })
   it('keeps all Supply Chain pilot operations in shadow', () => {

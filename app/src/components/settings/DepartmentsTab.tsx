@@ -674,15 +674,14 @@ export default function DepartmentsTab({ organizationId, canEdit, onNavigateToOr
       setCreatingUser(true)
 
       // 1. Create User
-      if (!userData.email || !userData.full_name || !userData.role_code || !userData.password) {
-        throw new Error("Email, Name, Role, and Password are required")
+      if (!userData.email || !userData.full_name || !userData.password) {
+        throw new Error("Email, Name, and Password are required")
       }
 
       const result = await createUserWithAuth({
         email: userData.email,
         password: userData.password,
         full_name: userData.full_name,
-        role_code: userData.role_code,
         organization_id: organizationId,
         phone: userData.phone || undefined,
       })

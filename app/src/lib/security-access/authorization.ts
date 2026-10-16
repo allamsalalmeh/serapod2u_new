@@ -2,7 +2,8 @@ import 'server-only'
 import { randomUUID } from 'crypto'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { checkPermissionForUser } from '@/lib/server/permissions'
-import { isActiveSecurityAccessAccount } from './active-account'
+import { activeAccountState, isActiveAccountRecord } from './active-account'
+import { NO_TRACE, type Trace } from './diagnostics'
 import { evaluateNewPolicy, type PolicyAssignment, type PolicyMembership } from './policy'
 import { shadowComparisonFor } from './comparison'
 import { auditClassFor, auditWriteFailureIsFatal, authoritativeOutcome, consultsLegacy, isNewAuthoritative } from './enforcement'
@@ -13,6 +14,7 @@ import type {
   AuthorizationDecisionValue,
   AuthorizationReasonCode,
   AuthorizationRequest,
+  AuthorizationUnavailableReason,
   MigrationMode,
 } from './types'
 
@@ -164,28 +166,36 @@ async function evaluateNew(request: AuthorizationRequest, actorActive: boolean):
 
 export async function authorize(
   request: AuthorizationRequest,
-  options: { log?: boolean; legacy?: LegacyEvaluator } = {},
+  options: { log?: boolean; legacy?: LegacyEvaluator; trace?: Trace } = {},
 ): Promise<AuthorizationDecision> {
+  const trace = options.trace ?? NO_TRACE
   const decisionId = randomUUID()
   const shouldLog = options.log !== false && !request.context?.explainOnly
-  const [mode, actorActive, sensitivity] = await Promise.all([
+  const [mode, accountState, sensitivity] = await trace.time('authz_inputs', () => Promise.all([
     migrationMode(request.permission),
-    isActiveSecurityAccessAccount(request.actorId),
+    activeAccountState(request.actorId),
     shouldLog ? auditSensitivity(request.permission) : Promise.resolve<AuditSensitivity>('security_sensitive'),
-  ])
-  const legacyDecision = await legacyDecisionFor(request, mode, options.legacy)
+  ]))
+  const actorActive = accountState === 'active'
+  // Set when the authoritative input could not be read: the outcome still fails
+  // closed (DENY), but callers report "unavailable", never a confirmed denial.
+  let unavailable: AuthorizationUnavailableReason | undefined = accountState === 'unavailable' ? 'account_state_unavailable' : undefined
+  const legacyDecision = await trace.time('authz_legacy', () => legacyDecisionFor(request, mode, options.legacy))
   let evaluated: NewEvaluation
   try {
     evaluated = actorActive
-      ? await evaluateNew(request, actorActive)
-      : { decision: 'DENY', reasonCode: 'ACCOUNT_INACTIVE', matchedAssignments: [], resolvedScopes: [] }
-  } catch {
+      ? await trace.time('authz_evaluate', () => evaluateNew(request, actorActive))
+      : { decision: 'DENY', reasonCode: unavailable ? 'POLICY_ERROR' : 'ACCOUNT_INACTIVE', matchedAssignments: [], resolvedScopes: [] }
+  } catch (error) {
+    trace.fail('authz_evaluate', error)
     evaluated = { decision: 'DENY', reasonCode: 'POLICY_ERROR', matchedAssignments: [], resolvedScopes: [] }
+    if (isNewAuthoritative(mode)) unavailable = 'policy_evaluation_failed'
   }
 
-  const outcome = authoritativeOutcome({
+  const computed = authoritativeOutcome({
     mode, actorActive, legacyDecision, newDecision: evaluated.decision, newReasonCode: evaluated.reasonCode,
   })
+  const outcome = unavailable ? { decision: 'DENY' as const, reasonCode: 'POLICY_ERROR' as const } : computed
   const comparison = shadowComparisonFor(legacyDecision, evaluated.decision, evaluated.reasonCode)
   const auditClass = auditClassFor({ mode, sensitivity, comparison, reasonCode: outcome.reasonCode })
   const result: AuthorizationDecision = {
@@ -202,11 +212,14 @@ export async function authorize(
     newDecision: evaluated.decision,
     newReasonCode: evaluated.reasonCode,
     ...(shouldLog ? { auditClass } : {}),
+    ...(unavailable ? { unavailable } : {}),
   }
 
   if (shouldLog) {
     const admin = createAdminClient() as any
-    const { error } = await admin.from('sa_authorization_decisions').insert({
+    // Awaited and not retried: the database backstop requires this row before an
+    // enforced ALLOW proceeds, and a retry would only double a slow path.
+    const { error }: any = await trace.time('authz_audit_write', () => admin.from('sa_authorization_decisions').insert({
       id: decisionId,
       actor_id: request.actorId,
       permission_key: request.permission,
@@ -223,17 +236,88 @@ export async function authorize(
       audit_class: auditClass,
       correlation_id: request.context?.correlationId ?? request.context?.requestId ?? null,
       policy_version: POLICY_VERSION,
-    })
+    }))
     if (error) {
-      console.error('[sa-authorization] decision audit write failed', { decisionId, permission: request.permission, code: error.code })
+      // Classification only (timeout / network / database code): an aborted or failed
+      // fetch has no PostgREST code, which used to be logged as code ''.
+      const failure = trace.fail('authz_audit_write', error)
+      console.error('[sa-authorization] decision audit write failed', {
+        decisionId, permission: request.permission, classification: failure.classification, code: failure.code, correlationId: trace.id || null,
+      })
       // The database backstop requires this row; an enforced ALLOW that was not
-      // recorded fails closed. Non-authoritative modes keep legacy behavior.
+      // recorded fails closed, reported as unavailable (it is not a policy denial).
+      // Non-authoritative modes keep legacy behavior.
       if (auditWriteFailureIsFatal(mode) && result.decision === 'ALLOW') {
-        return { ...result, decision: 'DENY', reasonCode: 'POLICY_ERROR' }
+        return { ...result, decision: 'DENY', reasonCode: 'POLICY_ERROR', unavailable: 'audit_write_failed' }
       }
     }
   }
+  trace.outcome(`${result.decision}:${result.reasonCode}${result.unavailable ? `:${result.unavailable}` : ''}`)
   return result
+}
+
+
+export interface ExplainItem {
+  permission: string
+  resource: AuthorizationResource
+  legacy?: LegacyEvaluator
+}
+
+/** At most this many evaluator calls run at once for one batch (a snapshot never floods the database). */
+const EXPLAIN_CONCURRENCY = 8
+
+async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++
+      out[i] = await fn(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return out
+}
+
+/**
+ * Explain-only decisions for several permissions of ONE actor (navigation snapshots), with the same authoritative
+ * outcome authorize() reaches for each item (authoritativeOutcome). Nothing is recorded. The reads authorize() repeats
+ * per call are done once: the migration modes (one query) and the active-account gate. Each permission then consults
+ * only the input its mode makes authoritative: the legacy evaluator in LEGACY_ENFORCED/SHADOW, the database evaluator
+ * in NEW_ENFORCED/LEGACY_RETIRED (the diagnostic side only feeds the audit row, which explain-only never writes).
+ *
+ * Unlike authorize(), a read or evaluator failure throws instead of answering DENY, so a snapshot reports
+ * "unavailable" rather than a silently reduced menu.
+ */
+export async function explainMany(actorId: string, items: readonly ExplainItem[]): Promise<AuthorizationDecisionValue[]> {
+  if (items.length === 0) return []
+  const admin = createAdminClient() as any
+  const permissions = [...new Set(items.map(item => item.permission))]
+  const [modesResult, actorActive] = await Promise.all([
+    admin.from('sa_migration_modes').select('permission_key, mode').in('permission_key', permissions),
+    admin.from('users').select('is_active').eq('id', actorId).maybeSingle().then((r: any) => {
+      if (r.error) throw new Error('account_state_unavailable')
+      return isActiveAccountRecord(r.data)
+    }),
+  ])
+  const { data: modeRows, error: modeError } = modesResult
+  // Same rollout compatibility as migrationMode(): only a missing table means "not seeded yet".
+  if (modeError && modeError.code !== 'PGRST205' && modeError.code !== '42P01') throw new Error('migration_mode_unavailable')
+  const modes = new Map<string, MigrationMode>((modeRows ?? []).map((row: any) => [row.permission_key, row.mode]))
+  if (!actorActive) return items.map(() => 'DENY')
+
+  return mapLimited(items, EXPLAIN_CONCURRENCY, async item => {
+    const mode = modes.get(item.permission) ?? 'LEGACY_ENFORCED'
+    const request: AuthorizationRequest = { actorId, permission: item.permission, resource: item.resource, context: { explainOnly: true } }
+    let legacyDecision: AuthorizationDecisionValue | null = null
+    let newDecision: AuthorizationDecisionValue = 'DENY'
+    if (isNewAuthoritative(mode)) {
+      newDecision = (await evaluateNew(request, true)).decision
+    } else {
+      legacyDecision = await legacyDecisionFor(request, mode, item.legacy)
+    }
+    return authoritativeOutcome({ mode, actorActive, legacyDecision, newDecision, newReasonCode: 'POLICY_ERROR' }).decision
+  })
 }
 
 /**

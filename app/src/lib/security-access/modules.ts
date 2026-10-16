@@ -61,12 +61,15 @@ export const MODULE_TAXONOMY: readonly ModuleGroup[] = [
   {
     id: 'hr_payroll', name: 'HR & Payroll', match: mod('hr'),
     areas: [
-      { id: 'payroll', name: 'Payroll & Compensation', match: res('hr', 'payroll', 'compensation', 'benefits') },
+      // Staff sales commission (hr.commission.*) is pay: it sits with payroll and compensation.
+      { id: 'payroll', name: 'Payroll & Compensation', match: res('hr', 'payroll', 'compensation', 'benefits', 'commission') },
       { id: 'employees', name: 'Employees & Contracts', match: res('hr', 'employee', 'contract', 'onboarding', 'recruitment') },
       { id: 'time_leave', name: 'Time, Leave & Expenses', match: res('hr', 'attendance', 'leave', 'leave_request', 'expense') },
       { id: 'performance', name: 'Performance & Learning', match: res('hr', 'performance', 'learning') },
       { id: 'self_service', name: 'Employee Self-Service', match: res('hr', 'self_service') },
-      { id: 'hr_admin', name: 'HR Administration', match: res('hr', 'module', 'settings', 'policy', 'analytics', 'ai') },
+      { id: 'manager_self_service', name: 'Manager Self-Service', match: res('hr', 'mss') },
+      // hr.data.reset is listed here; its migration mode (e.g. Legacy Retired) is stored per permission and unaffected.
+      { id: 'hr_admin', name: 'HR Administration', match: res('hr', 'module', 'settings', 'policy', 'analytics', 'ai', 'data') },
     ],
   },
   {
@@ -80,16 +83,28 @@ export const MODULE_TAXONOMY: readonly ModuleGroup[] = [
       { id: 'finance_admin', name: 'Finance Administration', match: res('finance', 'module', 'settings', 'data', 'payroll_integration') },
     ],
   },
+  // Security & Access is its own module: everything under security.* (administering who may do what).
+  // Unrelated platform settings, identity and organization permissions stay in Platform & Settings.
   {
-    id: 'platform_security', name: 'Platform & Security', match: mod('platform', 'security'),
+    id: 'security_access', name: 'Security & Access', match: mod('security'),
+    areas: [
+      { id: 'access_admin', name: 'Access Administration', match: res('security', 'access', 'role', 'scope') },
+      { id: 'migration_modes', name: 'Migration Modes', match: res('security', 'permission') },
+      { id: 'security_governance', name: 'Security Governance', match: res('security', 'policy', 'delegation', 'access_request', 'emergency_access') },
+      { id: 'review_audit', name: 'Review & Audit', match: res('security', 'audit', 'access_review') },
+      { id: 'technical_access', name: 'Technical Access', match: res('security', 'service_identity') },
+    ],
+  },
+  {
+    id: 'platform_settings', name: 'Platform & Settings', match: mod('platform'),
     areas: [
       { id: 'identity', name: 'Identity', match: res('platform', 'identity', 'identity_access') },
       { id: 'user_admin', name: 'User Administration', match: res('platform', 'user') },
       { id: 'notifications', name: 'Notifications', match: res('platform', 'notification_monitor') },
+      { id: 'system', name: 'System', match: res('platform', 'system_logs') },
       { id: 'integrations', name: 'Integrations & Settings', match: res('platform', 'settings') },
       { id: 'organizations', name: 'Organizations & Data', match: res('platform', 'organization', 'data') },
       { id: 'platform', name: 'Platform', match: mod('platform') },
-      { id: 'security_governance', name: 'Security Governance', match: mod('security') },
     ],
   },
   // Shared, cross-module analytics only. Module-specific reports (customer,
@@ -123,6 +138,42 @@ export function classifyPermission(permissionKey: string): ModuleClass {
   if (!group) return { groupId: OTHER_MODULE.id, areaId: null, areaName: null }
   const area = group.areas?.find(a => a.match(module, resource)) ?? null
   return { groupId: group.id, areaId: area?.id ?? null, areaName: area?.name ?? null }
+}
+
+/** Position of an area inside its group (taxonomy order); unmatched permissions sort last. */
+export function areaRank(groupId: string, areaId: string | null): number {
+  const i = MODULE_TAXONOMY.find(g => g.id === groupId)?.areas?.findIndex(a => a.id === areaId) ?? -1
+  return i >= 0 ? i : 999
+}
+
+export interface TaxonomyArea<T> { id: string; name: string; items: T[] }
+export interface TaxonomyModule<T> { id: string; name: string; areas: Array<TaxonomyArea<T>>; total: number }
+/** Functional area shown for permissions of a module that match no area. */
+export const GENERAL_AREA = { id: '_general', name: 'General' }
+
+/**
+ * THE module → functional area → operation grouping used by Migration Modes,
+ * the Permission Catalogue, Group Policies (details and editor) and People &
+ * Access. Ids, names and ordering come only from MODULE_TAXONOMY. It is a
+ * navigation aid: it never grants or inherits anything.
+ */
+export function groupByTaxonomy<T>(items: T[], keyOf: (item: T) => string): Array<TaxonomyModule<T>> {
+  const modules = new Map<string, Map<string, TaxonomyArea<T>>>()
+  for (const item of items) {
+    const c = classifyPermission(keyOf(item))
+    const areas = modules.get(c.groupId) ?? new Map<string, TaxonomyArea<T>>()
+    const id = c.areaId ?? GENERAL_AREA.id
+    const area = areas.get(id) ?? { id, name: c.areaName ?? GENERAL_AREA.name, items: [] }
+    area.items.push(item)
+    areas.set(id, area)
+    modules.set(c.groupId, areas)
+  }
+  return Array.from(modules.entries())
+    .sort(([a], [b]) => moduleGroupRank(a) - moduleGroupRank(b))
+    .map(([id, areas]) => {
+      const list = Array.from(areas.values()).sort((a, b) => areaRank(id, a.id === GENERAL_AREA.id ? null : a.id) - areaRank(id, b.id === GENERAL_AREA.id ? null : b.id))
+      return { id, name: moduleGroupName(id), areas: list, total: list.reduce((n, a) => n + a.items.length, 0) }
+    })
 }
 
 /** "Supply Chain · Stock Count" — for grouped selects. */
@@ -197,8 +248,8 @@ const SERVICE_TEAMS: Record<string, { groupId: string; areaName: string | null }
   ecommerce: { groupId: 'customer_growth', areaName: 'E-Commerce' },
   hrpayroll: { groupId: 'hr_payroll', areaName: null },
   finance: { groupId: 'finance', areaName: null },
-  platform: { groupId: 'platform_security', areaName: 'Platform' },
-  security: { groupId: 'platform_security', areaName: 'Security Governance' },
+  platform: { groupId: 'platform_settings', areaName: 'Platform' },
+  security: { groupId: 'security_access', areaName: 'Security Governance' },
   reporting: { groupId: 'reporting', areaName: null },
 }
 export const teamKey = (team?: string | null) => (team ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')

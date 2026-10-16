@@ -44,9 +44,13 @@ interface ConsumerActivationsViewProps {
   onViewChange: (view: string) => void
 }
 
+const ACTIVATIONS_TABS = ['activations', 'feedback', 'whatsapp', 'scan_issues'] as const
+type ActivationsTab = typeof ACTIVATIONS_TABS[number]
+const isActivationsTab = (value: string): value is ActivationsTab => (ACTIVATIONS_TABS as readonly string[]).includes(value)
+
 export default function ConsumerActivationsView({ userProfile, onViewChange }: ConsumerActivationsViewProps) {
   const organizationId = userProfile.organization_id
-  const [activeTab, setActiveTab] = useState<'activations' | 'feedback' | 'whatsapp' | 'scan_issues'>('activations')
+  const [activeTab, setActiveTab] = useState<ActivationsTab>('activations')
   const [activations, setActivations] = useState<any[]>([])
   const [orders, setOrders] = useState<any[]>([])
   const [products, setProducts] = useState<any[]>([])
@@ -474,10 +478,11 @@ export default function ConsumerActivationsView({ userProfile, onViewChange }: C
   const loadStats = async () => {
     try {
       // Use server-side RPC to get all stats in a single query (no 1000-row cap)
+      // Unset filters are omitted so the functions' DEFAULT NULL applies.
       const { data: statsData, error: statsError } = await supabase.rpc('fn_consumer_activity_stats', {
         p_company_id: userProfile.organizations.id,
-        p_order_id: (selectedOrderId && selectedOrderId !== 'all') ? selectedOrderId : null,
-        p_activity_type: (selectedActivityType && selectedActivityType !== 'all') ? selectedActivityType : null,
+        p_order_id: (selectedOrderId && selectedOrderId !== 'all') ? selectedOrderId : undefined,
+        p_activity_type: (selectedActivityType && selectedActivityType !== 'all') ? selectedActivityType : undefined,
       })
 
       if (statsError) throw statsError
@@ -521,8 +526,8 @@ export default function ConsumerActivationsView({ userProfile, onViewChange }: C
       // Use server-side RPC to aggregate and enrich (no 1000-row cap)
       const { data, error } = await supabase.rpc('fn_consumer_unique_list', {
         p_company_id: userProfile.organizations.id,
-        p_order_id: (selectedOrderId && selectedOrderId !== 'all') ? selectedOrderId : null,
-        p_activity_type: (selectedActivityType && selectedActivityType !== 'all') ? selectedActivityType : null,
+        p_order_id: (selectedOrderId && selectedOrderId !== 'all') ? selectedOrderId : undefined,
+        p_activity_type: (selectedActivityType && selectedActivityType !== 'all') ? selectedActivityType : undefined,
       })
 
       if (error) throw error
@@ -730,7 +735,7 @@ export default function ConsumerActivationsView({ userProfile, onViewChange }: C
       </div>
 
       {/* Tabs for Activations and Feedback */}
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
+      <Tabs value={activeTab} onValueChange={(value) => { if (isActivationsTab(value)) setActiveTab(value) }}>
         <TabsList className="h-auto w-full flex flex-wrap justify-start gap-1 bg-[var(--sera-mist)] border border-[var(--sera-line)] p-1.5 rounded-xl mb-4">
           <TabsTrigger value="activations" className="rounded-lg px-4 py-2 text-[var(--sera-muted)] data-[state=active]:bg-white data-[state=active]:text-[var(--sera-ink)] data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-[var(--sera-orange)]/30">Recent Activations</TabsTrigger>
           <TabsTrigger value="feedback" className="rounded-lg px-4 py-2 text-[var(--sera-muted)] data-[state=active]:bg-white data-[state=active]:text-[var(--sera-ink)] data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-[var(--sera-orange)]/30 flex items-center gap-2">

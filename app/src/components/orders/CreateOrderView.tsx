@@ -7,7 +7,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
 import { ArrowLeft, User, Package, CheckSquare, Loader2, Trash2 } from 'lucide-react'
-import { canCreateH2MOrder } from '@/modules/supply-chain/h2m-access'
+import { useOrderCreateAccess } from '@/modules/supply-chain/useOrderCreateAccess'
+import { DEFAULT_QR_BUFFER_PERCENT, allocateQrBufferCases, qrBufferCases, resolveQrBufferPercent } from '@/lib/orders/qr-buffer'
+import { formatOrderExpectedBoxes } from '@/lib/orders/packaging'
+import { referenceSuffix, reportClientError } from '@/lib/system-logs/client'
 import {
   PRODUCT_SEPARATOR,
   variantIdentityLabel,
@@ -165,7 +168,8 @@ const getDefaultCaseSize = (family: string): number => {
 export default function CreateOrderView({ userProfile, onViewChange }: CreateOrderViewProps) {
   const { toast } = useToast()
   const supabase = createClient()
-  const canCreateH2M = canCreateH2MOrder(userProfile.organizations.org_type_code, userProfile.roles.role_level)
+  // H2M follows Security & Access once supply_chain.order.create is enforced (legacy: HQ level 40); the save RPC re-decides.
+  const { canCreateH2M } = useOrderCreateAccess(userProfile.organizations.org_type_code, userProfile.roles.role_level, false)
 
   // Determine order type based on user's organization type
   const [orderType, setOrderType] = useState<'H2M' | 'D2H' | 'S2D'>('H2M')
@@ -202,7 +206,7 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
   const [customUnitsPerCase, setCustomUnitsPerCase] = useState('')
   const [useCustomUnitsPerCase, setUseCustomUnitsPerCase] = useState(false)
   const [useIndividualCases, setUseIndividualCases] = useState(false)  // Toggle for individual case sizes
-  const [qrBuffer, setQrBuffer] = useState(10.00)
+  const [qrBuffer, setQrBuffer] = useState(DEFAULT_QR_BUFFER_PERCENT)
   const [masterQrDuplicates, setMasterQrDuplicates] = useState(5)  // Number of duplicate Master QR per case (0-10) - default 5
   const [enableRFID, setEnableRFID] = useState(false)
   const [hasPoints, setHasPoints] = useState(true)
@@ -913,7 +917,7 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
 
       // Set order configuration
       setUnitsPerCase(orderData.units_per_case || 100)
-      setQrBuffer(orderData.qr_buffer_percent || 10)
+      setQrBuffer(resolveQrBufferPercent(orderData.qr_buffer_percent))
       setMasterQrDuplicates(orderDataAny.extra_qr_master ?? 5) // Default to 5 if not set
       setEnableRFID(orderDataAny.rfid_enabled || orderData.has_rfid || false)
       setHasPoints(orderData.has_points !== false)
@@ -1026,7 +1030,9 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
 
       // Set order configuration from copied order
       setUnitsPerCase(orderData.units_per_case || 100)
-      setQrBuffer(orderData.qr_buffer_percent || 10)
+      // A copy is a new order: it takes the current 1% manufacturer buffer
+      // rather than carrying over the old 10% default.
+      setQrBuffer(DEFAULT_QR_BUFFER_PERCENT)
       setEnableRFID(orderData.rfid_enabled || false)
       setHasPoints(orderData.has_points !== false)
       setEnableLuckyDraw(orderData.enable_lucky_draw !== false)
@@ -1136,7 +1142,7 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
     if (!editingOrderId && orderType === 'H2M' && !canCreateH2M) {
       toast({
         title: 'Unauthorized',
-        description: 'H2M orders can only be created by Headquarters users with access level 40 or higher.',
+        description: 'You do not have access to create H2M orders. Ask your administrator for the Order Creator policy.',
         variant: 'destructive',
       })
       return
@@ -1183,7 +1189,7 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
         expectedUpdatedAt: isUpdate ? editingOrderUpdatedAt : null,
         sellerOrgId: sellerOrg.id,
         unitsPerCase: useCustomUnitsPerCase && customUnitsPerCase ? parseInt(customUnitsPerCase) : unitsPerCase,
-        qrBufferPercent: qrBuffer,
+        qrBufferPercent: resolveQrBufferPercent(qrBuffer),
         extraQrMaster: Math.max(0, Math.min(10, masterQrDuplicates)),
         hasRfid: enableRFID,
         hasPoints,
@@ -1251,9 +1257,16 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
 
     } catch (error: any) {
       console.error('Error saving order:', error)
+      // System Logs: handled failures never reach the global listeners, so report explicitly (routine validation and
+      // permission outcomes are not sent; network/timeout/unexpected failures are, with a reference for support).
+      const reference = reportClientError(error, {
+        module: 'Supply Chain',
+        action: editingOrderId ? 'Edit order' : status === 'submitted' ? 'Create and submit order' : 'Create order',
+        details: { requested_status: status, editing: Boolean(editingOrderId), order_type: orderType || null },
+      })
       toast({
         title: 'Order Not Saved',
-        description: 'An unexpected error occurred before the order was sent. Your form has been kept.',
+        description: `${error.message || 'An unexpected error occurred.'}${referenceSuffix(reference)}`,
         variant: 'destructive',
       })
     } finally {
@@ -1273,13 +1286,29 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
       : Math.ceil(orderItems.reduce((sum, item) => sum + item.qty, 0) / unitsPerCase)
 
     const masterQR = totalCases
-    // Calculate unique QR per item with buffer, then sum them up (matches Product Selection logic)
-    const uniqueQR = orderItems.reduce((sum, item) => sum + Math.round(item.qty + (item.qty * qrBuffer / 100)), 0)
+    // One unique QR per ordered case plus the manufacturer buffer cases, rounded
+    // exactly as QR generation rounds them (lib/orders/qr-buffer).
+    const orderedCases = orderItems.reduce((sum, item) => sum + item.qty, 0)
+    const bufferCases = qrBufferCases(orderedCases, resolveQrBufferPercent(qrBuffer))
+    const uniqueQR = orderedCases + bufferCases
 
-    return { subtotal, tax, total, totalCases, masterQR, uniqueQR }
+    // Expected Boxes: the shared Standard/Small Box rule the order detail page
+    // and PDF use, from the same box sizes this order will be saved with.
+    const expectedBoxes = formatOrderExpectedBoxes(
+      orderItems.map((item) => ({
+        qty: item.qty,
+        units_per_case: useIndividualCases ? item.units_per_case : null,
+      })),
+      useCustomUnitsPerCase && customUnitsPerCase ? parseInt(customUnitsPerCase) : unitsPerCase,
+    )
+
+    return { subtotal, tax, total, totalCases, masterQR, uniqueQR, orderedCases, bufferCases, expectedBoxes }
   }
 
   const totals = calculateTotals()
+  // Each line's share of the buffer, as generateQRBatch allocates it.
+  const lineBufferShares = allocateQrBufferCases(orderItems.map((item) => item.qty), resolveQrBufferPercent(qrBuffer))
+  const lineBufferCases = new Map(orderItems.map((item, index) => [item.variant_id, lineBufferShares[index]]))
 
   if (loading) {
     return (
@@ -1603,7 +1632,7 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
                     step="0.1"
                     min="0"
                   />
-                  <p className="text-xs text-[var(--sera-muted)]/80 mt-1">Additional QR codes for manufacturing (default 10%)</p>
+                  <p className="text-xs text-[var(--sera-muted)]/80 mt-1">Manufacturer buffer cases, one extra case QR each (default {DEFAULT_QR_BUFFER_PERCENT}%)</p>
                 </div>
               </div>
 
@@ -1923,7 +1952,7 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
                           </div>
                           <div>
                             <span className="text-[var(--sera-muted)]/80 block">Unique QR (with {qrBuffer}% buffer):</span>
-                            <span className="font-semibold">{Math.round(item.qty + (item.qty * qrBuffer / 100)).toLocaleString()} QR codes</span>
+                            <span className="font-semibold">{(item.qty + (lineBufferCases.get(item.variant_id) ?? 0)).toLocaleString()} QR codes</span>
                           </div>
                           <div>
                             <span className="text-[var(--sera-muted)]/80 block">Line Total:</span>
@@ -1931,7 +1960,7 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
                           </div>
                           <div>
                             <span className="text-[var(--sera-muted)]/80 block">QR Codes:</span>
-                            <span className="font-semibold">{Math.ceil(item.qty / (item.units_per_case || unitsPerCase))} master + {Math.round(item.qty + (item.qty * qrBuffer / 100))} unique</span>
+                            <span className="font-semibold">{Math.ceil(item.qty / (item.units_per_case || unitsPerCase))} master + {(item.qty + (lineBufferCases.get(item.variant_id) ?? 0)).toLocaleString()} unique</span>
                           </div>
                         </div>
                       </div>
@@ -2114,6 +2143,20 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
                   <span className="text-[var(--sera-muted)]">Total Boxes:</span>
                   <span className="font-medium">{totals.totalCases}</span>
                 </div>
+                {orderItems.length > 0 && (
+                  <div className="flex justify-between gap-3">
+                    <span className="text-[var(--sera-muted)] whitespace-nowrap">Expected Boxes:</span>
+                    <span className="font-medium text-right">{totals.expectedBoxes}</span>
+                  </div>
+                )}
+                {orderType === 'H2M' && orderItems.length > 0 && (
+                  <div className="flex justify-between gap-3">
+                    <span className="text-[var(--sera-muted)] whitespace-nowrap">Buffer Cases:</span>
+                    <span className="font-medium text-right">
+                      {totals.bufferCases.toLocaleString()} ({resolveQrBufferPercent(qrBuffer)}%, not boxed)
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-[var(--sera-muted)]">Master QR:</span>
                   <span className="font-medium">{totals.masterQR}</span>

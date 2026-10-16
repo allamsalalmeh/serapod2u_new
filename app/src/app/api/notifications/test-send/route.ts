@@ -41,6 +41,19 @@ export async function POST(request: NextRequest) {
             sampleData  // { order_no, amount, customer_name, ... }
         } = body
 
+        // Email has no test sender here. Say so instead of reporting a send
+        // that never happened, and record nothing.
+        if (channel === 'email') {
+            return NextResponse.json({
+                success: false,
+                status: 'unsupported',
+                error: 'Email test sending is not available. No email was sent.',
+            }, { status: 501 })
+        }
+        if (channel !== 'whatsapp' && channel !== 'sms') {
+            return NextResponse.json({ success: false, status: 'error', error: 'Unknown channel' }, { status: 400 })
+        }
+
         // Prepare message body with variable substitution
         const messageBody = applyTemplate(template || '', sampleData || {})
 
@@ -95,9 +108,6 @@ export async function POST(request: NextRequest) {
             } else {
                 result = { status: 'failed', error: sent.error || 'SMS gateway returned error' }
             }
-        } else if (channel === 'email') {
-            // Email placeholder
-            result = { status: 'sent', provider_id: `email-mock-id`, note: 'Email provider not yet implemented' }
         }
 
         // Log the test send
@@ -106,8 +116,8 @@ export async function POST(request: NextRequest) {
                 org_id: userProfile.organization_id,
                 event_code: eventCode || 'test',
                 channel: channel,
-                recipient_value: channel === 'email' ? recipient?.email : (recipient?.phone || recipient?.phone_number),
-                recipient_type: channel === 'email' ? 'email' : 'phone',
+                recipient_value: recipient?.phone || recipient?.phone_number,
+                recipient_type: 'phone',
                 status: result.status,
                 provider_name: resolvedProviderName || channel,
                 provider_message_id: result.provider_id || null,

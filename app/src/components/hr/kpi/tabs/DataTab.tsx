@@ -106,7 +106,7 @@ export function KPIDataTab({ periodId }: { periodId: string | null }) {
         const [a, dm, m] = await Promise.all([
             periodId
                 ? kpiFetch<Actual[]>(`/api/hr/kpi/actuals?period_id=${periodId}`)
-                : Promise.resolve({ success: true, data: [] as Actual[] }),
+                : Promise.resolve<{ success: boolean; data?: Actual[]; error?: string }>({ success: true, data: [] }),
             kpiFetch<DataMapping[]>('/api/hr/kpi/data-mappings'),
             kpiFetch<Metric[]>('/api/hr/kpi/metrics'),
         ])

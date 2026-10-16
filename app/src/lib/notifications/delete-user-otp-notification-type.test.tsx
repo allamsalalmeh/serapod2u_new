@@ -5,6 +5,7 @@ import { DELETE_USER_OTP_EVENT, REQUIRED_NOTIFICATION_TYPES } from '@/lib/notifi
 
 const root = path.resolve(__dirname, '../../..')
 const typesTab = fs.readFileSync(path.join(root, 'src/components/settings/NotificationTypesTab.tsx'), 'utf8')
+const typeModules = fs.readFileSync(path.join(root, 'src/lib/notifications/notificationTypeModules.ts'), 'utf8')
 const templates = fs.readFileSync(path.join(root, 'src/config/notificationTemplates.ts'), 'utf8')
 const ensureTypes = fs.readFileSync(path.join(root, 'src/lib/notifications/ensureNotificationTypes.ts'), 'utf8')
 const migration = fs.readFileSync(
@@ -22,10 +23,11 @@ describe('delete_user_otp notification type catalog (phase 1)', () => {
   })
 
   it('exposes security category and whatsapp_sms_email_fallback preset in Notification Types UI', () => {
-    expect(typesTab).toContain("security: 'Security & OTP'")
+    expect(typeModules).toContain("security: 'Security & OTP'")
     expect(typesTab).toContain("'whatsapp_sms_email_fallback'")
     expect(typesTab).toContain('DELETE_USER_OTP_EVENT')
-    expect(typesTab).toContain('Always on. Recipient is the organization contact.')
+    expect(typesTab).toContain('Always on')
+    expect(typesTab).toContain('Recipient is the organization contact.')
   })
 
   it('ships default templates for all delete_user_otp channels', () => {

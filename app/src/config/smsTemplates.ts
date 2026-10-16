@@ -26,7 +26,7 @@ export const smsTemplates: Record<string, SmsTemplate[]> = {
         id: 'oa_sms_1',
         name: 'SMS Approval Notice',
         channel: 'sms',
-        body: `[Serapod2U] Order #{{order_no}} APPROVED by {{approved_by}}. Amount: RM {{amount}}.}`,
+        body: `[Serapod2U] Order #{{order_no}} APPROVED by {{approved_by}}. Amount: RM {{amount}}.`,
     }],
     order_closed: [{
         id: 'oc_sms_1',

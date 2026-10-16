@@ -98,16 +98,13 @@ export function hasMenuAccess(
   if (access.requiredPermission || (access.requiredPermissionsAny && access.requiredPermissionsAny.length > 0)) {
     if (checkPermission) {
       if (access.requiredPermission) {
-        console.log('[hasMenuAccess] Checking required permission:', access.requiredPermission)
         permOk = checkPermission(access.requiredPermission)
-        console.log('[hasMenuAccess] Permission result:', access.requiredPermission, '=', permOk)
       }
 
       if (!permOk && access.requiredPermissionsAny && access.requiredPermissionsAny.length > 0) {
         permOk = access.requiredPermissionsAny.some(permission => checkPermission(permission))
       }
     } else {
-      console.log('[hasMenuAccess] ✗ No checkPermission function, denying permissions')
       permOk = false
     }
   }
@@ -142,16 +139,6 @@ export function hasMenuAccess(
 
   const isVisible = permOk && orgOk && roleCodeOk && levelOk
 
-  // Debug log for troubleshooting access denials
-  if (!isVisible && access.requiredPermission === 'view_users') {
-    console.log('[hasMenuAccess] Denied user view_users access. Status:', {
-      permOk, orgOk, roleCodeOk, levelOk,
-      userRoleLevel,
-      userOrgType,
-      requiredPermission: access.requiredPermission
-    })
-  }
-
   return isVisible
 }
 
@@ -163,15 +150,8 @@ export function filterMenuItems(
   userProfile: any,
   checkPermission?: (permission: string) => boolean
 ): MenuItem[] {
-  console.log('[filterMenuItems] Filtering', menuItems.length, 'items for user:', userProfile?.email, 'level:', userProfile?.roles?.role_level)
   return menuItems
-    .filter(item => {
-      const hasAccess = hasMenuAccess(userProfile, item.access, checkPermission)
-      if (item.id === 'users') {
-        console.log('[filterMenuItems] User Management access check:', hasAccess, 'for item:', item.id)
-      }
-      return hasAccess
-    })
+    .filter(item => hasMenuAccess(userProfile, item.access, checkPermission))
     .map(item => {
       // Filter submenu items if they exist
       if (item.submenu && item.submenu.length > 0) {

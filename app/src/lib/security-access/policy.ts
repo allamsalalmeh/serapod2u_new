@@ -35,7 +35,12 @@ function scopeMatches(type: ScopeType, value: string, request: AuthorizationRequ
   const resource = request.resource
   if (type === 'organization') return resource.organizationId ? resource.organizationId === value : null
   if (type === 'department') return resource.departmentId ? resource.departmentId === value : null
-  if (type === 'warehouse') return resource.warehouseId ? resource.warehouseId === value : null
+  if (type === 'warehouse') {
+    if (resource.warehouseId) return resource.warehouseId === value
+    // A warehouse is an organization: a resource of exactly that organization is the warehouse's (sa_scope_matches,
+    // 20261109100000). The parent HQ, a sibling or a descendant still lacks warehouse context.
+    return resource.organizationId === value ? true : null
+  }
   if (type === 'own_record') return resource.ownerUserId ? resource.ownerUserId === request.actorId : null
   if (type === 'direct_reports') return null // reserved for a future reporting-line resolver
   return null

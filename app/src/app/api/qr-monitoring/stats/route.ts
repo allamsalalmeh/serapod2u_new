@@ -3,6 +3,7 @@ import { legacyRoleLevelAtMost } from '@/lib/security-access/legacy-rules'
 import { guardUserOperation, userAllowed } from '@/lib/security-access/operation'
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { isPartnerOrgType } from '@/lib/qr-batch-access'
 
 /**
  * GET /api/qr-monitoring/stats
@@ -24,6 +25,12 @@ export async function GET(request: NextRequest) {
       // signed-in account).
       const saDenied = await guardUserOperation(actor.id, 'qr.batch.manage', { legacy: () => legacyRoleLevelAtMost(actor.id, 50) })
       if (saDenied) return saDenied
+      // These are system-wide verification statistics (not scoped to any order). qr.batch.manage is
+      // also held by manufacturers for their own batches, so partners never receive this view.
+      const { data: actorOrg } = await (createAdminClient() as any).from('users').select('organizations:organization_id(org_type_code)').eq('id', actor.id).maybeSingle()
+      if (isPartnerOrgType(String(actorOrg?.organizations?.org_type_code || ''))) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
     }
     const supabaseAdmin = createAdminClient() as any
 

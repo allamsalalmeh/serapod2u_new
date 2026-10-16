@@ -1,8 +1,10 @@
 'use client'
 
+import { useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowRight, AlertCircle, Construction } from 'lucide-react'
-import { financeNavGroups, type FinanceNavGroup } from '@/modules/finance/financeNav'
+import { useNavAccess } from '@/hooks/useNavAccess'
+import { filterFinanceNavGroups, type FinanceNavGroup } from '@/modules/finance/financeNav'
 import FinanceHeroBanner from './FinanceHeroBanner'
 import SetupReadinessBanner from '@/components/shared/SetupReadinessBanner'
 import ModuleLandingCard from '@/components/layout/ModuleLandingCard'
@@ -46,6 +48,9 @@ function StatusBadge({ status }: { status: 'live' | 'coming-soon' | 'placeholder
 
 export default function FinanceLandingView({ userName, bannerImageUrl }: FinanceLandingViewProps) {
     const router = useRouter()
+    // A card for each section this person may open; the module entry alone opens none of them.
+    const { snapshot, allows } = useNavAccess()
+    const groups = useMemo(() => filterFinanceNavGroups(allows), [snapshot]) // eslint-disable-line react-hooks/exhaustive-deps
 
     return (
         <div className="sera-module-landing">
@@ -59,7 +64,7 @@ export default function FinanceLandingView({ userName, bannerImageUrl }: Finance
             />
 
             <div className="sera-module-landing__grid">
-                {financeNavGroups.map((group: FinanceNavGroup) => {
+                {groups.map((group: FinanceNavGroup) => {
                     const Icon = group.icon
                     const meta = cardDescriptions[group.id]
                     const accent = pickLandingAccent(financeLandingAccents, group.id, defaultIconAccent)

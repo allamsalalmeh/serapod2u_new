@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Bot, History, KeyRound } from 'lucide-react'
 import { formatDate } from './client-api'
-import { Collapsible, EmptyState, FilterChips, FOCUS, SearchInput, ToggleButton } from './ui'
+import { Collapsible, EmptyState, FilterChips, FOCUS, LIST_TEXT, SearchInput, ToggleButton } from './ui'
 import {
   CREDENTIAL_STATES, LIFECYCLE, credentialState, moduleOfService, filterServices, groupServices, lifecycleLabel, serviceKindLabel,
   type CredentialState, type ServiceGroup, type ServiceIdentity,
@@ -112,7 +112,7 @@ export default function TechnicalAccessPanel({ governance, error }: { governance
           <div className={`${ROW} hidden border-b border-gray-100 px-4 py-2 text-xs font-medium text-gray-500 md:grid`} aria-hidden>
             <span>Module / service</span><span>Type</span><span>Credential</span><span>Lifecycle</span><span>Last recorded usage</span>
           </div>
-          <ul>{groups.map(g => {
+          <ul className={LIST_TEXT}>{groups.map(g => {
             const gOpen = expanded.has(g.id)
             return <li key={g.id} className="border-t border-gray-100 first:border-t-0">
               <div className="bg-gray-50/70 px-4 py-2">
