@@ -38,9 +38,9 @@ function hasValue(value?: string | null): boolean {
     return Boolean(value?.trim())
 }
 
-export function hasValidLinkedShop(input: Pick<CollectProfileCompletionInput, 'organizationId' | 'organizationTypeCode'>): boolean {
-    if (typeof (input as any).isShopLinkValid === 'boolean') {
-        return (input as any).isShopLinkValid
+export function hasValidLinkedShop(input: Pick<CollectProfileCompletionInput, 'organizationId' | 'organizationTypeCode' | 'shopName' | 'isShopLinkValid'>): boolean {
+    if (typeof input.isShopLinkValid === 'boolean') {
+        return input.isShopLinkValid
     }
 
     if (!hasValue(input.organizationId)) {
@@ -51,9 +51,9 @@ export function hasValidLinkedShop(input: Pick<CollectProfileCompletionInput, 'o
     return !orgTypeCode || orgTypeCode === 'SHOP'
 }
 
-export function hasValidReferenceLink(input: Pick<CollectProfileCompletionInput, 'referralPhone'>): boolean {
-    if (typeof (input as any).isReferenceLinkValid === 'boolean') {
-        return (input as any).isReferenceLinkValid
+export function hasValidReferenceLink(input: Pick<CollectProfileCompletionInput, 'referralPhone' | 'isReferenceLinkValid'>): boolean {
+    if (typeof input.isReferenceLinkValid === 'boolean') {
+        return input.isReferenceLinkValid
     }
 
     return hasValue(input.referralPhone)

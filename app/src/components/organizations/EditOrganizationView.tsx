@@ -78,8 +78,8 @@ interface PaymentTerm {
   deposit_percentage: number
   balance_percentage: number
   description: string | null
-  is_default: boolean
-  is_active: boolean
+  is_default: boolean | null
+  is_active: boolean | null
 }
 
 export default function EditOrganizationView({ userProfile, onViewChange }: EditOrganizationViewProps) {
