@@ -112,7 +112,10 @@ async function hydrateLandingPageRows(adminClient: any, rows: any[]) {
   }))
 }
 
-export function normalizeLandingPagePayload(body: any, fallback?: Partial<LandingPagePayload>): LandingPagePayload {
+// Stored rows use null for unset fields; every fallback read below is null-safe.
+type LandingPagePayloadFallback = { [K in keyof LandingPagePayload]?: LandingPagePayload[K] | null }
+
+export function normalizeLandingPagePayload(body: any, fallback?: LandingPagePayloadFallback): LandingPagePayload {
   const internalName = String(body?.internal_name ?? fallback?.internal_name ?? '').trim()
   const publicTitle = String(body?.public_title ?? fallback?.public_title ?? '').trim()
   const slugBase = String(body?.slug ?? fallback?.slug ?? publicTitle ?? internalName)
