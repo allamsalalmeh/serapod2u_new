@@ -60,6 +60,14 @@ export const createFakeDb = (tables: Record<string, Row[]>): FakeDb => {
         const result = execute()
         return Promise.resolve(result.error ? result : { data: result.data?.[0] ?? null, error: null })
       },
+      // PostgREST: exactly one row, otherwise PGRST116.
+      single: () => {
+        const result = execute()
+        if (result.error) return Promise.resolve(result)
+        return Promise.resolve(result.data?.length === 1
+          ? { data: result.data[0], error: null }
+          : { data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } })
+      },
       then: (onFulfilled: (value: unknown) => unknown, onRejected?: (reason: unknown) => unknown) =>
         Promise.resolve(execute()).then(onFulfilled, onRejected),
     }
