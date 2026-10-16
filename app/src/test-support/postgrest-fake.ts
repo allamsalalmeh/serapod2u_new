@@ -12,9 +12,10 @@ export type Row = Record<string, unknown>
 export type QueryCall = {
   table: string
   select: string | null
-  filters: Array<{ op: 'eq' | 'in'; column: string; value: unknown }>
+  filters: Array<{ op: 'eq' | 'in' | 'gte' | 'lte'; column: string; value: unknown }>
   order: string | null
   range: [number, number] | null
+  limit?: number
   writes: string[]
 }
 
@@ -22,6 +23,16 @@ export type FakeDb = {
   calls: QueryCall[]
   from: (table: string) => unknown
   failOn: (table: string, error?: { message: string; code?: string }) => void
+}
+
+// Like PostgREST, return only the selected top-level columns and embeds
+// ('*' keeps every column), so a route reading an unselected column fails.
+const project = (rows: Row[], select: string | null | undefined): Row[] => {
+  if (!select) return rows
+  const parts = splitTopLevel(select)
+  if (parts.includes('*')) return rows
+  const keys = parts.map(part => part.match(/^(\w+)/)?.[1]).filter((key): key is string => Boolean(key))
+  return rows.map(row => Object.fromEntries(keys.filter(key => key in row).map(key => [key, row[key]])))
 }
 
 export const createFakeDb = (tables: Record<string, Row[]>): FakeDb => {
@@ -37,9 +48,10 @@ export const createFakeDb = (tables: Record<string, Row[]>): FakeDb => {
       if (failure) return { data: null, error: failure }
       let rows = (tables[table] ?? []).filter(row =>
         call.filters.every(filter =>
-          filter.op === 'eq'
-            ? row[filter.column] === filter.value
-            : (filter.value as unknown[]).includes(row[filter.column])
+          filter.op === 'eq' ? row[filter.column] === filter.value
+            : filter.op === 'in' ? (filter.value as unknown[]).includes(row[filter.column])
+            : filter.op === 'gte' ? String(row[filter.column]) >= String(filter.value)
+            : String(row[filter.column]) <= String(filter.value)
         )
       )
       if (call.order) {
@@ -47,13 +59,17 @@ export const createFakeDb = (tables: Record<string, Row[]>): FakeDb => {
         rows = [...rows].sort((a, b) => String(a[column]).localeCompare(String(b[column])))
       }
       if (call.range) rows = rows.slice(call.range[0], call.range[1] + 1)
-      return { data: rows, error: null }
+      if (call.limit !== undefined) rows = rows.slice(0, call.limit)
+      return { data: project(rows, call.select), error: null }
     }
 
     const builder: Record<string, unknown> = {
       select: (columns: string) => { call.select = columns; return builder },
       eq: (column: string, value: unknown) => { call.filters.push({ op: 'eq', column, value }); return builder },
       in: (column: string, value: unknown[]) => { call.filters.push({ op: 'in', column, value }); return builder },
+      gte: (column: string, value: unknown) => { call.filters.push({ op: 'gte', column, value }); return builder },
+      lte: (column: string, value: unknown) => { call.filters.push({ op: 'lte', column, value }); return builder },
+      limit: (count: number) => { call.limit = count; return builder },
       order: (column: string) => { call.order = column; return builder },
       range: (fromIndex: number, toIndex: number) => { call.range = [fromIndex, toIndex]; return builder },
       maybeSingle: () => {
