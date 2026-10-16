@@ -78,6 +78,8 @@ export default function DailyQuizCampaignForm({ userProfile, campaignId, initial
     }
 
     const fetchCampaign = async () => {
+        // Only called when campaignId is set (see the effect above).
+        if (!campaignId) return
         setLoading(true)
         const { data: campaign, error } = await supabase
             .from('daily_quiz_campaigns')

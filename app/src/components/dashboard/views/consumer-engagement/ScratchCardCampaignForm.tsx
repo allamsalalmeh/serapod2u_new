@@ -299,6 +299,8 @@ export default function ScratchCardCampaignForm({ userProfile, campaignId, initi
     }
 
     const fetchCampaign = async () => {
+        // Only called when campaignId is set (see the effect above).
+        if (!campaignId) return
         setLoading(true)
         const { data: campaign, error } = await supabase
             .from('scratch_card_campaigns')
