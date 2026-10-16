@@ -164,7 +164,7 @@ export function RoadtourCampaignsView({ userProfile, onViewChange }: RoadtourCam
     const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null)
     const [selectedCampaignName, setSelectedCampaignName] = useState('')
     const [managers, setManagers] = useState<AccountManager[]>([])
-    const [availableManagers, setAvailableManagers] = useState<{ id: string; full_name: string; email: string; phone: string }[]>([])
+    const [availableManagers, setAvailableManagers] = useState<{ id: string; full_name: string; call_name: string; email: string; phone: string }[]>([])
     const [surveyTemplates, setSurveyTemplates] = useState<SurveyTemplateOption[]>([])
     const [managersLoading, setManagersLoading] = useState(false)
     const [managerSearch, setManagerSearch] = useState('')
@@ -404,7 +404,7 @@ export function RoadtourCampaignsView({ userProfile, onViewChange }: RoadtourCam
 
         if (existingError) throw existingError
 
-        const existingByUserId = new Map((existingRows || []).map((row: any) => [row.user_id, row]))
+        const existingByUserId = new Map<string, { id: string; user_id: string; is_active: boolean | null }>((existingRows || []).map((row: any) => [row.user_id, row]))
         const rowsToUpsert = uniqueManagerIds.map((userId) => ({
             campaign_id: campaignId,
             user_id: userId,
