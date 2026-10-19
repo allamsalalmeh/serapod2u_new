@@ -26,7 +26,7 @@ vi.mock('@/lib/email/transactional-html-email', () => ({
   },
 }))
 
-import { notifyStoreOrderPaid, STORE_INBOX } from './order-paid-email'
+import { notifyStoreOrderPaid, STORE_INBOXES } from './order-paid-email'
 
 const RECEIPT = 'https://pay.stripe.com/receipts/payment/abc'
 
@@ -58,7 +58,7 @@ describe('notifyStoreOrderPaid', () => {
 
   it('emails the customer the order details with the Stripe receipt, and the store inbox', async () => {
     await notifyStoreOrderPaid('o1')
-    expect(state.sent.map((m) => m.to)).toEqual(['amirul@example.com', STORE_INBOX])
+    expect(state.sent.map((m) => m.to)).toEqual(['amirul@example.com', 'admin@serapod.com', 'jafar@serapod.com'])
     const [customer, staff] = state.sent
     expect(customer.fromName).toBe('Serapod2U Store')
     expect(customer.subject).toContain('ORD-1')
@@ -74,7 +74,7 @@ describe('notifyStoreOrderPaid', () => {
   it('still sends the details when the Stripe receipt cannot be read', async () => {
     state.secretKey = ''
     await notifyStoreOrderPaid('o1')
-    expect(state.sent).toHaveLength(2)
+    expect(state.sent).toHaveLength(3)
     expect(state.sent[0].html).not.toContain('pay.stripe.com')
     expect(state.fetchCalls).toHaveLength(0)
   })
@@ -88,6 +88,6 @@ describe('notifyStoreOrderPaid', () => {
   it('only tells the store inbox when the customer gave no email', async () => {
     state.order.customer_email = null
     await notifyStoreOrderPaid('o1')
-    expect(state.sent.map((m) => m.to)).toEqual([STORE_INBOX])
+    expect(state.sent.map((m) => m.to)).toEqual(STORE_INBOXES)
   })
 })

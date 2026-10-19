@@ -4,7 +4,7 @@ import { resolveOrgForEmail } from '@/server/auth/passwordResetService'
 import { getGatewayByProvider } from '@/lib/payments'
 import { escapeHtml, money } from '@/lib/outdoor/order-email-shell'
 
-export const STORE_INBOX = 'admin@serapod.com'
+export const STORE_INBOXES = ['admin@serapod.com', 'jafar@serapod.com']
 const STORE_FROM_NAME = 'Serapod2U Store'
 
 function storeOrigin() {
@@ -115,8 +115,7 @@ ${address ? `<p style="margin:0 0 12px;line-height:1.55;font-size:13px;color:#7c
   }
 
   const ordersLink = `${storeOrigin()}/ecommerce/store-orders`
-  const staff = await sendTransactionalHtmlEmail(admin, orgId, {
-    to: STORE_INBOX,
+  const staffMessage = {
     subject: `New paid store order ${ref} · ${money(total, currency)}`,
     text: [
       paidLine,
@@ -136,6 +135,9 @@ ${receiptUrl ? `<p style="margin:0;font-size:13px"><a href="${escapeHtml(receipt
       { href: ordersLink, label: 'Open Store Orders' },
     ),
     fromName: STORE_FROM_NAME,
-  })
-  if (!staff.success) console.error('[store-order-paid] staff email failed:', staff.error)
+  }
+  for (const inbox of STORE_INBOXES) {
+    const staff = await sendTransactionalHtmlEmail(admin, orgId, { ...staffMessage, to: inbox })
+    if (!staff.success) console.error(`[store-order-paid] staff email to ${inbox} failed:`, staff.error)
+  }
 }
