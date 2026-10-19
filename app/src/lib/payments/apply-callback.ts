@@ -61,6 +61,14 @@ export async function applyStorefrontPaymentResult(result: PaymentCallbackResult
         console.error('[payments] order paid email failed:', err)
       }
     })()
+    const storeEmail = (async () => {
+      try {
+        const { notifyStoreOrderPaid } = await import('@/lib/storefront/order-paid-email')
+        await notifyStoreOrderPaid(result.orderId)
+      } catch (err) {
+        console.error('[payments] store order paid email failed:', err)
+      }
+    })()
     const sms = (async () => {
       try {
         const { notifyOutdoorOrderSms } = await import('@/lib/outdoor/order-sms')
@@ -69,7 +77,7 @@ export async function applyStorefrontPaymentResult(result: PaymentCallbackResult
         console.error('[payments] order paid SMS failed:', err)
       }
     })()
-    await Promise.all([email, sms])
+    await Promise.all([email, storeEmail, sms])
   }
   if (!updated && result.paid) {
     const { data: current } = await supabase
