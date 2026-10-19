@@ -113,7 +113,10 @@ export async function saveTikTokConnection(db: any, ctx: { orgId: string; userId
     updated_at: now,
     last_sync_error: null,
   }
-  if (!sameShop) {
+  if (sameShop) {
+    // The upsert's insert half needs every NOT NULL column, even when it ends up updating.
+    row.data_from = existing.data_from
+  } else {
     Object.assign(row, {
       data_from: await computeDataFrom(db, shopId),
       orders_synced_to: null,
