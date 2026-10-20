@@ -16,9 +16,10 @@ import {
     getVariantDisplayName,
     classifyProductLine,
     productLineLabel,
+    formatReturnAmount,
     type ProductLine,
 } from './format'
-import { itemsTotalQty } from './compute'
+import { itemsTotalQty, itemsTotalValue } from './compute'
 import type { ReturnCase, ReturnCaseItem } from './types'
 
 // ── Section definition ────────────────────────────────────────────────────
@@ -420,12 +421,13 @@ export async function generateReturnPdf(
     const cardsH = 18
     if (y + cardsH + 4 > contentBottom) { doc.addPage(); y = CONTINUE_TOP }
     const cardGap = 4
-    const cardW = (contentWidth - cardGap * 2) / 3
     const cards: Array<[string, string]> = [
         ['TOTAL ITEM LINES', String(grandLines)],
         ['TOTAL PCS', String(grandPcs)],
         ['TOTAL CASES', String(grandBoxes)],
+        ['TOTAL VALUE (RM)', formatReturnAmount(itemsTotalValue(items))],
     ]
+    const cardW = (contentWidth - cardGap * (cards.length - 1)) / cards.length
     cards.forEach(([label, value], i) => {
         const cx = margin + i * (cardW + cardGap)
         doc.setDrawColor(...BOX_BORDER)
