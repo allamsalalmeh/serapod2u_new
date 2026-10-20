@@ -14,6 +14,11 @@ vi.mock('@/lib/outdoor/order-status-email', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/outdoor/order-status-email')>()),
   notifyOutdoorOrderStatus: notifyStatus,
 }))
+const notifyShipped = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/storefront/order-shipped-email', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/storefront/order-shipped-email')>()),
+  notifyStoreOrderShipped: notifyShipped,
+}))
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => ({ auth: { getUser: authGetUser } })),
@@ -76,6 +81,7 @@ describe('PUT /api/admin/store/orders — shipping an order', () => {
     expect(response.status).toBe(200)
     expect(updateCalls[0].payload).toEqual({ status: 'shipped', shipping_tracking_no: 'JT123', shipping_courier_name: 'J&T Express' })
     expect(notifyStatus).toHaveBeenCalledWith(ORDER_ID, 'shipped', { moneyReturned: false })
+    expect(notifyShipped).toHaveBeenCalledWith(ORDER_ID, null)
   })
 
   it('keeps classic store orders shippable without tracking', async () => {
@@ -87,6 +93,7 @@ describe('PUT /api/admin/store/orders — shipping an order', () => {
     expect(response.status).toBe(200)
     expect(updateCalls[0].payload).toEqual({ status: 'shipped' })
     expect(notifyStatus).toHaveBeenCalledWith(ORDER_ID, null, { moneyReturned: false })
+    expect(notifyShipped).toHaveBeenCalledWith(ORDER_ID, 'shipped')
   })
 
   it('ships an Outdoor order with our own delivery team, without a tracking number', async () => {
