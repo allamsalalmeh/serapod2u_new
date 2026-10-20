@@ -8,6 +8,7 @@ import { getGatewayByProvider } from '@/lib/payments'
 import { refundStripeCheckout } from '@/lib/payments/stripe-refund'
 import { returnOrderStock, stockMoveNote, takeOrderStock, undoOrderStock } from '@/lib/storefront/order-stock'
 import { notifyOutdoorOrderStatus, outdoorOrderEmailFor } from '@/lib/outdoor/order-status-email'
+import { notifyStoreOrderShipped, storeShippingEmailFor } from '@/lib/storefront/order-shipped-email'
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -346,6 +347,16 @@ export async function PUT(request: NextRequest) {
                 moneyReturned,
             }),
             { moneyReturned },
+        )
+        await notifyStoreOrderShipped(
+            id,
+            storeShippingEmailFor({
+                salesChannel: current.sales_channel,
+                fromStatus: current.status,
+                toStatus: status,
+                fromTracking: current.shipping_tracking_no,
+                toTracking: data.shipping_tracking_no,
+            }),
         )
 
         return NextResponse.json(stockWarning ? { order: data, warning: stockWarning } : { order: data })
