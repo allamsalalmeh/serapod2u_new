@@ -5,15 +5,15 @@ import { getGatewayByProvider } from '@/lib/payments'
 import { escapeHtml, money } from '@/lib/outdoor/order-email-shell'
 
 export const STORE_INBOXES = ['admin@serapod.com', 'jafar@serapod.com']
-const STORE_FROM_NAME = 'Serapod2U Store'
+export const STORE_FROM_NAME = 'Serapod2U Store'
 
-function storeOrigin() {
+export function storeOrigin() {
   const env = String(process.env.NEXT_PUBLIC_APP_URL || '').trim().replace(/\/+$/, '')
   if (env && !/0\.0\.0\.0|127\.0\.0\.1|localhost/i.test(env)) return env
   return 'https://www.serapod2u.com'
 }
 
-function shell(title: string, body: string, cta: { href: string; label: string } | null) {
+export function storeEmailShell(title: string, body: string, cta: { href: string; label: string } | null) {
   return `<div style="font-family:Arial,sans-serif;color:#333f48;max-width:560px;margin:0 auto;padding:24px">
 <h2 style="margin:0 0 16px;color:#1f2a30">${escapeHtml(title)}</h2>${body}
 ${cta ? `<p style="margin:22px 0 0"><a href="${escapeHtml(cta.href)}" style="display:inline-block;background:#1f2a30;color:#ffffff;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:600">${escapeHtml(cta.label)}</a></p>` : ''}</div>`
@@ -99,7 +99,7 @@ export async function notifyStoreOrderPaid(orderId: string) {
         'We will let you know when your order ships.',
         receiptUrl ? `Payment receipt: ${receiptUrl}` : '',
       ].filter(Boolean).join('\n\n'),
-      html: shell(
+      html: storeEmailShell(
         'Your order is confirmed',
         `<p style="margin:0 0 12px;line-height:1.55">${firstName ? `Hi ${escapeHtml(firstName)},` : 'Hi,'}</p>
 <p style="margin:0 0 12px;line-height:1.55">Thank you for shopping with Serapod2U. Your payment is confirmed.</p>
@@ -125,7 +125,7 @@ ${address ? `<p style="margin:0 0 12px;line-height:1.55;font-size:13px;color:#7c
       receiptUrl ? `Stripe receipt: ${receiptUrl}` : '',
       `Open Store Orders: ${ordersLink}`,
     ].filter(Boolean).join('\n\n'),
-    html: shell(
+    html: storeEmailShell(
       `New paid store order ${ref}`,
       `<p style="margin:0 0 4px;font-size:13px;color:#7c878e">${escapeHtml(paidLine)}</p>
 <p style="margin:0 0 12px;line-height:1.55"><strong>Customer:</strong> ${escapeHtml(order.customer_name || '')} &lt;${escapeHtml(order.customer_email || '')}&gt; ${escapeHtml(order.customer_phone || '')}</p>

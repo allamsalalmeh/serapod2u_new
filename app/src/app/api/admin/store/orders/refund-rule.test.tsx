@@ -25,6 +25,11 @@ vi.mock('@/lib/outdoor/order-status-email', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/outdoor/order-status-email')>()),
   notifyOutdoorOrderStatus: notifyStatus,
 }))
+const notifyShipped = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/storefront/order-shipped-email', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/storefront/order-shipped-email')>()),
+  notifyStoreOrderShipped: notifyShipped,
+}))
 
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(() => ({
