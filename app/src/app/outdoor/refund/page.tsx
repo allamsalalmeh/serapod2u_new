@@ -28,7 +28,7 @@ export default function OutdoorRefundPage() {
         {
           heading: 'Method & timing',
           body: [
-            'Approved refunds are returned to the original payment method where possible: card payments through Stripe, FPX and e-wallet payments through Billplz or ToyyibPay.',
+            'Approved refunds are returned to the payment method you used to pay.',
             'After we approve a refund, bank or e-wallet posting typically takes 5–14 business days depending on the provider.',
           ],
         },
