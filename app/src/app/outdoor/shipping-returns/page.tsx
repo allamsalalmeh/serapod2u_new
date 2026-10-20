@@ -25,7 +25,7 @@ export default function OutdoorShippingPage() {
         {
           heading: 'Tracking',
           body: [
-            'Use Track Order with your order reference and checkout email to see where your order is: paid, on its way, delivered. If a courier carries it, its tracking number and updates appear there too.',
+            'Sign in and open Track Order to see where your order is: paid, on its way, delivered. If a courier carries it, its tracking number and updates appear there too.',
           ],
         },
         {
