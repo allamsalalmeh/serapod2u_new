@@ -1,59 +1,59 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Fragment } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Separator } from '@/components/ui/separator'
 import { toast } from '@/components/ui/use-toast'
 import {
-  Building2, RefreshCw, Loader2, Calendar, Download, FileText,
-  Landmark, Wallet, Scale,
+  Scale, RefreshCw, Loader2, Calendar, Download, FileText, Printer, ListTree,
+  CheckCircle2, AlertCircle,
 } from 'lucide-react'
+import ReportPrintLayout, { formatAmount, formatReportDate, type ReportCompany } from './ReportPrintLayout'
 
 interface BalanceSheetViewProps {
   userProfile: { id: string; organizations: { id: string }; roles: { role_level: number } }
 }
 
-interface BSAccount {
-  code: string
-  name: string
-  balance: number
+type Pair = { current: number; compare: number }
+interface BSLine { code: string; name: string; current: number; compare: number }
+interface BSGroup { key: string; label: string; accounts: BSLine[]; current: number; compare: number }
+interface BSSection { key: string; label: string; groups: BSGroup[]; current: number; compare: number }
+
+interface BSReport {
+  company: ReportCompany
+  asAtDate: string
+  compareMode: 'prev_fy_end' | 'none'
+  compareAt: string | null
+  fiscalYearLabel: string | null
+  sections: {
+    fixedAssets: BSSection
+    currentAssets: BSSection
+    currentLiabilities: BSSection
+    longTermLiabilities: BSSection
+    financing: BSSection
+  }
+  totals: { totalAssets: Pair; totalLiabilities: Pair; netCurrentAssets: Pair; netAssets: Pair; financing: Pair }
+  balanced: boolean
+  hasData: boolean
 }
 
-interface BSSection {
-  accounts: BSAccount[]
-  total: number
-}
-
-function formatCurrency(n: number) {
-  return new Intl.NumberFormat('en-MY', { style: 'currency', currency: 'MYR' }).format(n)
-}
-
-export default function BalanceSheetView({ userProfile }: BalanceSheetViewProps) {
-  const [assets, setAssets] = useState<BSSection>({ accounts: [], total: 0 })
-  const [liabilities, setLiabilities] = useState<BSSection>({ accounts: [], total: 0 })
-  const [equity, setEquity] = useState<BSSection>({ accounts: [], total: 0 })
-  const [retainedEarnings, setRetainedEarnings] = useState(0)
+export default function BalanceSheetView({ userProfile: _userProfile }: BalanceSheetViewProps) {
+  const [report, setReport] = useState<BSReport | null>(null)
   const [loading, setLoading] = useState(true)
-
-  // Default: as at today
   const [asAtDate, setAsAtDate] = useState(new Date().toISOString().split('T')[0])
+  const [compareMode, setCompareMode] = useState<'prev_fy_end' | 'none'>('prev_fy_end')
+  const [detailed, setDetailed] = useState(false)
 
   const loadReport = useCallback(async () => {
     try {
       setLoading(true)
       const params = new URLSearchParams()
       if (asAtDate) params.append('as_at', asAtDate)
-
+      params.append('compare', compareMode)
       const res = await fetch(`/api/accounting/reports/balance-sheet?${params}`)
       if (res.ok) {
-        const data = await res.json()
-        setAssets(data.assets || { accounts: [], total: 0 })
-        setLiabilities(data.liabilities || { accounts: [], total: 0 })
-        setEquity(data.equity || { accounts: [], total: 0 })
-        setRetainedEarnings(data.retainedEarnings || 0)
+        setReport(await res.json())
       } else {
         toast({ title: 'Error', description: 'Failed to load balance sheet', variant: 'destructive' })
       }
@@ -62,156 +62,147 @@ export default function BalanceSheetView({ userProfile }: BalanceSheetViewProps)
     } finally {
       setLoading(false)
     }
-  }, [asAtDate])
+  }, [asAtDate, compareMode])
 
   useEffect(() => { loadReport() }, [loadReport])
 
-  const totalLiabilitiesEquity = liabilities.total + equity.total + retainedEarnings
-  const isBalanced = Math.abs(assets.total - totalLiabilitiesEquity) < 0.01
+  const showCompare = report?.compareMode === 'prev_fy_end' && !!report?.compareAt
+  const colCount = showCompare ? 3 : 2
 
+  // ── CSV ──────────────────────────────────────────────────────────
   const handleExportCSV = () => {
-    const lines: string[][] = []
-    lines.push(['Balance Sheet'])
-    lines.push([`As at: ${asAtDate}`])
-    lines.push([])
-    lines.push(['ASSETS'])
-    lines.push(['Code', 'Account', 'Balance'])
-    for (const a of assets.accounts) lines.push([a.code, `"${a.name}"`, a.balance.toFixed(2)])
-    lines.push(['', 'Total Assets', assets.total.toFixed(2)])
-    lines.push([])
-    lines.push(['LIABILITIES'])
-    lines.push(['Code', 'Account', 'Balance'])
-    for (const a of liabilities.accounts) lines.push([a.code, `"${a.name}"`, a.balance.toFixed(2)])
-    lines.push(['', 'Total Liabilities', liabilities.total.toFixed(2)])
-    lines.push([])
-    lines.push(['EQUITY'])
-    lines.push(['Code', 'Account', 'Balance'])
-    for (const a of equity.accounts) lines.push([a.code, `"${a.name}"`, a.balance.toFixed(2)])
-    lines.push(['', 'Retained Earnings', retainedEarnings.toFixed(2)])
-    lines.push(['', 'Total Equity', (equity.total + retainedEarnings).toFixed(2)])
-    lines.push([])
-    lines.push(['', 'Total L + E', totalLiabilitiesEquity.toFixed(2)])
+    if (!report) return
+    const q = (s: string) => `"${s.replace(/"/g, '""')}"`
+    const rows: string[][] = []
+    const push = (label: string, p: Pair, code = '') => {
+      const r = [code, q(label), p.current.toFixed(2)]
+      if (showCompare) r.push(p.compare.toFixed(2))
+      rows.push(r)
+    }
+    rows.push([q(report.company.name || '')])
+    rows.push([q('BALANCE SHEET')])
+    rows.push([q(`AS AT ${formatReportDate(report.asAtDate)}`)])
+    rows.push([])
+    const head = ['Code', 'Description', `${formatReportDate(report.asAtDate)} (RM)`]
+    if (showCompare) head.push(`${formatReportDate(report.compareAt)} (RM)`)
+    rows.push(head)
+    const sec = (s: BSSection) => {
+      if (s.groups.length === 0) return
+      rows.push(['', q(s.label)])
+      for (const g of s.groups) for (const a of g.accounts) push(a.name, a, a.code)
+      push(`TOTAL ${s.label}`, s)
+    }
+    const S = report.sections
+    sec(S.fixedAssets)
+    sec(S.currentAssets)
+    sec(S.currentLiabilities)
+    push('NET CURRENT ASSETS', report.totals.netCurrentAssets)
+    sec(S.longTermLiabilities)
+    push('NET ASSETS', report.totals.netAssets)
+    sec(S.financing)
 
-    const csv = lines.map((r) => r.join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
+    const blob = new Blob([rows.map((r) => r.join(',')).join('\n')], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `balance-sheet-${asAtDate}.csv`
+    a.download = `balance-sheet-${report.asAtDate}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
 
-  const renderSection = (
-    title: string,
-    icon: React.ReactNode,
-    section: BSSection,
-    colorClass: string,
-    bgClass: string,
-    extra?: React.ReactNode
-  ) => (
-    <div>
-      <h3 className={`text-sm font-semibold ${colorClass} mb-2 flex items-center gap-2`}>
-        {icon} {title}
-      </h3>
-      <div className="rounded-lg border overflow-hidden">
-        <Table>
-          <TableHeader>
-            <TableRow className={bgClass}>
-              <TableHead className="w-24">Code</TableHead>
-              <TableHead>Account</TableHead>
-              <TableHead className="text-right w-40">Balance (MYR)</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {section.accounts.map((a) => (
-              <TableRow key={a.code}>
-                <TableCell className="font-mono text-sm">{a.code}</TableCell>
-                <TableCell className="text-sm">{a.name}</TableCell>
-                <TableCell className="text-right font-mono text-sm font-medium">{formatCurrency(a.balance)}</TableCell>
-              </TableRow>
-            ))}
-            {extra}
-            <TableRow className={`${bgClass} font-bold`}>
-              <TableCell colSpan={2} className="text-right font-bold">
-                Total {title}
-              </TableCell>
-              <TableCell className="text-right font-mono font-bold">
-                {formatCurrency(title === 'EQUITY' ? equity.total + retainedEarnings : section.total)}
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-      </div>
-    </div>
+  // ── Rendering helpers ────────────────────────────────────────────
+  const num = 'py-1 px-2 text-right font-mono tabular-nums whitespace-nowrap w-40'
+
+  const Amounts = ({ p, bold = false, rule = '' }: { p: Pair; bold?: boolean; rule?: '' | 'single' | 'double' }) => {
+    const border = rule === 'single' ? 'border-t border-zinc-400' : rule === 'double' ? 'border-t border-zinc-400 border-b-4 border-double' : ''
+    return (
+      <>
+        <td className={`${num} ${bold ? 'font-semibold' : ''} ${border}`}>{formatAmount(p.current)}</td>
+        {showCompare && <td className={`${num} ${bold ? 'font-semibold' : ''} ${border}`}>{formatAmount(p.compare)}</td>}
+      </>
+    )
+  }
+
+  const Heading = ({ label }: { label: string }) => (
+    <tr><td colSpan={colCount} className="pt-6 pb-1 font-semibold">{label}</td></tr>
   )
+
+  const Section = ({ s, subtotal = true }: { s: BSSection; subtotal?: boolean }) => {
+    if (s.groups.length === 0) return null
+    return (
+      <>
+        <Heading label={s.label} />
+        {s.groups.map((g) => (
+          <Fragment key={g.key}>
+            <tr>
+              <td className="py-1 pl-6">
+                {detailed && g.accounts.length === 1 && g.accounts[0].code && (
+                  <span className="font-mono text-xs text-zinc-500 mr-3">{g.accounts[0].code}</span>
+                )}
+                {g.label}
+              </td>
+              {detailed && g.accounts.length > 1 ? <td colSpan={colCount - 1} /> : <Amounts p={g} />}
+            </tr>
+            {detailed && g.accounts.length > 1 && (
+              <>
+                {g.accounts.map((a) => (
+                  <tr key={`${g.key}-${a.code}-${a.name}`} className="text-[12px] text-zinc-600 dark:text-zinc-400">
+                    <td className="py-0.5 pl-12"><span className="font-mono mr-3">{a.code}</span>{a.name}</td>
+                    <Amounts p={a} />
+                  </tr>
+                ))}
+                <tr><td /><Amounts p={g} rule="single" /></tr>
+              </>
+            )}
+          </Fragment>
+        ))}
+        {subtotal && <tr><td /><Amounts p={s} rule="single" bold /></tr>}
+      </>
+    )
+  }
+
+  const S = report?.sections
 
   return (
     <div className="space-y-6">
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-        <Card className="border-blue-200 dark:border-blue-800">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-1">
-              <Landmark className="h-4 w-4 text-blue-600" />
-              <span className="text-xs font-medium text-muted-foreground">Total Assets</span>
-            </div>
-            <p className="text-xl font-bold text-blue-700 dark:text-blue-300">{formatCurrency(assets.total)}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-orange-200 dark:border-orange-800">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-1">
-              <Wallet className="h-4 w-4 text-orange-600" />
-              <span className="text-xs font-medium text-muted-foreground">Total Liabilities</span>
-            </div>
-            <p className="text-xl font-bold text-orange-700 dark:text-orange-300">{formatCurrency(liabilities.total)}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-purple-200 dark:border-purple-800">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-1">
-              <Building2 className="h-4 w-4 text-purple-600" />
-              <span className="text-xs font-medium text-muted-foreground">Total Equity</span>
-            </div>
-            <p className="text-xl font-bold text-purple-700 dark:text-purple-300">{formatCurrency(equity.total + retainedEarnings)}</p>
-          </CardContent>
-        </Card>
-        <Card className={isBalanced ? 'border-emerald-200 dark:border-emerald-800' : 'border-red-200 dark:border-red-800'}>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-1">
-              <Scale className={`h-4 w-4 ${isBalanced ? 'text-emerald-600' : 'text-red-600'}`} />
-              <span className="text-xs font-medium text-muted-foreground">Balance Check</span>
-            </div>
-            <p className={`text-xl font-bold ${isBalanced ? 'text-emerald-700 dark:text-emerald-300' : 'text-red-700 dark:text-red-300'}`}>
-              {isBalanced ? '✓ Balanced' : '✗ Unbalanced'}
-            </p>
-            {!isBalanced && (
-              <p className="text-xs text-red-600 mt-0.5">
-                Diff: {formatCurrency(Math.abs(assets.total - totalLiabilitiesEquity))}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
+      {/* Controls */}
       <Card>
         <CardHeader className="pb-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             <div>
               <CardTitle className="flex items-center gap-2 text-lg">
                 <Scale className="h-5 w-5 text-emerald-600" />
                 Balance Sheet
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="flex items-center gap-2">
                 Statement of financial position as at the selected date.
+                {report?.hasData && (report.balanced ? (
+                  <span className="text-green-600 inline-flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> Balanced</span>
+                ) : (
+                  <span className="text-red-600 inline-flex items-center gap-1"><AlertCircle className="h-3 w-3" /> Out of balance</span>
+                ))}
               </CardDescription>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Calendar className="h-4 w-4 text-muted-foreground" />
-              <span className="text-xs text-muted-foreground whitespace-nowrap">As at</span>
+              <span className="text-xs text-muted-foreground">As at</span>
               <Input type="date" value={asAtDate} onChange={(e) => setAsAtDate(e.target.value)} className="h-8 w-36 text-sm" />
-              <Button variant="outline" size="sm" onClick={handleExportCSV} disabled={assets.accounts.length === 0 && liabilities.accounts.length === 0 && equity.accounts.length === 0}>
+              <select
+                value={compareMode}
+                onChange={(e) => setCompareMode(e.target.value as 'prev_fy_end' | 'none')}
+                className="h-8 rounded-md border bg-background px-2 text-sm"
+                aria-label="Comparative column"
+              >
+                <option value="prev_fy_end">Compare: previous year end</option>
+                <option value="none">No comparison</option>
+              </select>
+              <Button variant={detailed ? 'default' : 'outline'} size="sm" onClick={() => setDetailed((v) => !v)}>
+                <ListTree className="h-4 w-4 mr-1.5" /> {detailed ? 'Detailed' : 'Summary'}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => window.print()} disabled={!report?.hasData}>
+                <Printer className="h-4 w-4 mr-1.5" /> Print / PDF
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleExportCSV} disabled={!report?.hasData}>
                 <Download className="h-4 w-4 mr-1.5" /> CSV
               </Button>
               <Button variant="outline" size="sm" onClick={loadReport} disabled={loading}>
@@ -220,77 +211,71 @@ export default function BalanceSheetView({ userProfile }: BalanceSheetViewProps)
             </div>
           </div>
         </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="flex items-center justify-center py-16">
-              <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
-            </div>
-          ) : assets.accounts.length === 0 && liabilities.accounts.length === 0 && equity.accounts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16">
-              <FileText className="h-12 w-12 text-muted-foreground/40 mb-3" />
-              <p className="text-muted-foreground font-medium">No GL entries found for this period</p>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {renderSection(
-                'ASSETS',
-                <Landmark className="h-4 w-4" />,
-                assets,
-                'text-blue-700 dark:text-blue-300',
-                'bg-blue-50/50 dark:bg-blue-900/10'
-              )}
-
-              {renderSection(
-                'LIABILITIES',
-                <Wallet className="h-4 w-4" />,
-                liabilities,
-                'text-orange-700 dark:text-orange-300',
-                'bg-orange-50/50 dark:bg-orange-900/10'
-              )}
-
-              {renderSection(
-                'EQUITY',
-                <Building2 className="h-4 w-4" />,
-                equity,
-                'text-purple-700 dark:text-purple-300',
-                'bg-purple-50/50 dark:bg-purple-900/10',
-                retainedEarnings !== 0 ? (
-                  <TableRow>
-                    <TableCell className="font-mono text-sm italic text-muted-foreground">—</TableCell>
-                    <TableCell className="text-sm italic text-muted-foreground">Retained Earnings (auto-calculated)</TableCell>
-                    <TableCell className="text-right font-mono text-sm font-medium italic text-muted-foreground">{formatCurrency(retainedEarnings)}</TableCell>
-                  </TableRow>
-                ) : null
-              )}
-
-              <Separator />
-
-              {/* Balanced check */}
-              <div className={`p-4 rounded-lg ${isBalanced ? 'bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800' : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'}`}>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium">Total Assets</span>
-                    <span className="font-mono font-bold">{formatCurrency(assets.total)}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium">Total Liabilities + Equity</span>
-                    <span className="font-mono font-bold">{formatCurrency(totalLiabilitiesEquity)}</span>
-                  </div>
-                  <Separator />
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold">{isBalanced ? '✓ Statement is balanced' : '✗ Statement is NOT balanced'}</span>
-                    {!isBalanced && (
-                      <span className="font-mono font-bold text-red-700">
-                        Difference: {formatCurrency(Math.abs(assets.total - totalLiabilitiesEquity))}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </CardContent>
       </Card>
+
+      {/* Statement */}
+      {loading && !report ? (
+        <div className="flex items-center justify-center py-16"><Loader2 className="h-8 w-8 animate-spin text-emerald-500" /></div>
+      ) : !report || !report.hasData || !S ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-16">
+            <FileText className="h-12 w-12 text-muted-foreground/40 mb-3" />
+            <p className="text-muted-foreground font-medium">No posted balances as at this date</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <ReportPrintLayout
+          company={report.company}
+          title="Balance Sheet"
+          subtitle={`As at ${formatReportDate(report.asAtDate)}`}
+          note={report.fiscalYearLabel ? `Fiscal year: ${report.fiscalYearLabel}` : undefined}
+          footer={
+            <div className="text-xs space-y-10">
+              <p className="uppercase">
+                I/We hereby certify that the statement given above is true and correct to the best of my/our knowledge and belief.
+              </p>
+              <p>..........................................</p>
+            </div>
+          }
+        >
+          <div className={loading ? 'opacity-50 transition-opacity' : ''}>
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="text-xs">
+                  <th />
+                  <th className="px-2 text-right font-semibold">{formatReportDate(report.asAtDate)}</th>
+                  {showCompare && <th className="px-2 text-right font-semibold">{formatReportDate(report.compareAt)}</th>}
+                </tr>
+                <tr className="text-xs text-zinc-500 border-b border-zinc-400">
+                  <th />
+                  <th className="px-2 pb-1 text-right font-normal">( RM )</th>
+                  {showCompare && <th className="px-2 pb-1 text-right font-normal">( RM )</th>}
+                </tr>
+              </thead>
+              <tbody>
+                <Section s={S.fixedAssets} subtotal={S.fixedAssets.groups.length > 1} />
+                <Section s={S.currentAssets} />
+                <Section s={S.currentLiabilities} />
+
+                <tr className="font-semibold">
+                  <td className="pt-6 py-1">NET CURRENT ASSETS</td>
+                  <Amounts p={report.totals.netCurrentAssets} bold />
+                </tr>
+
+                {S.longTermLiabilities.groups.length > 0 && <Section s={S.longTermLiabilities} />}
+
+                <tr><td className="py-2" /><Amounts p={report.totals.netAssets} bold rule="double" /></tr>
+
+                <Heading label="FINANCED BY" />
+                {S.financing.groups.length > 0 && (
+                  <Section s={{ ...S.financing, label: 'CAPITAL' }} subtotal={false} />
+                )}
+                <tr><td className="py-2" /><Amounts p={report.totals.financing} bold rule="double" /></tr>
+              </tbody>
+            </table>
+          </div>
+        </ReportPrintLayout>
+      )}
     </div>
   )
 }
