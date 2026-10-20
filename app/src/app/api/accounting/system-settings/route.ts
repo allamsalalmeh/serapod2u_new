@@ -23,7 +23,7 @@ export async function GET() {
     // Get user's company
     const { data: userData, error: userError } = await supabase
       .from('users')
-      .select('organization_id, organizations!inner(id, org_type_code)')
+      .select('organization_id, organizations!fk_users_organization!inner(id, org_type_code)')
       .eq('id', user.id)
       .single()
 
@@ -109,7 +109,7 @@ export async function PUT(request: Request) {
       .from('users')
       .select(`
         organization_id,
-        organizations!inner(id, org_type_code),
+        organizations!fk_users_organization!inner(id, org_type_code),
         roles!inner(role_level)
       `)
       .eq('id', user.id)
