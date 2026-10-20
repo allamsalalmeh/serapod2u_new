@@ -388,6 +388,18 @@ export default function DashboardContent({ userProfile, initialView, initialOrde
       return
     }
 
+    // ── Finance module: keep the URL in sync with the active view ──
+    // Without this, choosing Finance from the sidebar swapped the content but
+    // left the previous URL (e.g. /finance/cash/bank-accounts), so a refresh or a
+    // shared link opened a different page. Every finance view id has a matching
+    // route under src/app/finance (finance → /finance, finance/gl/journals → …).
+    const financeViewId = view.replace(/^\//, '')
+    if (financeViewId === 'finance' || financeViewId.startsWith('finance/')) {
+      setCurrentView(financeViewId)
+      router.push(`/${financeViewId}`)
+      return
+    }
+
     // ── Redirect Customer & Growth breadcrumb to its landing page ──
     if (view === 'customer-growth') {
       setCurrentView(view)
