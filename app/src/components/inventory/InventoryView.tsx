@@ -45,6 +45,7 @@ import {
   type InventorySummarySortColumn,
   type VariantInventorySummary
 } from '@/lib/inventory/inventory-view-aggregation'
+import { classifyProductLine, isCartridgeLine } from '@/lib/returns/format'
 import {
   HQ_CONSOLIDATED_LEGACY_NOTE,
   buildInventoryLocationScope,
@@ -146,6 +147,12 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
     }
     return new Intl.NumberFormat('en-MY').format(value)
   }
+
+  /** Cellera Hero / Zero stock is counted in cases (master units_per_case = 1), so their quantities say so. */
+  const renderUnit = (productName: string | null | undefined) =>
+    isCartridgeLine(classifyProductLine(productName)) ? (
+      <span className="ml-1 text-[11px] font-normal text-[var(--sera-muted)]">cases</span>
+    ) : null
 
   useEffect(() => {
     if (isReady) {
@@ -1611,13 +1618,13 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span className="text-xs font-medium">{formatNumber(summary.onHand)}</span>
+                      <span className="text-xs font-medium">{formatNumber(summary.onHand)}{renderUnit(summary.productName)}</span>
                     </TableCell>
                     <TableCell>
-                      <span className="text-xs text-[var(--sera-muted)]">{formatNumber(summary.allocated)}</span>
+                      <span className="text-xs text-[var(--sera-muted)]">{formatNumber(summary.allocated)}{renderUnit(summary.productName)}</span>
                     </TableCell>
                     <TableCell>
-                      <span className="text-xs font-medium">{formatNumber(summary.available)}</span>
+                      <span className="text-xs font-medium">{formatNumber(summary.available)}{renderUnit(summary.productName)}</span>
                     </TableCell>
                     <TableCell>
                       {summary.incoming > 0 ? (
@@ -1638,6 +1645,7 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                           >
                             {formatNumber(summary.incoming)}
                           </button>
+                          {renderUnit(summary.productName)}
                           {incomingBreakdown.transfer > 0 && (
                             <p className="text-xs text-[var(--sera-muted)]/80">
                               PO {formatNumber(incomingBreakdown.manufacturer)} · TRF {formatNumber(incomingBreakdown.transfer)}
@@ -1651,6 +1659,7 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                     <TableCell>
                       <span className="text-xs font-medium">
                         {formatNumber(summary.position)}
+                        {renderUnit(summary.productName)}
                       </span>
                     </TableCell>
                     <TableCell>
@@ -1731,11 +1740,11 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                                   <td className="px-4 py-2">
                                     <Badge variant="outline">{config.lifecycleStatus || 'active'}</Badge>
                                   </td>
-                                  <td className="px-4 py-2 text-right font-medium">{formatNumber(config.onHand)}</td>
-                                  <td className="px-4 py-2 text-right">{config.allocated > 0 ? formatNumber(config.allocated) : <span className="text-gray-400">0</span>}</td>
-                                  <td className="px-4 py-2 text-right font-medium">{formatNumber(config.available)}</td>
-                                  <td className="px-4 py-2 text-right">{config.incoming > 0 ? formatNumber(config.incoming) : <span className="text-gray-400">0</span>}</td>
-                                  <td className="px-4 py-2 text-right">{formatNumber(config.position)}</td>
+                                  <td className="px-4 py-2 text-right font-medium">{formatNumber(config.onHand)}{renderUnit(summary.productName)}</td>
+                                  <td className="px-4 py-2 text-right">{config.allocated > 0 ? <>{formatNumber(config.allocated)}{renderUnit(summary.productName)}</> : <span className="text-gray-400">0</span>}</td>
+                                  <td className="px-4 py-2 text-right font-medium">{formatNumber(config.available)}{renderUnit(summary.productName)}</td>
+                                  <td className="px-4 py-2 text-right">{config.incoming > 0 ? <>{formatNumber(config.incoming)}{renderUnit(summary.productName)}</> : <span className="text-gray-400">0</span>}</td>
+                                  <td className="px-4 py-2 text-right">{formatNumber(config.position)}{renderUnit(summary.productName)}</td>
                                   {canViewTotalValue() && (
                                     <td className="px-4 py-2 text-right">RM {formatCurrency(config.value)}</td>
                                   )}
