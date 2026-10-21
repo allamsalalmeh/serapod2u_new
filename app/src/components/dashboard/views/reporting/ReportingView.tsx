@@ -45,7 +45,6 @@ import {
 } from 'lucide-react'
 import ConsumerAnalyticsTab from './ConsumerAnalyticsTab'
 import DistributorReportsTab from './DistributorReportsTab'
-import ExecutiveKpiValue from './ExecutiveKpiValue'
 import OperationsTab from './OperationsTab'
 import ProductsTab from './ProductsTab'
 import ShopReportsTab from './ShopReportsTab'
@@ -129,76 +128,106 @@ const AnimatedCounter = ({ value, duration = 1000, prefix = '', suffix = '', dec
 
     const formattedValue = formatAnimatedValue(displayValue, decimals)
 
+    // The figure is never clipped or ellipsed: the prefix may drop to its own line and, only if the
+    // digits alone are wider than the card, they break rather than overflow.
     return (
-        <span className="inline-flex min-w-0 items-baseline whitespace-nowrap tabular-nums leading-none">
-            {prefix ? <span className="mr-1 shrink-0 text-[0.72em] leading-none">{prefix}</span> : null}
-            <span className="shrink-0">{formattedValue}</span>
-            {suffix ? <span className="ml-1 shrink-0 text-[0.72em] leading-none">{suffix}</span> : null}
+        <span className="inline-flex max-w-full min-w-0 flex-wrap items-baseline gap-x-1 tabular-nums leading-tight">
+            {/* The literal spaces keep "RM 54,000.00" readable for screen readers and copy/paste. */}
+            {prefix ? <><span className="text-[0.62em] font-semibold text-[var(--sera-muted)]">{prefix}</span>{' '}</> : null}
+            <span className="min-w-0 [overflow-wrap:anywhere]">{formattedValue}</span>
+            {suffix ? <>{' '}<span className="text-[0.62em] font-semibold text-[var(--sera-muted)]">{suffix}</span></> : null}
         </span>
     )
 }
 
-// Metric Card — light Serapod paper chrome
-const MetricCard = ({ title, value, change, changeType, icon: Icon, color, subtitle, loading, currency }: {
+// Metric Card — light Serapod paper chrome. The icon sits beside the title so the value gets the
+// card's full width; `primary` is the larger headline treatment used for the Overview's first row.
+const MetricCard = ({ title, value, change, changeType, noBaseline, icon: Icon, color, subtitle, loading, currency, variant = 'standard', tag, accent }: {
     title: string
     /** Render as RM with 2 decimals (defaults to titles containing Revenue/Value). */
     currency?: boolean
     value: number | string
     change?: number
     changeType?: 'increase' | 'decrease' | 'neutral'
+    /** The metric has a comparison, but the previous period was zero — no percentage exists. */
+    noBaseline?: boolean
     icon: any
     color: string
     subtitle?: string
     loading?: boolean
+    variant?: 'primary' | 'standard'
+    /** Short classification pill next to the title, e.g. "Purchases — not sales". */
+    tag?: string
+    /** Colour bar along the card's top edge. */
+    accent?: string
 }) => {
     const isPositive = changeType === 'increase'
     const isNegative = changeType === 'decrease'
+    const isPrimary = variant === 'primary'
+    const changeLabel = change === undefined ? '' :
+        `${isPositive ? 'Up' : isNegative ? 'Down' : 'No change'} ${Math.abs(change).toFixed(1)}% ${subtitle ?? ''}`.trim()
 
     return (
-        <div className="group relative overflow-hidden rounded-xl border border-[var(--sera-line,#e8eaed)] bg-white p-5 transition-colors hover:border-[var(--sera-orange)]/35">
-            <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 space-y-2">
-                    <p className="text-sm font-medium text-[var(--sera-muted)]">{title}</p>
-                    {loading ? (
-                        <SeraLoader size="sm" className="text-[var(--sera-muted)]" />
-                    ) : (
-                        <div className="flex min-h-[2rem] min-w-0 items-center overflow-hidden">
-                            <ExecutiveKpiValue>
-                                {typeof value === 'number' ? (
-                                    <AnimatedCounter
-                                        value={value}
-                                        prefix={(currency ?? /Revenue|Value/.test(title)) ? 'RM' : ''}
-                                        decimals={(currency ?? /Revenue|Value/.test(title)) ? 2 : 0}
-                                    />
-                                ) : (
-                                    <span className="inline-flex max-w-full min-w-0 items-baseline whitespace-nowrap leading-none">{value}</span>
-                                )}
-                            </ExecutiveKpiValue>
-                        </div>
-                    )}
-                    <div className="flex items-center gap-2 flex-wrap">
-                        {change !== undefined && (
-                            <Badge
-                                variant="secondary"
-                                className={`text-xs font-medium border-0 ${isPositive ? 'bg-emerald-50 text-emerald-700' :
-                                    isNegative ? 'bg-red-50 text-red-700' :
-                                        'bg-[var(--sera-mist)] text-[var(--sera-muted)]'
-                                    }`}
-                            >
-                                {isPositive && <ArrowUpRight className="w-3 h-3 mr-0.5" />}
-                                {isNegative && <ArrowDownRight className="w-3 h-3 mr-0.5" />}
-                                {Math.abs(change).toFixed(1)}%
-                            </Badge>
-                        )}
-                        {subtitle && <span className="text-xs text-[var(--sera-muted)]">{subtitle}</span>}
-                    </div>
-                </div>
+        <div className={`group relative flex h-full min-w-0 flex-col overflow-hidden rounded-xl border border-[var(--sera-line,#e8eaed)] bg-white transition-colors hover:border-[var(--sera-orange)]/35 ${isPrimary ? 'p-5 sm:p-6' : 'p-4 sm:p-5'}`}>
+            {accent ? <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: accent }} /> : null}
+            <div className="flex items-start gap-3">
                 <div
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                    className={`flex shrink-0 items-center justify-center rounded-lg ${isPrimary ? 'h-10 w-10' : 'h-9 w-9'}`}
                     style={{ backgroundColor: `${color}14` }}
                 >
-                    <Icon className="w-5 h-5" style={{ color }} strokeWidth={1.75} />
+                    <Icon className={isPrimary ? 'h-5 w-5' : 'h-[18px] w-[18px]'} style={{ color }} strokeWidth={1.75} aria-hidden />
                 </div>
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
+                    <p className={`font-medium leading-snug ${isPrimary ? 'text-sm text-[var(--sera-ink)]' : 'text-sm text-[var(--sera-muted)]'}`}>{title}</p>
+                    {tag ? (
+                        <span className="rounded-full border border-[var(--sera-line)] bg-[var(--sera-mist)] px-2 py-0.5 text-[11px] font-medium leading-none text-[var(--sera-ink)]">
+                            {tag}
+                        </span>
+                    ) : null}
+                </div>
+            </div>
+            <div className={`min-w-0 ${isPrimary ? 'mt-4' : 'mt-3'}`}>
+                {loading ? (
+                    <SeraLoader size="sm" className="text-[var(--sera-muted)]" />
+                ) : (
+                    <div className={`min-w-0 font-bold text-foreground tabular-nums ${isPrimary ? 'text-[1.75rem] sm:text-3xl' : 'text-2xl'}`}>
+                        {typeof value === 'number' ? (
+                            <AnimatedCounter
+                                value={value}
+                                prefix={(currency ?? /Revenue|Value/.test(title)) ? 'RM' : ''}
+                                decimals={(currency ?? /Revenue|Value/.test(title)) ? 2 : 0}
+                            />
+                        ) : (
+                            <span className="[overflow-wrap:anywhere]">{value}</span>
+                        )}
+                    </div>
+                )}
+            </div>
+            <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 pt-3">
+                {change !== undefined && (
+                    <Badge
+                        variant="secondary"
+                        aria-label={changeLabel}
+                        className={`shrink-0 text-xs font-medium border-0 ${isPositive ? 'bg-emerald-50 text-emerald-700' :
+                            isNegative ? 'bg-red-50 text-red-700' :
+                                'bg-[var(--sera-mist)] text-[var(--sera-muted)]'
+                            }`}
+                    >
+                        {isPositive && <ArrowUpRight className="w-3 h-3 mr-0.5" aria-hidden />}
+                        {isNegative && <ArrowDownRight className="w-3 h-3 mr-0.5" aria-hidden />}
+                        {Math.abs(change).toFixed(1)}%
+                    </Badge>
+                )}
+                {change === undefined && noBaseline && (
+                    <Badge
+                        variant="secondary"
+                        title="The comparison period had no value, so no percentage change can be calculated"
+                        className="shrink-0 text-xs font-medium border-0 bg-[var(--sera-mist)] text-[var(--sera-muted)]"
+                    >
+                        No prior value
+                    </Badge>
+                )}
+                {subtitle && <span className="min-w-0 text-xs leading-snug text-[var(--sera-muted)]">{subtitle}</span>}
             </div>
         </div>
     )
@@ -224,9 +253,17 @@ function formatRm(value: number) {
     return `RM ${value.toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-/** Growth badge props for a MetricCard; nothing when the comparison window was empty. */
+const axisCompactFormatter = new Intl.NumberFormat('en-MY', { notation: 'compact', maximumFractionDigits: 1 })
+
+/** Chart axis ticks only (e.g. 23.9M); tooltips keep the full RM amount. */
+function formatAxisCompact(value: number) {
+    return axisCompactFormatter.format(value)
+}
+
+/** Growth badge props for a MetricCard; a neutral "no prior value" pill when the comparison window was empty. */
 function changeProps(comparison?: { changePct: number | null }) {
-    if (!comparison || comparison.changePct === null) return {}
+    if (!comparison) return {}
+    if (comparison.changePct === null) return { noBaseline: true }
     return {
         change: comparison.changePct,
         changeType: comparison.changePct > 0 ? 'increase' as const : comparison.changePct < 0 ? 'decrease' as const : 'neutral' as const,
@@ -400,10 +437,10 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                     </>
                 ) : null}
             />
-            <div className="flex items-center gap-2 lg:pb-[18px]">
+            <div className="flex flex-wrap items-center gap-2 lg:flex-nowrap lg:pb-[18px]">
                 <Button
                     variant="outline"
-                    className="h-10 flex-1 gap-2 border-[var(--sera-line)] lg:h-9 lg:flex-none"
+                    className="h-10 min-w-[7.5rem] flex-1 gap-2 border-[var(--sera-line)] lg:h-9 lg:flex-none"
                     onClick={() => fetchOverview(month)}
                     disabled={loading}
                 >
@@ -413,7 +450,7 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                 {activeTab === 'overview' ? (
                     <Button
                         variant="outline"
-                        className="h-10 flex-1 gap-2 border-[var(--sera-line)] lg:h-9 lg:flex-none"
+                        className="h-10 min-w-[7.5rem] flex-1 gap-2 border-[var(--sera-line)] lg:h-9 lg:flex-none"
                         onClick={handleDownloadPdf}
                         disabled={!report || downloading || loading}
                         title={report ? 'Download the Executive Overview report for the selected month' : 'Report not loaded yet'}
@@ -517,9 +554,29 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                         {/* KPI Cards. Approved Sales = approved, warehouse packed, shipped to distributor and closed
                             D2H/S2D orders by SO date; submitted orders are pipeline, cancelled orders are reported
                             apart and H2M purchases are never sales (lib/reporting/executive-overview.ts). */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        {/* Headline figures: H2M purchases first (kept visibly apart from sales), then
+                            combined D2H + S2D approved sales, then shop sales. */}
+                        <section aria-labelledby="overview-headline-kpis" className="space-y-3">
+                        <h3 id="overview-headline-kpis" className="text-xs font-semibold uppercase tracking-wide text-[var(--sera-muted)]">Headline figures</h3>
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                            <div className="min-w-0 sm:col-span-2 xl:col-span-1">
+                                <MetricCard
+                                    variant="primary"
+                                    title="H2M Purchases Value"
+                                    tag="Purchases — not sales"
+                                    accent={COLORS.slate}
+                                    value={summary?.purchaseValue ?? 0}
+                                    icon={Truck}
+                                    color={COLORS.slate}
+                                    subtitle={`${summary?.purchaseOrders ?? 0} approved manufacturer orders (not sales)`}
+                                    loading={loading}
+                                />
+                            </div>
                             <MetricCard
+                                variant="primary"
                                 title="Approved Sales Value"
+                                tag="D2H + S2D"
+                                accent={COLORS.success}
                                 value={summary?.approvedSalesValue ?? 0}
                                 icon={DollarSign}
                                 color={COLORS.success}
@@ -527,6 +584,23 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                                 loading={loading}
                                 {...changeProps(comparison?.approvedSalesValue)}
                             />
+                            <MetricCard
+                                variant="primary"
+                                title="Shop Sales (S2D)"
+                                accent={COLORS.success}
+                                value={summary?.shopSalesValue ?? 0}
+                                currency
+                                icon={Store}
+                                color={COLORS.success}
+                                subtitle={`${summary?.shopSalesOrders ?? 0} approved orders`}
+                                loading={loading}
+                                {...changeProps(comparison?.shopSalesValue)}
+                            />
+                        </div>
+                        </section>
+                        <section aria-labelledby="overview-detail-kpis" className="space-y-3">
+                        <h3 id="overview-detail-kpis" className="text-xs font-semibold uppercase tracking-wide text-[var(--sera-muted)]">Orders, volume &amp; pipeline</h3>
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
                             <MetricCard
                                 title="Confirmed Sales Orders"
                                 value={summary?.approvedSalesOrders ?? 0}
@@ -554,8 +628,6 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                                 loading={loading}
                                 {...changeProps(comparison?.activeBuyers)}
                             />
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
                             <MetricCard
                                 title="Distributor Sales (D2H)"
                                 value={summary?.distributorSalesValue ?? 0}
@@ -565,16 +637,6 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                                 subtitle={`${summary?.distributorSalesOrders ?? 0} approved orders`}
                                 loading={loading}
                                 {...changeProps(comparison?.distributorSalesValue)}
-                            />
-                            <MetricCard
-                                title="Shop Sales (S2D)"
-                                value={summary?.shopSalesValue ?? 0}
-                                currency
-                                icon={Store}
-                                color={COLORS.success}
-                                subtitle={`${summary?.shopSalesOrders ?? 0} approved orders`}
-                                loading={loading}
-                                {...changeProps(comparison?.shopSalesValue)}
                             />
                             <MetricCard
                                 title="Sales Pipeline Value"
@@ -593,15 +655,8 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                                 subtitle={`${formatRm(summary?.cancelledValue ?? 0)} not counted as sales`}
                                 loading={loading}
                             />
-                            <MetricCard
-                                title="H2M Purchases Value"
-                                value={summary?.purchaseValue ?? 0}
-                                icon={Truck}
-                                color={COLORS.slate}
-                                subtitle={`${summary?.purchaseOrders ?? 0} approved manufacturer orders (not sales)`}
-                                loading={loading}
-                            />
                         </div>
+                        </section>
                         {report?.meta.notice ? (
                             <p className="text-xs text-amber-700">{report.meta.notice}</p>
                         ) : null}
@@ -627,7 +682,7 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                                                 </defs>
                                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={chartGridColor} />
                                                 <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} minTickGap={16} />
-                                                <YAxis tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} tickFormatter={(value) => value.toLocaleString('en-MY')} />
+                                                <YAxis tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} width={48} tickFormatter={formatAxisCompact} />
                                                 <Tooltip contentStyle={tooltipStyle} formatter={(value: number) => [formatRm(value), 'Approved sales']} />
                                                 <Area type="monotone" dataKey="value" stroke={COLORS.primary} strokeWidth={3} fill="url(#colorSales)" dot={false} activeDot={{ r: 6, fill: COLORS.primary, stroke: '#fff', strokeWidth: 2 }} />
                                             </AreaChart>
@@ -686,7 +741,7 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                                             <BarChart data={report?.monthlyTrend ?? []}>
                                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={chartGridColor} />
                                                 <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} />
-                                                <YAxis tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} tickFormatter={(value) => value.toLocaleString('en-MY')} />
+                                                <YAxis tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} width={48} tickFormatter={formatAxisCompact} />
                                                 <Tooltip cursor={{ fill: 'transparent' }} contentStyle={tooltipStyle} formatter={(value: number) => [formatRm(value), 'Approved sales']} />
                                                 <Bar dataKey="value" radius={[8, 8, 0, 0]} barSize={32}>
                                                     {(report?.monthlyTrend ?? []).map((row) => (
@@ -780,7 +835,7 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                     <TabsContent value="finance" className="space-y-6 animate-in fade-in-50 duration-500">
                         {sectionHeader('Finance', 'Approved sales and finance documents for the reporting month')}
                         {errorBanner}
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                             <MetricCard
                                 title="Approved Sales Value"
                                 value={summary?.approvedSalesValue ?? 0}
