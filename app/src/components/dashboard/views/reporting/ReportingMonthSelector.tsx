@@ -20,6 +20,15 @@ interface ReportingMonthSelectorProps {
   disabled?: boolean
   /** Period caption under the controls, e.g. "01 Oct 2026 – 20 Oct 2026 (month to date)". */
   caption?: ReactNode
+  /** Field label. Defaults to "Reporting Month". */
+  label?: string
+  /**
+   * An extra first option meaning "no month" (e.g. Orders' All Months). While it
+   * is selected both arrows are disabled — there is no month to step from.
+   */
+  allOption?: { value: string; label: string }
+  /** Stretch the dropdown to the container width at every breakpoint (filter grids). */
+  fullWidth?: boolean
 }
 
 /**
@@ -29,28 +38,31 @@ interface ReportingMonthSelectorProps {
  */
 export default function ReportingMonthSelector({
   id, month, onMonthChange, availableMonths = [], disabled = false, caption,
+  label = 'Reporting Month', allOption, fullWidth = false,
 }: ReportingMonthSelectorProps) {
+  const isAll = allOption !== undefined && month === allOption.value
   const options = useMemo(
-    () => buildReportingMonthOptions([...availableMonths, month]),
-    [availableMonths, month],
+    () => buildReportingMonthOptions(isAll ? [...availableMonths] : [...availableMonths, month]),
+    [availableMonths, month, isAll],
   )
-  const { older, newer } = adjacentReportingMonths(options, month)
+  const { older, newer } = isAll ? {} : adjacentReportingMonths(options, month)
 
   return (
     <div className="space-y-1.5">
       <label htmlFor={id} className="text-xs font-medium text-[var(--sera-muted)]">
-        Reporting Month
+        {label}
       </label>
       <div className="flex items-center gap-1.5">
         <Select value={month} onValueChange={onMonthChange} disabled={disabled}>
           <SelectTrigger
             id={id}
-            className="h-10 min-w-0 flex-1 border-[var(--sera-line)] bg-white text-sm lg:h-9 lg:w-[190px] lg:flex-none"
+            className={`h-10 min-w-0 flex-1 border-[var(--sera-line)] bg-white text-sm lg:h-9 ${fullWidth ? '' : 'lg:w-[190px] lg:flex-none'}`}
           >
             <Calendar className="mr-2 h-3.5 w-3.5 shrink-0 text-[var(--sera-muted)]" />
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
+            {allOption ? <SelectItem value={allOption.value}>{allOption.label}</SelectItem> : null}
             {options.map((option) => (
               <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
             ))}
