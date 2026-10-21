@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useSupabaseAuth } from '@/lib/hooks/useSupabaseAuth'
+import { useToast } from '@/components/ui/use-toast'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -26,7 +27,6 @@ import {
 import {
   validateOrgCode,
   validateOrgForm,
-  translateOrgError,
   getFieldRules,
   ORG_CODE_PREFIX_MAP,
 } from '@/lib/utils/orgValidation'
@@ -36,6 +36,12 @@ import {
   validateManufacturerCategories,
   type CategoryOption,
 } from '@/lib/organizations/manufacturer-categories'
+import {
+  classifyOrgCreateError,
+  describeOrgCreateError,
+  fieldForValidationMessage,
+  type OrgCreateErrorField,
+} from '@/lib/organizations/create-org-error'
 
 interface AddOrganizationViewProps {
   userProfile: any
@@ -89,6 +95,12 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
   const [dataLoading, setDataLoading] = useState(true)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  // Field highlighted by the last failed submission; cleared when that field is edited.
+  const [errorField, setErrorField] = useState<OrgCreateErrorField | null>(null)
+  // Synchronous guard: `loading` is only set after the async duplicate-name check,
+  // so a fast double click could otherwise start two submissions.
+  const submittingRef = useRef(false)
+  const { toast } = useToast()
   
   const [orgTypes, setOrgTypes] = useState<OrganizationType[]>([])
   const [states, setStates] = useState<State[]>([])
@@ -375,7 +387,9 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
         throw new Error(codeErr)
       }
 
-      handleInputChange('org_code', newCode)
+      // Set directly (not via handleInputChange) so a regenerated code after a
+      // duplicate-code failure does not clear the message explaining why.
+      setFormData(prev => ({ ...prev, org_code: newCode }))
       setOrgCodeStatus('ready')
     } catch (error: any) {
       console.error('Error generating org code:', error)
@@ -414,7 +428,18 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
 
   const handleInputChange = (field: string, value: any) => {
     setFormData(prev => ({ ...prev, [field]: value }))
-    setError('')
+    // A field-specific failure stays visible until that field is changed;
+    // a general failure (permission, network) stays until the next submit.
+    if (!errorField || errorField === field) {
+      setError('')
+      setErrorField(null)
+    }
+  }
+
+  const failSubmission = (title: string, message: string, field: OrgCreateErrorField | null = null) => {
+    setError(message)
+    setErrorField(field)
+    toast({ title, description: message, variant: 'destructive' })
   }
 
   const handleLogoChange = (file: File | null) => {
@@ -470,10 +495,19 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (submittingRef.current) return
+    submittingRef.current = true
+    try {
+      await submitOrganization()
+    } finally {
+      submittingRef.current = false
+    }
+  }
 
+  const submitOrganization = async () => {
     const validationError = validateForm()
     if (validationError) {
-      setError(validationError)
+      failSubmission('Please check the form', validationError, fieldForValidationMessage(validationError))
       return
     }
 
@@ -486,7 +520,7 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
       })
       setCategoryError(categoryValidation || '')
       if (categoryValidation) {
-        setError(categoryValidation)
+        failSubmission('Check product categories', categoryValidation)
         return
       }
     }
@@ -503,19 +537,24 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
     )
     
     if (hierarchyError) {
-      setError(hierarchyError)
+      failSubmission('Invalid parent organization', hierarchyError, 'parent_org_id')
       return
     }
 
     // Check for duplicate organization name within the same type
     const isDuplicate = await checkDuplicateOrgName(formData.org_name, formData.org_type_code)
     if (isDuplicate) {
-      setError(`An organization with the name "${formData.org_name}" already exists for this type. Please choose a different name.`)
+      failSubmission(
+        'Duplicate organization',
+        `An organization with the name "${formData.org_name}" already exists for this type. Please choose a different name.`,
+        'org_name',
+      )
       return
     }
 
     setLoading(true)
     setError('')
+    setErrorField(null)
     setSuccess('')
 
     try {
@@ -563,7 +602,16 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
 
       if (insertError) throw insertError
 
-      const newOrgId = data[0].id
+      // The insert succeeded; if the row is not readable back (e.g. created inactive),
+      // report success instead of an error so a retry cannot create a duplicate.
+      const newOrgId: string | undefined = data?.[0]?.id
+      if (!newOrgId) {
+        console.warn('Organization created but not returned by select; skipping follow-up steps')
+        setSuccess('Organization created successfully!')
+        toast({ title: 'Organization created', description: `${formData.org_name} was created.` })
+        setTimeout(() => onViewChange('organizations'), 1000)
+        return
+      }
 
       // Classification is saved right after the manufacturer exists; the organization is kept
       // if this fails, and the admin is taken to Edit to finish (it shows "Not classified").
@@ -729,20 +777,35 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
       }
 
       setSuccess('Organization created successfully!')
+      toast({ title: 'Organization created', description: `${formData.org_name} was created.` })
       
       // Redirect after 1 second (reduced since we already waited 800ms above)
       setTimeout(() => {
         onViewChange('organizations')
       }, 1000)
 
-    } catch (error: any) {
-      console.error('Error creating organization:', error)
-      const friendlyError = translateOrgError(error)
-      setError(friendlyError)
+    } catch (error: unknown) {
+      const result = classifyOrgCreateError(error)
+      const diagnostics = describeOrgCreateError(error, result)
+      // Expected business outcomes (permission, duplicate, validation) are warnings, so
+      // they do not raise the Next.js dev overlay; unexpected failures stay errors.
+      // Diagnostics carry code/status/message only — never the submitted form payload.
+      if (result.expected) {
+        console.warn('Organization not created:', diagnostics)
+      } else {
+        console.error(`Organization create failed [${diagnostics.referenceId}] ${diagnostics.code ?? ''} ${diagnostics.message}`, diagnostics)
+      }
+      failSubmission(result.title, result.message, result.field ?? null)
+      if (result.kind === 'duplicate_code' && formData.org_type_code) {
+        generateOrgCode(formData.org_type_code)
+      }
     } finally {
       setLoading(false)
     }
   }
+
+  const invalidClass = (field: OrgCreateErrorField) =>
+    errorField === field ? 'border-red-500 ring-1 ring-red-500 focus-visible:ring-red-500' : ''
 
   if (dataLoading) {
     return (
@@ -909,7 +972,11 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
                         value={formData.parent_org_id || 'none'}
                         onValueChange={(value) => handleInputChange('parent_org_id', value === 'none' ? '' : value)}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger
+                          id="parent_org_id"
+                          aria-invalid={errorField === 'parent_org_id' || undefined}
+                          className={invalidClass('parent_org_id')}
+                        >
                           <SelectValue 
                             placeholder={
                               isParentRequired(formData.org_type_code as OrgType)
@@ -965,10 +1032,11 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
                   <Input
                     id="org_code"
                     value={formData.org_code}
+                    aria-invalid={errorField === 'org_code' || undefined}
                     disabled
                     placeholder={orgCodeStatus === 'generating' ? 'Generating...' : 'Select org type to auto-generate'}
                     className={`bg-gray-100 cursor-not-allowed pr-10 ${
-                      orgCodeStatus === 'error' ? 'border-red-300 bg-red-50' :
+                      orgCodeStatus === 'error' || errorField === 'org_code' ? 'border-red-300 bg-red-50' :
                       orgCodeStatus === 'ready' ? 'border-green-300 bg-green-50' : ''
                     }`}
                   />
@@ -1016,7 +1084,8 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
                   value={formData.org_name}
                   onChange={(e) => handleInputChange('org_name', e.target.value)}
                   placeholder="Enter full organization name"
-                  className="placeholder:text-[var(--sera-muted)]/70 placeholder:italic"
+                  aria-invalid={errorField === 'org_name' || undefined}
+                  className={`placeholder:text-[var(--sera-muted)]/70 placeholder:italic ${invalidClass('org_name')}`}
                 />
               </div>
             </div>
@@ -1408,7 +1477,8 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
                   onChange={(e) => handleInputChange('contact_phone', e.target.value)}
                   placeholder="Enter phone number (e.g., +60123456789)"
                   type="tel"
-                  className="placeholder:text-[var(--sera-muted)]/70 placeholder:italic"
+                  aria-invalid={errorField === 'contact_phone' || undefined}
+                  className={`placeholder:text-[var(--sera-muted)]/70 placeholder:italic ${invalidClass('contact_phone')}`}
                 />
               </div>
 
@@ -1420,7 +1490,8 @@ export default function AddOrganizationView({ userProfile, onViewChange }: AddOr
                   onChange={(e) => handleInputChange('contact_email', e.target.value)}
                   placeholder="Enter email address (e.g., contact@example.com)"
                   type="email"
-                  className="placeholder:text-[var(--sera-muted)]/70 placeholder:italic"
+                  aria-invalid={errorField === 'contact_email' || undefined}
+                  className={`placeholder:text-[var(--sera-muted)]/70 placeholder:italic ${invalidClass('contact_email')}`}
                 />
               </div>
             </div>
