@@ -29,12 +29,15 @@
  */
 
 import {
+  ACTIVE_KPI_MODEL,
+  ACTIVE_STATUSES,
   ALL_DISTRIBUTORS,
   ALL_DISTRIBUTORS_LABEL,
   ALL_STATUS,
   DISTRIBUTOR_ORG_TYPE,
   ELIGIBLE_ORDER_TYPE,
   emptyAggregate,
+  isActiveStatus,
   LEGACY_REPORT_DATE_FIELD,
   REPORT_DATE_FIELD,
   reportDateWindows,
@@ -159,8 +162,11 @@ export function lineValue(row: OrderItemRecord): number {
  * Fold orders, order items and master data into the shape the RPC returns.
  *
  * `orders` must be the distributor's ALL-HISTORY eligible population already
- * restricted to the report's order type, buyer scope and status scope — the
- * lifetime first/last order dates that decide New and Dormant come from it.
+ * restricted to the report's order type, buyer scope and status scope, every
+ * status included. Only its ACTIVE orders (`isActiveStatus`) reach the
+ * headline, trend, rankings, top products and the lifetime first/last order
+ * dates that decide New and Dormant; the whole scope reaches Orders Created,
+ * the status mix and Recent Orders — the same split the RPC applies.
  * `items` covers only the report window and its comparison window; which
  * window a row belongs to is decided from its order's business date
  * (`order_date`, or the Malaysia date of `created_at` for a legacy row).
@@ -219,6 +225,8 @@ export function aggregateDistributorOrders(
   let currentValue = 0
   let previousOrders = 0
   let previousValue = 0
+  let currentCreated = 0
+  let previousCreated = 0
 
   for (const order of orders) {
     // The business date decides everything below; created_at is only carried.
@@ -226,30 +234,40 @@ export function aggregateDistributorOrders(
     const buyerId = order.buyer_org_id
     if (!orderDate || !buyerId) continue
 
-    const bucket = bucketFor(buyerId)
-    bucket.lifetimeOrders += 1
-    if (bucket.firstOrderDate === null || orderDate < bucket.firstOrderDate) bucket.firstOrderDate = orderDate
-    if (bucket.lastOrderDate === null || orderDate > bucket.lastOrderDate) bucket.lastOrderDate = orderDate
-
+    const active = isActiveStatus(order.status)
     const value = valueByOrder.get(order.id) ?? 0
     // Half-open business-date windows: an order dated the first day of the next
     // month belongs to that month, never to both.
     const inCurrent = orderDate >= windows.start && orderDate < windows.end
     const inPrevious = orderDate >= windows.comparisonStart && orderDate < windows.comparisonEnd
 
+    if (inCurrent) currentCreated += 1
+    if (inPrevious) previousCreated += 1
+
+    // Lifetime history, window figures and rankings: active orders only.
+    const bucket = active ? bucketFor(buyerId) : null
+    if (bucket) {
+      bucket.lifetimeOrders += 1
+      if (bucket.firstOrderDate === null || orderDate < bucket.firstOrderDate) bucket.firstOrderDate = orderDate
+      if (bucket.lastOrderDate === null || orderDate > bucket.lastOrderDate) bucket.lastOrderDate = orderDate
+    }
+
     if (inCurrent) {
-      bucket.currentOrders += 1
-      bucket.currentValue += value
-      currentOrders += 1
-      currentValue += value
-      currentOrderIds.add(order.id)
+      if (bucket) {
+        bucket.currentOrders += 1
+        bucket.currentValue += value
+        currentOrders += 1
+        currentValue += value
+        currentOrderIds.add(order.id)
 
-      const day = orderDate
-      const dayBucket = dayTotals.get(day) ?? { orders: 0, orderValue: 0 }
-      dayBucket.orders += 1
-      dayBucket.orderValue += value
-      dayTotals.set(day, dayBucket)
+        const day = orderDate
+        const dayBucket = dayTotals.get(day) ?? { orders: 0, orderValue: 0 }
+        dayBucket.orders += 1
+        dayBucket.orderValue += value
+        dayTotals.set(day, dayBucket)
+      }
 
+      // Status mix and Recent Orders keep every status of the scope.
       const statusKey = order.status || 'unknown'
       const statusBucket = statusTotals.get(statusKey) ?? { status: statusKey, orders: 0, orderValue: 0 }
       statusBucket.orders += 1
@@ -268,7 +286,7 @@ export function aggregateDistributorOrders(
         itemCount: itemCountByOrder.get(order.id) ?? 0,
       })
     }
-    if (inPrevious) {
+    if (inPrevious && bucket) {
       bucket.previousOrders += 1
       bucket.previousValue += value
       previousOrders += 1
@@ -338,8 +356,9 @@ export function aggregateDistributorOrders(
     distributorName: scopeName,
     status,
     dateField,
-    current: { orders: currentOrders, orderValue: currentValue, activeDistributors },
-    previous: { orders: previousOrders, orderValue: previousValue, activeDistributors: previousActive },
+    kpiModel: ACTIVE_KPI_MODEL,
+    current: { orders: currentOrders, orderValue: currentValue, activeDistributors, ordersCreated: currentCreated },
+    previous: { orders: previousOrders, orderValue: previousValue, activeDistributors: previousActive, ordersCreated: previousCreated },
     dailyTrend,
     distributors: distributorRows,
     statusBreakdown: [...statusTotals.values()],
@@ -360,12 +379,22 @@ export function aggregateDistributorOrders(
  * D2H orders whose buyer is one of the scoped DIST organisations, optionally
  * narrowed to one status. Used by the fallback aggregation, the CSV export and
  * the dashboard drill-downs, so none of them re-states the definition.
+ *
+ * `activeOnly` intersects the scope with the active statuses (the RPC's
+ * `is_active`), for reads that must match Active Orders: a specific status
+ * outside the active set then yields nothing, exactly as the headline does.
  */
-export function scopeEligibleDistributorOrders(query: any, distributorIds: string[], status: string = ALL_STATUS) {
+export function scopeEligibleDistributorOrders(
+  query: any,
+  distributorIds: string[],
+  status: string = ALL_STATUS,
+  options: { activeOnly?: boolean } = {},
+) {
   let scoped = query
     .eq('order_type', ELIGIBLE_ORDER_TYPE)
     .in('buyer_org_id', distributorIds)
   if (status !== ALL_STATUS) scoped = scoped.eq('status', status)
+  if (options.activeOnly) scoped = scoped.in('status', ACTIVE_STATUSES)
   return scoped
 }
 
@@ -400,9 +429,10 @@ export interface EligibleWindowOrder {
 }
 
 /**
- * Every eligible order whose business date falls inside the report window
- * [start, end) for the scope, newest first — the population whose count is
- * "Total Orders".
+ * Every ACTIVE eligible order whose business date falls inside the report
+ * window [start, end) for the scope, newest first — the population whose count
+ * is "Active Orders". Draft and cancelled orders are not listed here; they are
+ * in Recent Orders, Order Processing Health and the CSV export.
  */
 export async function fetchEligibleWindowOrders(
   supabase: any,
@@ -428,6 +458,7 @@ export async function fetchEligibleWindowOrders(
             .select(`id, order_no, display_doc_no, ${orderDateSelect(dateColumn)}, updated_at, status, buyer_org_id, created_by, order_items(qty, unit_price, line_total)`),
           distributors.map((row) => row.id),
           status,
+          { activeOnly: true },
         ),
         dateColumn,
         windows.start,
@@ -460,7 +491,7 @@ export async function fetchEligibleWindowOrders(
   })
 }
 
-/** Narrow all-history eligible orders for a set of distributors (dates and numbers only). */
+/** Narrow all-history ACTIVE eligible orders for a set of distributors (dates and numbers only) — the history the report's first / last order dates come from. */
 export async function fetchEligibleOrderHistory(
   supabase: any,
   input: { distributorIds: string[]; status: string; dateColumn?: OrderDateColumn },
@@ -473,6 +504,7 @@ export async function fetchEligibleOrderHistory(
         supabase.from('orders').select(`id, buyer_org_id, ${orderDateSelect(dateColumn)}, status, order_no, display_doc_no`),
         input.distributorIds,
         input.status,
+        { activeOnly: true },
       )
         .not(dateColumn, 'is', null),
       dateColumn,
@@ -499,7 +531,7 @@ async function readPages<T>(
     if (budget.remaining < 0) {
       throw new Error(
         `Distributor Analytics fallback exceeded its row budget while reading ${label}. Apply migration `
-        + '20260921120200_distributor_analytics_order_date.sql so the report is aggregated in the database.',
+        + '20261212100000_distributor_analytics_active_orders.sql so the report is aggregated in the database.',
       )
     }
     if (page.length < PAGE_SIZE) break
@@ -588,7 +620,11 @@ export async function fetchDistributorAnalyticsAggregate(
     p_distributor_id: isAllDistributors ? null : distributorId,
     p_status: isAllStatus ? null : status,
   })
-  if (!error) {
+  // An installed function that predates the active-order definitions still
+  // counts draft and cancelled orders in the headline; its figures are not
+  // used, and the report is aggregated on the server instead.
+  const legacyKpiModel = !error && data?.kpiModel !== ACTIVE_KPI_MODEL
+  if (!error && !legacyKpiModel) {
     const aggregate = normalizeAggregate(data, month, period, distributorId, status)
     return {
       aggregate,
@@ -602,7 +638,7 @@ export async function fetchDistributorAnalyticsAggregate(
         : null,
     }
   }
-  if (!isMissingDistributorAnalyticsRpc(error)) throw error
+  if (error && !isMissingDistributorAnalyticsRpc(error)) throw error
 
   if (period.dayCount === 0) {
     return {
@@ -694,8 +730,11 @@ export async function fetchDistributorAnalyticsAggregate(
     source: 'fallback',
     degraded: true,
     notice: [
-      'Reporting function not installed yet — figures were aggregated on the server. Apply migration '
-      + '20260921120200_distributor_analytics_order_date.sql to aggregate the report in the database.',
+      legacyKpiModel
+        ? 'Reporting function predates the active-order KPI definitions — figures were aggregated on the server. Apply migration '
+          + '20261212100000_distributor_analytics_active_orders.sql to aggregate the report in the database.'
+        : 'Reporting function not installed yet — figures were aggregated on the server. Apply migration '
+          + '20261212100000_distributor_analytics_active_orders.sql to aggregate the report in the database.',
       legacyOrderDateNotice(dateColumn),
     ].filter(Boolean).join(' '),
   }
@@ -713,7 +752,7 @@ async function fetchVariantLabels(
     orders
       .filter((order) => {
         const date = orderBusinessDate(order)
-        return date !== null && date >= windows.start && date < windows.end
+        return isActiveStatus(order.status) && date !== null && date >= windows.start && date < windows.end
       })
       .map((order) => order.id),
   )
@@ -778,6 +817,7 @@ function normalizeAggregate(
     orders: Number(value?.orders) || 0,
     orderValue: Number(value?.orderValue) || 0,
     activeDistributors: Number(value?.activeDistributors) || 0,
+    ordersCreated: Number(value?.ordersCreated) || 0,
   })
 
   return {
@@ -788,6 +828,7 @@ function normalizeAggregate(
     status: payload?.status || status,
     // The pre-order_date RPC does not report its date field: it bucketed on created_at.
     dateField: payload?.dateField || LEGACY_REPORT_DATE_FIELD,
+    kpiModel: payload?.kpiModel,
     current: totals(payload?.current),
     previous: totals(payload?.previous),
     dailyTrend: (payload?.dailyTrend || []).map((row: any) => ({

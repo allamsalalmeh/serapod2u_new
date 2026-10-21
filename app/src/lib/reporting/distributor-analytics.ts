@@ -16,7 +16,7 @@
  * monthly reports, and a third copy is a third chance to drift.
  */
 
-import { APPROVED_SALES_STATUSES, PIPELINE_STATUSES } from './sales-kpi'
+import { ACTIVE_ORDER_STATUSES, APPROVED_SALES_STATUSES, PIPELINE_STATUSES } from './sales-kpi'
 import {
   formatReportDate,
   monthShortLabel,
@@ -70,13 +70,25 @@ export const ELIGIBLE_ORDER_TYPE = 'D2H'
 export const DISTRIBUTOR_ORG_TYPE = 'DIST'
 
 /**
- * Statuses counted by this report when Status is "All Status".
+ * Every order status — what "All Status" scopes the report to.
  *
- * ALL of them, which is the previous report's behaviour and is preserved on
- * purpose: Order Processing Health measures the status mix itself, and it can
- * only do that if cancelled and draft orders are inside the population being
- * measured. This is why the financial KPI is "Order Value" and never
- * "Revenue" — it is the value of orders raised, not recognised revenue.
+ * Two populations come out of that scope (approved Enhancement03 definitions):
+ *
+ *   scope  — every status the filter admits. "All Status" is inclusive, so
+ *            draft and cancelled orders stay in Total Orders Created, the
+ *            Order Processing Health status mix (approved sales, pipeline,
+ *            cancelled value, cancellation rate) and Recent Orders, where a
+ *            cancelled order is listed and labelled Cancelled.
+ *   active — scope ∩ `ACTIVE_ORDER_STATUSES` (submitted + approved-stage).
+ *            Active Orders, Active Order Value, AOV, the comparison window,
+ *            the daily trend, rankings, contribution, top products and every
+ *            relationship / health / recency rule read this population only,
+ *            whatever the Status filter says. A specific status is honoured
+ *            by intersecting it with the active set: Status = Cancelled shows
+ *            zero active orders and still lists the cancelled ones.
+ *
+ * Neither population is "Revenue": Active Order Value is the value of orders
+ * still commercially live, Approved Sales the approved-stage part of it.
  */
 export const ORDER_STATUSES = [
   'draft',
@@ -89,6 +101,20 @@ export const ORDER_STATUSES = [
 ] as const
 
 export type OrderStatus = (typeof ORDER_STATUSES)[number]
+
+/** Statuses that count toward Active Orders / Active Order Value (Approved Sales + Pipeline). */
+export const ACTIVE_STATUSES: string[] = [...ACTIVE_ORDER_STATUSES]
+
+export function isActiveStatus(status: string | null | undefined): boolean {
+  return ACTIVE_STATUSES.includes(String(status ?? ''))
+}
+
+/**
+ * Marker the source reports when its headline figures follow the active-order
+ * definitions. An RPC that does not report it predates migration
+ * 20261212100000 and still counts draft / cancelled orders in the headline.
+ */
+export const ACTIVE_KPI_MODEL = 'active_orders_v1'
 
 /**
  * Statuses treated as approved by the Approval Rate.
@@ -207,10 +233,14 @@ export function reportDateWindows(period: DistributorReportPeriod): {
 // ── Raw aggregate (mirrors the RPC's JSON shape 1:1) ───────────────────────
 
 export interface PeriodTotals {
+  /** Active orders (submitted + approved-stage) in the window. */
   orders: number
+  /** Active Order Value of the window. */
   orderValue: number
-  /** Distinct distributor buyers with at least one eligible order in the window. */
+  /** Distinct distributor buyers with at least one active order in the window. */
   activeDistributors: number
+  /** Every order of the status scope in the window, draft and cancelled included. */
+  ordersCreated?: number
 }
 
 /** One distributor with both reporting windows plus its lifetime trading history. */
@@ -281,11 +311,13 @@ export interface DistributorAnalyticsAggregate {
   status: string
   /** The column the source bucketed on; absent means the pre-order_date RPC. */
   dateField?: string
+  /** `ACTIVE_KPI_MODEL` when the headline follows the active-order definitions. */
+  kpiModel?: string
   current: PeriodTotals
   previous: PeriodTotals
   dailyTrend: { date: string; orders: number; orderValue: number }[]
   distributors: DistributorAggregate[]
-  /** Status mix of the CURRENT window, for Order Processing Health. */
+  /** Status mix of the CURRENT window over the whole status scope, for Order Processing Health. */
   statusBreakdown: StatusTotals[]
   topProducts: ProductTotals[]
   recentOrders: OrderRecordTotals[]
@@ -398,8 +430,12 @@ export interface DistributorAnalyticsReport {
   distributor: DistributorScope
   status: StatusScope
   summary: {
-    totalOrders: number
-    orderValue: number
+    /** Every order of the status scope in the report window, draft and cancelled included. */
+    ordersCreated: number
+    /** Submitted + approved-stage orders only — never draft or cancelled. */
+    activeOrders: number
+    activeOrderValue: number
+    /** Active Order Value ÷ Active Orders. */
     avgOrderValue: number | null
     activeDistributors: number
     returningDistributors: number
@@ -443,7 +479,10 @@ export interface DistributorAnalyticsReport {
     rows: DistributorRow[]
   }
   orderProcessing: {
+    /** Orders Created — the denominator of every rate below. */
     total: number
+    activeOrders: number
+    activeOrderValue: number
     statuses: { status: string; label: string; orders: number; orderValue: number; sharePct: number | null }[]
     approvedOrders: number
     approvalRatePct: number | null
@@ -462,7 +501,10 @@ export interface DistributorAnalyticsReport {
   meta: {
     orderType: string
     buyerOrgType: string
+    /** Statuses the Status filter admits (the scope). */
     statuses: string[]
+    /** Statuses counted by Active Orders / Active Order Value. */
+    activeStatuses: string[]
     dateField: string
     orderValueField: string
     approvedStatuses: string[]
@@ -759,12 +801,13 @@ export function emptyAggregate(
   status: string = ALL_STATUS,
 ): DistributorAnalyticsAggregate {
   const resolved = period ?? resolveDistributorReportPeriod(month)
-  const zero: PeriodTotals = { orders: 0, orderValue: 0, activeDistributors: 0 }
+  const zero: PeriodTotals = { orders: 0, orderValue: 0, activeDistributors: 0, ordersCreated: 0 }
   return {
     month,
     distributorId,
     distributorName,
     status,
+    kpiModel: ACTIVE_KPI_MODEL,
     current: { ...zero },
     previous: { ...zero },
     dailyTrend: Array.from({ length: resolved.dayCount }, (_, i) => ({
@@ -898,6 +941,11 @@ export function buildDistributorAnalyticsReport(
 
   const totalOrders = aggregate.current.orders
   const totalValue = round2(aggregate.current.orderValue)
+  // Orders Created covers the whole status scope; the status mix is that same
+  // population, so it is the fallback for a source that does not report it.
+  const ordersCreated = aggregate.current.ordersCreated
+    ?? aggregate.statusBreakdown.reduce((sum, row) => sum + row.orders, 0)
+  const previousOrdersCreated = aggregate.previous.ordersCreated ?? null
   const previousOrders = aggregate.previous.orders
   const previousValue = round2(aggregate.previous.orderValue)
 
@@ -932,7 +980,7 @@ export function buildDistributorAnalyticsReport(
   const cancelledOrders = aggregate.statusBreakdown
     .filter((row) => row.status === 'cancelled')
     .reduce((sum, row) => sum + row.orders, 0)
-  const approvalRatePct = safeShare(approvedOrders, totalOrders)
+  const approvalRatePct = safeShare(approvedOrders, ordersCreated)
   const valueOf = (statuses: readonly string[]) => round2(aggregate.statusBreakdown
     .filter((row) => statuses.includes(row.status))
     .reduce((sum, row) => sum + row.orderValue, 0))
@@ -995,9 +1043,13 @@ export function buildDistributorAnalyticsReport(
   const returningDelta = rateDelta(returningRatePct, previousReturningRate)
 
   const comparison: ComparisonRow[] = [
-    { key: 'totalOrders', label: 'Total Orders', format: 'count', current: totalOrders, previous: previousOrders, changePct: ordersDelta.changePct, changePoints: null },
-    { key: 'orderValue', label: 'Order Value', format: 'currency', current: totalValue, previous: previousValue, changePct: valueDelta.changePct, changePoints: null },
+    { key: 'activeOrders', label: 'Active Orders', format: 'count', current: totalOrders, previous: previousOrders, changePct: ordersDelta.changePct, changePoints: null },
+    { key: 'activeOrderValue', label: 'Active Order Value', format: 'currency', current: totalValue, previous: previousValue, changePct: valueDelta.changePct, changePoints: null },
     { key: 'avgOrderValue', label: 'Avg Order Value', format: 'currency', current: avgOrderValue, previous: previousAvgOrderValue, changePct: aovDelta.changePct, changePoints: null },
+    {
+      key: 'ordersCreated', label: 'Total Orders Created', format: 'count', current: ordersCreated, previous: previousOrdersCreated,
+      changePct: previousOrdersCreated === null ? null : metricDelta(ordersCreated, previousOrdersCreated).changePct, changePoints: null,
+    },
     { key: 'activeDistributors', label: 'Active Distributors', format: 'count', current: activeDistributors, previous: previousActive, changePct: activeDelta.changePct, changePoints: activeDistributors - previousActive },
     { key: 'returningRate', label: 'Returning Rate', format: 'percent', current: returningRatePct, previous: previousReturningRate, changePct: null, changePoints: returningDelta.changePoints },
   ]
@@ -1010,7 +1062,7 @@ export function buildDistributorAnalyticsReport(
       value: topNSharePct === null ? '—' : `${topNSharePct.toFixed(0)}%`,
       description: topN.length === 0
         ? 'No distributor order activity to concentrate'
-        : `Top ${topN.length} distributor${topN.length === 1 ? '' : 's'} carry ${topNSharePct === null ? '—' : `${topNSharePct.toFixed(0)}%`} of Order Value`
+        : `Top ${topN.length} distributor${topN.length === 1 ? '' : 's'} carry ${topNSharePct === null ? '—' : `${topNSharePct.toFixed(0)}%`} of Active Order Value`
           + (topQuintileSharePct === null ? '' : ` · top 20% carry ${topQuintileSharePct.toFixed(0)}%`),
     },
     {
@@ -1096,8 +1148,9 @@ export function buildDistributorAnalyticsReport(
     distributor,
     status,
     summary: {
-      totalOrders,
-      orderValue: totalValue,
+      ordersCreated,
+      activeOrders: totalOrders,
+      activeOrderValue: totalValue,
       avgOrderValue,
       activeDistributors,
       returningDistributors,
@@ -1142,20 +1195,22 @@ export function buildDistributorAnalyticsReport(
     health: { rows: healthRows, summary: healthSummary },
     actionPlan: { summary: actionSummary, rows: actionRows.slice(0, ACTION_ROWS_LIMIT) },
     orderProcessing: {
-      total: totalOrders,
+      total: ordersCreated,
+      activeOrders: totalOrders,
+      activeOrderValue: totalValue,
       statuses: statusRows.map((row) => ({
         status: row.status,
         label: statusLabel(row.status),
         orders: row.orders,
         orderValue: round2(row.orderValue),
-        sharePct: safeShare(row.orders, totalOrders),
+        sharePct: safeShare(row.orders, ordersCreated),
       })),
       approvedOrders,
       approvalRatePct,
       completedOrders,
-      completionRatePct: safeShare(completedOrders, totalOrders),
+      completionRatePct: safeShare(completedOrders, ordersCreated),
       cancelledOrders,
-      cancellationRatePct: safeShare(cancelledOrders, totalOrders),
+      cancellationRatePct: safeShare(cancelledOrders, ordersCreated),
       approvedSalesValue,
       pipelineOrders,
       pipelineValue,
@@ -1166,6 +1221,7 @@ export function buildDistributorAnalyticsReport(
       orderType: ELIGIBLE_ORDER_TYPE,
       buyerOrgType: DISTRIBUTOR_ORG_TYPE,
       statuses: statusId === ALL_STATUS ? [...ORDER_STATUSES] : [statusId],
+      activeStatuses: statusId === ALL_STATUS ? [...ACTIVE_STATUSES] : ACTIVE_STATUSES.filter((row) => row === statusId),
       dateField: aggregate.dateField ?? REPORT_DATE_FIELD,
       orderValueField: ORDER_VALUE_FIELD,
       approvedStatuses: APPROVED_STATUSES,
@@ -1175,7 +1231,9 @@ export function buildDistributorAnalyticsReport(
       dormantDays: DORMANT_DAYS,
       stableBandPct: STABLE_BAND_PCT,
     },
-    isEmpty: totalOrders === 0 && totalValue === 0,
+    // A month holding only cancelled or draft orders is not empty: it still has
+    // a status mix and recent orders to show.
+    isEmpty: totalOrders === 0 && totalValue === 0 && ordersCreated === 0,
   }
 }
 

@@ -113,9 +113,9 @@ const drawer = () => screen.findByTestId('metric-drilldown')
 const rowsIn = (el: HTMLElement) => within(within(el).getByTestId('drilldown-table')).getAllByRole('row').slice(1)
 
 describe('clickable dashboard metrics', () => {
-  it('6. Total Orders and Active Distributors cards are interactive; Concentration and At Risk are not', async () => {
+  it('6. Active Orders and Active Distributors cards are interactive; Concentration and At Risk are not', async () => {
     await renderTab()
-    for (const label of ['Total Orders', 'Active Distributors', 'New Distributors', 'Inactive This Period', 'Returning Distributors']) {
+    for (const label of ['Active Orders', 'Active Distributors', 'New Distributors', 'Inactive This Period', 'Returning Distributors']) {
       const card = screen.getByRole('button', { name: `View ${label} details` })
       expect(card.getAttribute('tabindex')).toBe('0')
       expect(card.className).toContain('cursor-pointer')
@@ -124,14 +124,14 @@ describe('clickable dashboard metrics', () => {
     expect(screen.getByTestId('insight-at_risk').getAttribute('role')).toBeNull()
   })
 
-  it('7. Total Orders opens exactly the 7 counted orders for the current scope', async () => {
+  it('7. Active Orders opens exactly the 7 counted orders for the current scope', async () => {
     await renderTab()
-    fireEvent.click(screen.getByRole('button', { name: 'View Total Orders details' }))
+    fireEvent.click(screen.getByRole('button', { name: 'View Active Orders details' }))
     const panel = await drawer()
-    await waitFor(() => expect(within(panel).getByText('Total Orders — September 2026')).toBeTruthy())
+    await waitFor(() => expect(within(panel).getByText('Active Orders — September 2026')).toBeTruthy())
     await waitFor(() => expect(rowsIn(panel)).toHaveLength(7))
-    expect(within(panel).getByTestId('drilldown-summary').textContent).toContain('Total Orders: 7')
-    expect(within(panel).getByTestId('drilldown-summary').textContent).toContain('Order Value: RM36.9K')
+    expect(within(panel).getByTestId('drilldown-summary').textContent).toContain('Active Orders: 7')
+    expect(within(panel).getByTestId('drilldown-summary').textContent).toContain('Active Order Value: RM36.9K')
     expect(within(panel).queryByRole('alert')).toBeNull()
     const link = within(panel).getAllByRole('link')[0] as HTMLAnchorElement
     expect(link.getAttribute('href')).toMatch(/^\/supply-chain\/orders\//)
@@ -191,7 +191,7 @@ describe('clickable dashboard metrics', () => {
     fireEvent.click(screen.getByRole('button', { name: /Download PDF/ }))
     await waitFor(() => expect(pdfBuilder).toHaveBeenCalledTimes(1))
     const [report] = pdfBuilder.mock.calls[0] as any[]
-    expect(report.summary).toMatchObject({ totalOrders: 7, orderValue: 36944, activeDistributors: 3 })
+    expect(report.summary).toMatchObject({ activeOrders: 7, activeOrderValue: 36944, activeDistributors: 3 })
     expect(report).not.toHaveProperty('drilldown')
   })
 })

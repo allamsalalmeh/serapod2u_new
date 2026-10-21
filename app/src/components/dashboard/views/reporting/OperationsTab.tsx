@@ -1,11 +1,10 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   AreaChart,
   Area,
@@ -40,7 +39,6 @@ import {
   Truck,
   BoxIcon,
   ChevronRight,
-  Calendar,
   BarChart3,
   PieChart as PieChartIcon,
   ArrowRight,
@@ -49,20 +47,15 @@ import {
 } from 'lucide-react'
 import { SeraLoadingState } from '@/components/ui/SeraLoader'
 import {
-  format,
-  subDays,
-  startOfMonth,
-  endOfMonth,
   differenceInHours,
-  differenceInDays,
-  parseISO,
-  isToday,
-  subMonths,
-  eachMonthOfInterval,
   startOfDay,
   endOfDay,
 } from 'date-fns'
+import { addDaysToDateKey, malaysiaDateOf } from '@/lib/orders/order-date'
+import { currentReportingMonthKey } from '@/lib/reporting/consumer-analytics'
+import { formatReportDate, resolveProductReportPeriod } from '@/lib/reporting/product-analytics'
 import ExecutiveKpiValue from './ExecutiveKpiValue'
+import ReportingMonthSelector from './ReportingMonthSelector'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 interface OperationsTabProps {
@@ -70,6 +63,9 @@ interface OperationsTabProps {
   chartGridColor: string
   chartTickColor: string
   isDark: boolean
+  /** Dashboard-level Reporting Month; the tab keeps its own when rendered alone. */
+  month?: string
+  onMonthChange?: (month: string) => void
 }
 
 interface OrderRow {
@@ -136,15 +132,26 @@ const STATUS_COLORS: Record<string, string> = {
   closed: COLORS.success,
 }
 
-const PERIOD_OPTIONS = [
-  { value: '7', label: 'Last 7 Days' },
-  { value: '30', label: 'Last 30 Days' },
-  { value: '90', label: 'Last 90 Days' },
-  { value: 'this_month', label: 'This Month' },
-  { value: 'last_month', label: 'Last Month' },
-]
-
 // ── Helpers ────────────────────────────────────────────────────────────────
+/**
+ * Operations measure order ENTRY and processing, so they bucket on
+ * `created_at` (Malaysia time) rather than the SO business date. The window is
+ * the shared monthly one: a historical month is the whole month, the current
+ * month runs to today and compares with the same elapsed days of last month.
+ */
+const PAGE_SIZE = 1000
+
+async function readAllPages<T>(build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: any }>): Promise<T[]> {
+  const out: T[] = []
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await build(from, from + PAGE_SIZE - 1)
+    if (error) throw error
+    const rows = data ?? []
+    out.push(...rows)
+    if (rows.length < PAGE_SIZE) return out
+  }
+}
+
 function AnimatedCounter({ value, prefix = '', suffix = '', decimals = 0 }: {
   value: number; prefix?: string; suffix?: string; decimals?: number
 }) {
@@ -184,31 +191,6 @@ function ChartSkeleton({ height = 'h-64' }: { height?: string }) {
   return <Skeleton className={`w-full ${height}`} />
 }
 
-function getDateRange(period: string): { start: Date; end: Date } {
-  const now = new Date()
-  switch (period) {
-    case '7':
-      return { start: subDays(now, 7), end: now }
-    case '30':
-      return { start: subDays(now, 30), end: now }
-    case '90':
-      return { start: subDays(now, 90), end: now }
-    case 'this_month':
-      return { start: startOfMonth(now), end: now }
-    case 'last_month': {
-      const lm = subMonths(now, 1)
-      return { start: startOfMonth(lm), end: endOfMonth(lm) }
-    }
-    default:
-      return { start: subDays(now, 30), end: now }
-  }
-}
-
-function getPreviousPeriodRange(start: Date, end: Date): { start: Date; end: Date } {
-  const days = differenceInDays(end, start)
-  return { start: subDays(start, days), end: subDays(end, days) }
-}
-
 function formatDuration(hours: number): string {
   if (hours < 1) return `${Math.round(hours * 60)}m`
   if (hours < 24) return `${hours.toFixed(1)}h`
@@ -240,11 +222,27 @@ function CustomTooltip({ active, payload, label }: any) {
 }
 
 // ── Main Component ─────────────────────────────────────────────────────────
-export default function OperationsTab({ userProfile, chartGridColor, chartTickColor, isDark }: OperationsTabProps) {
+export default function OperationsTab({ userProfile, chartGridColor, chartTickColor, isDark, month: monthProp, onMonthChange }: OperationsTabProps) {
   const supabase = createClient()
 
   // State
-  const [period, setPeriod] = useState('30')
+  const [localMonth, setLocalMonth] = useState<string>(() => currentReportingMonthKey())
+  const month = monthProp ?? localMonth
+  const setMonth = onMonthChange ?? setLocalMonth
+  const period = useMemo(() => resolveProductReportPeriod(month), [month])
+  const requestId = useRef(0)
+  const [earliestMonth, setEarliestMonth] = useState<string | null>(null)
+
+  // The first order the caller can see starts the supported month range.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const { data } = await supabase.from('orders').select('created_at').order('created_at', { ascending: true }).limit(1)
+      const first = (data as { created_at: string }[] | null)?.[0]?.created_at
+      if (!cancelled && first) setEarliestMonth(malaysiaDateOf(first)?.slice(0, 7) ?? null)
+    })()
+    return () => { cancelled = true }
+  }, [supabase])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [orders, setOrders] = useState<OrderRow[]>([])
@@ -259,35 +257,30 @@ export default function OperationsTab({ userProfile, chartGridColor, chartTickCo
       else setLoading(true)
       setError(null)
 
-      const { start, end } = getDateRange(period)
-      const prev = getPreviousPeriodRange(start, end)
-
-      const [ordersRes, prevOrdersRes, docsRes] = await Promise.all([
-        supabase
-          .from('orders')
-          .select('id, order_no, order_type, status, created_at, updated_at, approved_at, buyer_org_id, seller_org_id, warehouse_org_id')
-          .gte('created_at', start.toISOString())
-          .lte('created_at', end.toISOString())
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('orders')
-          .select('id, order_no, order_type, status, created_at, updated_at, approved_at, buyer_org_id, seller_org_id, warehouse_org_id')
-          .gte('created_at', prev.start.toISOString())
-          .lte('created_at', prev.end.toISOString()),
-        supabase
-          .from('documents')
-          .select('id, doc_type, status, order_id, created_at')
-          .gte('created_at', start.toISOString())
-          .lte('created_at', end.toISOString()),
+      const id = ++requestId.current
+      const select = 'id, order_no, order_type, status, created_at, updated_at, approved_at, buyer_org_id, seller_org_id, warehouse_org_id'
+      const [orderRows, prevOrderRows, docRows] = await Promise.all([
+        readAllPages<OrderRow>((from, to) => supabase
+          .from('orders').select(select)
+          .gte('created_at', period.startUtc).lt('created_at', period.endUtc)
+          .order('created_at', { ascending: false }).order('id', { ascending: true })
+          .range(from, to) as any),
+        readAllPages<OrderRow>((from, to) => supabase
+          .from('orders').select(select)
+          .gte('created_at', period.comparisonStartUtc).lt('created_at', period.comparisonEndUtc)
+          .order('created_at', { ascending: false }).order('id', { ascending: true })
+          .range(from, to) as any),
+        readAllPages<DocumentRow>((from, to) => supabase
+          .from('documents').select('id, doc_type, status, order_id, created_at')
+          .gte('created_at', period.startUtc).lt('created_at', period.endUtc)
+          .order('created_at', { ascending: false }).order('id', { ascending: true })
+          .range(from, to) as any),
       ])
-
-      if (ordersRes.error) throw ordersRes.error
-      if (prevOrdersRes.error) throw prevOrdersRes.error
-      if (docsRes.error) throw docsRes.error
-
-      setOrders((ordersRes.data as OrderRow[]) || [])
-      setPrevOrders((prevOrdersRes.data as OrderRow[]) || [])
-      setDocuments((docsRes.data as DocumentRow[]) || [])
+      // A slower earlier month must never overwrite the one now selected.
+      if (id !== requestId.current) return
+      setOrders(orderRows)
+      setPrevOrders(prevOrderRows)
+      setDocuments(docRows)
     } catch (err: any) {
       console.error('OperationsTab fetch error:', err)
       setError(err.message || 'Failed to load operations data')
@@ -318,8 +311,8 @@ export default function OperationsTab({ userProfile, chartGridColor, chartTickCo
 
   // 2. Processing KPIs
   const kpis = useMemo(() => {
-    const { start, end } = getDateRange(period)
-    const daySpan = Math.max(differenceInDays(end, start), 1)
+    const daySpan = Math.max(period.dayCount, 1)
+    const prevDaySpan = Math.max(period.comparisonDayCount, 1)
 
     // Approval time (hours)
     const approvedOrders = orders.filter(o => o.approved_at)
@@ -345,7 +338,7 @@ export default function OperationsTab({ userProfile, chartGridColor, chartTickCo
 
     // Throughput
     const throughput = orders.length / daySpan
-    const prevThroughput = prevOrders.length / daySpan
+    const prevThroughput = prevOrders.length / prevDaySpan
 
     // Active
     const activeCount = orders.filter(o => o.status === 'submitted' || o.status === 'approved').length
@@ -403,31 +396,24 @@ export default function OperationsTab({ userProfile, chartGridColor, chartTickCo
     return alerts
   }, [orders])
 
-  // 4. Throughput Trend (monthly)
+  // 4. Throughput Trend — daily across the reporting month (Malaysia days)
   const throughputTrend = useMemo<MonthlyThroughput[]>(() => {
     if (orders.length === 0) return []
-
-    const dates = orders.map(o => new Date(o.created_at))
-    const minDate = new Date(Math.min(...dates.map(d => d.getTime())))
-    const maxDate = new Date(Math.max(...dates.map(d => d.getTime())))
-
-    const months = eachMonthOfInterval({ start: startOfMonth(minDate), end: startOfMonth(maxDate) })
-
-    return months.map(monthStart => {
-      const monthEnd = endOfMonth(monthStart)
-      const monthLabel = format(monthStart, 'MMM yyyy')
-      const created = orders.filter(o => {
-        const d = new Date(o.created_at)
-        return d >= monthStart && d <= monthEnd
-      }).length
-      const closed = orders.filter(o => {
-        if (o.status !== 'closed') return false
-        const d = new Date(o.updated_at)
-        return d >= monthStart && d <= monthEnd
-      }).length
-      return { month: monthLabel, created, closed }
+    const created = new Map<string, number>()
+    const closed = new Map<string, number>()
+    for (const o of orders) {
+      const day = malaysiaDateOf(o.created_at)
+      if (day) created.set(day, (created.get(day) || 0) + 1)
+      if (o.status === 'closed') {
+        const closedDay = malaysiaDateOf(o.updated_at)
+        if (closedDay) closed.set(closedDay, (closed.get(closedDay) || 0) + 1)
+      }
+    }
+    return Array.from({ length: period.dayCount }, (_, index) => {
+      const day = addDaysToDateKey(period.startDate, index)
+      return { month: formatReportDate(day).slice(0, 6), created: created.get(day) || 0, closed: closed.get(day) || 0 }
     })
-  }, [orders])
+  }, [orders, period])
 
   // 5. Warehouse Activity
   const warehouseActivity = useMemo(() => {
@@ -707,7 +693,7 @@ export default function OperationsTab({ userProfile, chartGridColor, chartTickCo
               <BarChart3 className="h-5 w-5 text-[var(--sera-orange)]" />
               Order Throughput Trend
             </h3>
-            <p className="text-sm text-[var(--sera-muted)] mt-0.5">Monthly created vs completed orders</p>
+            <p className="text-sm text-[var(--sera-muted)] mt-0.5">Daily created vs completed orders · {period.label}{period.isCurrentMonth ? ' to date' : ''}</p>
           </div>
         </div>
       </div>
@@ -788,7 +774,9 @@ export default function OperationsTab({ userProfile, chartGridColor, chartTickCo
             <Truck className="h-5 w-5 text-primary" />
             Warehouse Activity
           </CardTitle>
-          <CardDescription>Today&apos;s warehouse operations snapshot</CardDescription>
+          <CardDescription>
+            Today&apos;s warehouse operations snapshot (current state, not part of the {period.label} figures)
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-3 gap-4">
@@ -914,17 +902,18 @@ export default function OperationsTab({ userProfile, chartGridColor, chartTickCo
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Select value={period} onValueChange={setPeriod}>
-            <SelectTrigger className="w-[160px] h-9 text-sm bg-white border-[var(--sera-line)]">
-              <Calendar className="h-3.5 w-3.5 mr-1 text-muted-foreground" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PERIOD_OPTIONS.map(opt => (
-                <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <ReportingMonthSelector
+            id="operations-month"
+            month={month}
+            onMonthChange={setMonth}
+            availableMonths={earliestMonth ? [earliestMonth] : []}
+            caption={(
+              <>
+                <span className="font-medium text-[var(--sera-ink)]">{period.rangeLabel}</span>
+                {period.isCurrentMonth ? ' (month to date)' : ''} · vs {period.comparisonRangeLabel} · by order entry date
+              </>
+            )}
+          />
           <Button
             variant="outline"
             size="icon"
@@ -962,8 +951,8 @@ export default function OperationsTab({ userProfile, chartGridColor, chartTickCo
         </div>
       </div>
 
-      {/* 5. Warehouse Activity */}
-      {renderWarehouseActivity()}
+      {/* 5. Warehouse Activity — a live "today" snapshot, so only meaningful for the running month. */}
+      {period.isCurrentMonth ? renderWarehouseActivity() : null}
     </div>
   )
 }

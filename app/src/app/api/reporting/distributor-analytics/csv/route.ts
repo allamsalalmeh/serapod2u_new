@@ -7,6 +7,7 @@ import {
   DISTRIBUTOR_ORG_TYPE,
   ELIGIBLE_ORDER_TYPE,
   ORDER_STATUSES,
+  isActiveStatus,
   currentReportingMonthKey,
   distributorReportFilename,
   isValidMonthKey,
@@ -34,7 +35,7 @@ const PAGE_SIZE = 1000
 const MAX_ROWS = 50_000
 
 const HEADERS = [
-  'Order No', 'Date (MYT)', 'Distributor', 'Status', 'Qty', 'Order Value (RM)',
+  'Order No', 'Date (MYT)', 'Distributor', 'Status', 'Counts As Active', 'Qty', 'Order Value (RM)',
 ] as const
 
 function csvCell(value: unknown): string {
@@ -49,6 +50,10 @@ function csvCell(value: unknown): string {
  * scoped to the SAME reporting month, distributor and status as the management
  * report on screen — the old export used the retired rolling `dateRange`
  * presets and could not agree with what the user was looking at.
+ *
+ * Detailed reporting: every status of the scope is exported, draft and
+ * cancelled included, and `Counts As Active` marks the rows that make up the
+ * report's Active Orders / Active Order Value.
  *
  * Row-level detail belongs in a download rather than in the report DTO, so the
  * export is streamed straight to a file and never passes through the report
@@ -137,6 +142,7 @@ export async function GET(request: Request) {
             orderBusinessDate(order) ?? '',
             nameById.get(order.buyer_org_id) || 'Unknown distributor',
             statusLabel(order.status || 'unknown'),
+            isActiveStatus(order.status) ? 'Yes' : 'No',
             qty,
             value.toFixed(2),
           ].map(csvCell).join(','))
@@ -166,6 +172,7 @@ export async function GET(request: Request) {
       `# Report Period: ${period.rangeLabel}`,
       `# Distributor: ${scopeName}`,
       `# Status: ${status === ALL_STATUS ? 'All Status' : statusLabel(status)}`,
+      '# Active Orders / Active Order Value = rows with Counts As Active = Yes (submitted and approved-stage); draft and cancelled rows are history only',
       `# Order Type: ${ELIGIBLE_ORDER_TYPE} · Buyer Org Type: ${DISTRIBUTOR_ORG_TYPE} · Bucketed on ${dateColumn === 'order_date' ? `${REPORT_DATE_FIELD} (business SO date)` : `${LEGACY_REPORT_DATE_FIELD} (Asia/Kuala_Lumpur) — order_date migration not applied`}`,
     ].join('\n')
 

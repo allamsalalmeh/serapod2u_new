@@ -176,11 +176,13 @@ describe('default entry', () => {
     expect(requested).toEqual([{ month: '2026-09', distributor: 'all', status: 'all' }])
   })
 
-  it('renders the monthly KPIs, using Order Value rather than Total Amount or Sales', async () => {
+  it('renders the monthly KPIs on active orders, using Active Order Value rather than Total Amount or Sales', async () => {
     await renderTab()
 
-    expect(screen.getAllByText('Total Orders').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Order Value').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Active Orders').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Active Order Value').length).toBeGreaterThan(0)
+    expect(screen.getByTestId('active-kpi-definition').textContent).toMatch(/Draft and cancelled orders never count/)
+    expect(screen.getAllByText('Total Orders Created').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Avg Order Value').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Active Distributors').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Returning Rate').length).toBeGreaterThan(0)
