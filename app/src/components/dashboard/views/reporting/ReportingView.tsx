@@ -555,7 +555,8 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                             D2H/S2D orders by SO date; submitted orders are pipeline, cancelled orders are reported
                             apart and H2M purchases are never sales (lib/reporting/executive-overview.ts). */}
                         {/* Headline figures: H2M purchases first (kept visibly apart from sales), then
-                            combined D2H + S2D approved sales, then shop sales. */}
+                            distributor (D2H) and shop (S2D) sales; their combined Approved Sales Value leads the
+                            secondary section. */}
                         <section aria-labelledby="overview-headline-kpis" className="space-y-3">
                         <h3 id="overview-headline-kpis" className="text-xs font-semibold uppercase tracking-wide text-[var(--sera-muted)]">Headline figures</h3>
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -574,15 +575,15 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                             </div>
                             <MetricCard
                                 variant="primary"
-                                title="Approved Sales Value"
-                                tag="D2H + S2D"
+                                title="Distributor Sales (D2H)"
                                 accent={COLORS.success}
-                                value={summary?.approvedSalesValue ?? 0}
-                                icon={DollarSign}
+                                value={summary?.distributorSalesValue ?? 0}
+                                currency
+                                icon={Building2}
                                 color={COLORS.success}
-                                subtitle={versus}
+                                subtitle={`${summary?.distributorSalesOrders ?? 0} approved orders`}
                                 loading={loading}
-                                {...changeProps(comparison?.approvedSalesValue)}
+                                {...changeProps(comparison?.distributorSalesValue)}
                             />
                             <MetricCard
                                 variant="primary"
@@ -599,8 +600,18 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                         </div>
                         </section>
                         <section aria-labelledby="overview-detail-kpis" className="space-y-3">
-                        <h3 id="overview-detail-kpis" className="text-xs font-semibold uppercase tracking-wide text-[var(--sera-muted)]">Orders, volume &amp; pipeline</h3>
+                        <h3 id="overview-detail-kpis" className="text-xs font-semibold uppercase tracking-wide text-[var(--sera-muted)]">Sales, orders &amp; pipeline</h3>
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                            <MetricCard
+                                title="Approved Sales Value"
+                                tag="D2H + S2D"
+                                value={summary?.approvedSalesValue ?? 0}
+                                icon={DollarSign}
+                                color={COLORS.success}
+                                subtitle={versus}
+                                loading={loading}
+                                {...changeProps(comparison?.approvedSalesValue)}
+                            />
                             <MetricCard
                                 title="Confirmed Sales Orders"
                                 value={summary?.approvedSalesOrders ?? 0}
@@ -627,16 +638,6 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                                 subtitle={`${summary?.activeDistributorBuyers ?? 0} distributors · ${summary?.activeShopBuyers ?? 0} shops`}
                                 loading={loading}
                                 {...changeProps(comparison?.activeBuyers)}
-                            />
-                            <MetricCard
-                                title="Distributor Sales (D2H)"
-                                value={summary?.distributorSalesValue ?? 0}
-                                currency
-                                icon={Building2}
-                                color={COLORS.success}
-                                subtitle={`${summary?.distributorSalesOrders ?? 0} approved orders`}
-                                loading={loading}
-                                {...changeProps(comparison?.distributorSalesValue)}
                             />
                             <MetricCard
                                 title="Sales Pipeline Value"
