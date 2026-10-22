@@ -1153,3 +1153,180 @@ describe('One-click Restore of a revoked Group Policy grant (Access history)', (
     expect(onChanged).not.toHaveBeenCalled()
   })
 })
+
+describe('Grant a Group Policy: contextual person preselection', () => {
+  const HQC = { id: 'scope-hq', organization_id: HQ, scope_type: 'organization', display_name: 'Serapod HQ', kind: 'hq', label: 'Serapod HQ — HQ and all its warehouses', coverage: 'HQ and all its warehouses' }
+  const DISTC = { id: 'scope-dist', organization_id: DIST, scope_type: 'organization', display_name: 'North Distributor', kind: 'organization', label: 'North Distributor — this organization', coverage: 'This organization' }
+  const personField = () => screen.getByRole('combobox', { name: 'Person' })
+  const membershipField = () => screen.getByRole('combobox', { name: 'Membership organization' })
+  const policyField = () => screen.getByRole('combobox', { name: 'Group Policy' })
+  const nonPreflightPosts = (fetchMock: any) => fetchMock.mock.calls.filter((c: any) => c[1]?.method === 'POST' && JSON.parse(c[1].body).action !== 'preflight')
+  const preflights = (fetchMock: any) => fetchMock.mock.calls.filter((c: any) => c[1]?.method === 'POST' && JSON.parse(c[1].body).action === 'preflight').map((c: any) => JSON.parse(c[1].body))
+  const isGrantSearch = (url: string) => String(url).startsWith('/api/security-access/people') && new URL(url, 'http://x').searchParams.get('limit') === '20'
+  /** The directory server, with the grant form's person search (limit 20) answered by `search` (deferred or altered rows). */
+  const mountWith = async (search: (url: string, init: any, real: () => Promise<any>) => Promise<any>, other?: Handler, opts: Parameters<typeof serve>[2] = {}) => {
+    const base = serve(data.people, other, { scopeDefinitions: data.scopeDefinitions, ...opts })
+    const fetchMock = vi.fn((url: string, init: any) => (isGrantSearch(url) ? search(url, init, () => base(url, init)) : base(url, init)))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<PeopleAccessPanel data={data} onChanged={vi.fn()} />)
+    await waitFor(() => expect(screen.queryByText('Loading people…')).toBeNull())
+    return fetchMock
+  }
+  const allowedPreflight = (url: string, init: any) => url === '/api/security-access/assignments' && JSON.parse(init.body).action === 'preflight'
+    ? { ok: true, status: 200, json: async () => ({ ok: true, allowed: true }) } : { ok: true, status: 200, json: async () => ({}) }
+
+  it('contextual Grant policy preselects the clicked person and their only eligible membership; nothing is granted', async () => {
+    const fetchMock = await mountPanel(data)
+    await userEvent.click(screen.getByRole('button', { name: /^Siti Staff/ }))   // expanded record, as in UAT
+    await openGrantFor('Siti Staff')
+    expect(personField().textContent).toMatch(/Siti Staff/)
+    expect(personField().textContent).toMatch(/siti@example\.test/)
+    expect(membershipField().textContent).toMatch(/Serapod HQ/)
+    expect(screen.getByText('Their only active membership — selected for you.')).toBeTruthy()
+    expect(screen.getByText('Choose a Group Policy to continue.')).toBeTruthy()
+    expect(nonPreflightPosts(fetchMock)).toEqual([])
+  })
+
+  it('a person with several eligible memberships must choose the membership', async () => {
+    await mountPanel(data)
+    await openGrantFor('Dina Dual')
+    expect(personField().textContent).toMatch(/Dina Dual/)
+    expect(membershipField().textContent).toMatch(/Choose a membership/)
+    expect(screen.getByText('2 active memberships — choose the one this access is for.')).toBeTruthy()
+    expect(screen.getByText('Choose a membership organization to continue.')).toBeTruthy()
+  })
+
+  /** Mounts against a mutable copy of the fixtures, so a person's row can change on the server after the form opened. */
+  const mountMutable = async () => {
+    const d = { ...data, people: data.people.map(p => ({ ...p })) }
+    const fetchMock = serve(d.people, undefined, { scopeDefinitions: d.scopeDefinitions })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<PeopleAccessPanel data={d} onChanged={vi.fn()} />)
+    await waitFor(() => expect(screen.queryByText('Loading people…')).toBeNull())
+    const replace = (id: string, f: (p: any) => any) => { const i = d.people.findIndex(p => p.id === id); d.people[i] = f(d.people[i]) }
+    return { replace }
+  }
+
+  it('keeps the person selected and explains when their fresher row has no eligible membership', async () => {
+    const { replace } = await mountMutable()
+    await openGrantFor('Siti Staff')
+    expect(membershipField().textContent).toMatch(/Serapod HQ/)
+    // Meanwhile the membership stops being grantable here; the directory refresh brings the fresher row.
+    replace('u2', p => ({ ...p, membership: p.membership.map((m: any) => ({ ...m, grantable: false, grant_blocked_reason: 'not_authorized' })) }))
+    await userEvent.type(screen.getByRole('textbox', { name: 'Search people' }), 'Siti')
+    await waitFor(() => expect(membershipField().textContent).toMatch(/No active membership/))
+    expect(personField().textContent).toMatch(/Siti Staff/)
+    expect((membershipField() as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(/not authorized to grant access in their organization/)).toBeTruthy()
+  })
+
+  it('page-level Grant access opens with no person selected', async () => {
+    await mountPanel(data)
+    await userEvent.click(screen.getByRole('button', { name: 'Grant access' }))
+    expect(personField().textContent).toMatch(/Search a person you can grant to/)
+    expect(membershipField().textContent).toMatch(/Choose a person first/)
+  })
+
+  it('switching to another person, and close/reopen, never keeps the previous person, membership or policy', async () => {
+    await mountPanel(data, vi.fn(), undefined, { scopeChoices: [HQC] })
+    await openGrantFor('Siti Staff')
+    await userEvent.click(policyField())
+    await userEvent.click(screen.getByRole('option', { name: /GL Clerk/ }))
+    expect(policyField().textContent).toMatch(/GL Clerk/)
+    await openGrantFor('Dina Dual')
+    expect(personField().textContent).toMatch(/Dina Dual/)
+    expect(personField().textContent).not.toMatch(/Siti/)
+    expect(membershipField().textContent).toMatch(/Choose a membership/)
+    expect(policyField().textContent).not.toMatch(/GL Clerk/)
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Grant access' }))
+    expect(personField().textContent).toMatch(/Search a person you can grant to/)
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await openGrantFor('Siti Staff')
+    expect(personField().textContent).toMatch(/Siti Staff/)
+    expect(membershipField().textContent).toMatch(/Serapod HQ/)
+  })
+
+  it('a late person-search response (without the person) does not clear the contextual selection', async () => {
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    await mountWith(async (_u, _i, real) => {
+      await gate
+      const res = await real(); const body = await res.json()
+      return { ...res, json: async () => ({ ...body, people: body.people.filter((p: any) => p.id !== 'u2') }) }
+    })
+    await openGrantFor('Siti Staff')
+    expect(personField().textContent).toMatch(/Siti Staff/)
+    release()
+    await waitFor(() => expect(screen.queryByText('Searching…')).toBeNull())
+    await new Promise(r => setTimeout(r, 50))
+    expect(personField().textContent).toMatch(/Siti Staff/)
+    expect(membershipField().textContent).toMatch(/Serapod HQ/)
+  })
+
+  it('auto-selects the only eligible membership when it arrives after the person was chosen', async () => {
+    const { replace } = await mountMutable()
+    await openGrantFor('Dina Dual')
+    expect(membershipField().textContent).toMatch(/Choose a membership/)
+    // The HQ membership ends; the directory refresh leaves exactly one eligible membership.
+    replace('u4', p => ({ ...p, membership: p.membership.filter((m: any) => m.organization_id === DIST) }))
+    await userEvent.type(screen.getByRole('textbox', { name: 'Search people' }), 'Dina')
+    await waitFor(() => expect(membershipField().textContent).toMatch(/North Distributor/))
+    expect(personField().textContent).toMatch(/Dina Dual/)
+  })
+
+  it('changing the membership resets the policy and scope', async () => {
+    const d = { ...data, roles: [...ROLES, { id: 'r-any', name: 'Any Org Viewer', source: 'template', status: 'active', applicable_org_types: ['HQ', 'DIST'], permissions: perms('customer.crm.view') }] }
+    const fetchMock = serve(d.people, allowedPreflight, { scopeDefinitions: d.scopeDefinitions })
+    const choices = (url: string, init: any) => {
+      if (String(url).startsWith('/api/security-access/scope-choices')) {
+        const org = new URL(url, 'http://x').searchParams.get('organizationId')
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ choices: org === HQ ? [HQC] : [DISTC] }) })
+      }
+      return fetchMock(url, init)
+    }
+    const spy = vi.fn(choices)
+    vi.stubGlobal('fetch', spy)
+    render(<PeopleAccessPanel data={d} onChanged={vi.fn()} />)
+    await waitFor(() => expect(screen.queryByText('Loading people…')).toBeNull())
+    await openGrantFor('Dina Dual')
+    await userEvent.click(membershipField())
+    await userEvent.click(screen.getByRole('option', { name: /Serapod HQ/ }))
+    await userEvent.click(policyField())
+    await userEvent.click(screen.getByRole('option', { name: /Any Org Viewer/ }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Scope' }).textContent).toMatch(/Serapod HQ/))
+    await userEvent.click(membershipField())
+    await userEvent.click(screen.getByRole('option', { name: /North Distributor/ }))
+    expect(policyField().textContent).not.toMatch(/Any Org Viewer/)
+    expect(screen.getByRole('combobox', { name: 'Scope' }).textContent).not.toMatch(/Serapod HQ/)
+    expect(nonPreflightPosts(spy)).toEqual([])
+  })
+
+  it('a preselected person is not an authorization decision: a refused preflight keeps Grant access disabled and nothing is posted', async () => {
+    const refuse = (url: string, init: any) => url === '/api/security-access/assignments' && JSON.parse(init.body).action === 'preflight'
+      ? { ok: true, status: 200, json: async () => ({ ok: true, allowed: false, reason: 'You cannot grant this policy in this organization.' }) } : { ok: true, status: 200, json: async () => ({}) }
+    const fetchMock = await mountPanel(data, vi.fn(), refuse, { scopeChoices: [HQC] })
+    await openGrantFor('Siti Staff')
+    await userEvent.click(policyField())
+    await userEvent.click(screen.getByRole('option', { name: /GL Clerk/ }))
+    await screen.findByText('You cannot grant this policy in this organization.')
+    expect(preflights(fetchMock)).toEqual([{ action: 'preflight', userId: 'u2', organizationId: HQ, roleId: 'r-gl', scopeIds: ['scope-hq'] }])
+    const submit = screen.getAllByRole('button', { name: 'Grant access' }).find(b => b.closest('section')?.textContent?.includes('Add note (optional)'))! as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
+    await userEvent.click(submit)
+    expect(nonPreflightPosts(fetchMock)).toEqual([])
+  })
+
+  it('an allowed preflight still grants only on the explicit Grant access click', async () => {
+    const fetchMock = await mountPanel(data, vi.fn(), allowedPreflight, { scopeChoices: [HQC] })
+    await openGrantFor('Siti Staff')
+    await userEvent.click(policyField())
+    await userEvent.click(screen.getByRole('option', { name: /GL Clerk/ }))
+    await screen.findByText(/Ready to grant/)
+    expect(nonPreflightPosts(fetchMock)).toEqual([])
+    const submit = screen.getAllByRole('button', { name: 'Grant access' }).find(b => b.closest('section')?.textContent?.includes('Add note (optional)'))!
+    await userEvent.click(submit)
+    await waitFor(() => expect(nonPreflightPosts(fetchMock).length).toBe(1))
+    expect(JSON.parse(nonPreflightPosts(fetchMock)[0][1].body)).toMatchObject({ action: 'grant', userId: 'u2', organizationId: HQ, roleId: 'r-gl' })
+  })
+})

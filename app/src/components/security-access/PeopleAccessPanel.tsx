@@ -229,7 +229,9 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
     for (const p of [...(fallback ? data.people || [] : []), ...grantResults, ...people]) map.set(p.id, p)
     return map
   }, [grantResults, people, formPerson, fallback, data.people])
-  const grantCandidates = Array.from(known.values()).filter(p => p.id !== data.viewerId && (p.membership || []).some(canGrantOn))
+  // The chosen person always stays an option, so the Person field keeps showing them while search results change and when
+  // their fresher row has no grantable membership left (the membership field then explains why). Display only.
+  const grantCandidates = Array.from(known.values()).filter(p => p.id !== data.viewerId && (p.id === form.userId || (p.membership || []).some(canGrantOn)))
 
   // Memberships the pinned policy is not eligible for (by the membership organization's type) are shown but not selectable (the database checks too).
   const pinnedRole = pinned ? grantableRoles.find(r => r.id === pinned.roleId) : null
@@ -344,22 +346,34 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
   const checkState = checkKey && check.key === checkKey ? check.status : 'checking'
   const [noteOpen, setNoteOpen] = useState(false)
 
-  const pickPerson = (userId: string) => {
-    const person = userId ? known.get(userId) ?? null : null
+  /** `snapshot` is the clicked row itself (contextual Grant policy): the selection never depends on the async person lists. */
+  const pickPerson = (userId: string, snapshot: any = null) => {
+    const person = userId ? (snapshot?.id === userId ? snapshot : known.get(userId) ?? null) : null
     setFormPerson(person)
-    const eligible = userId ? eligibleMemberships(userId).filter(applies) : []
-    // Exactly one eligible membership is selected for you; never a default HQ.
+    const eligible = ((person?.membership) || []).filter(canGrantOn).filter(applies)
+    // Exactly one eligible membership is selected for you; never a default HQ. Policy, scope and note start over.
     setForm(f => ({ ...EMPTY_FORM, roleId: pinned && f.roleId === pinned.roleId ? f.roleId : '', userId, organizationId: eligible.length === 1 ? eligible[0].organization_id : '' }))
     setNoteOpen(false)
   }
+  // A person whose memberships arrive or change after they were chosen (fresher directory / search row) still gets their
+  // only eligible membership; an existing choice, and a person with several memberships, are left to the administrator.
+  const soleMembership = (() => { const e = memberships.filter(applies); return e.length === 1 ? String(e[0].organization_id) : '' })()
+  useEffect(() => {
+    if (!form.userId || form.organizationId || !soleMembership) return
+    const userId = form.userId
+    setForm(f => (f.userId === userId && !f.organizationId ? { ...f, organizationId: soleMembership, scopeId: '' } : f))
+  }, [form.userId, form.organizationId, soleMembership])
+  /** Membership change: policy and scope start over (a pinned profile stays). */
+  const pickMembership = (organizationId: string) => setForm(f => (f.organizationId === organizationId ? f
+    : { ...f, organizationId, scopeId: '', roleId: pinned && f.roleId === pinned.roleId ? f.roleId : '' }))
   const pickModule = (module: string) => setForm(f => ({
     ...f, module, roleId: grantableRoles.some(r => r.id === f.roleId && roleInModule(r, module, roleModules.get(r.id))) ? f.roleId : '',
   }))
 
   const toggle = (id: string) => setOpen(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
-  const startGrant = (userId = '') => {
-    if (userId) setFormPerson(known.get(userId) ?? null)
-    pickPerson(userId)
+  /** Contextual (a row's Grant policy) passes that person; the page-level Grant access passes nothing and starts blank. */
+  const startGrant = (person: any = null) => {
+    pickPerson(person?.id ?? '', person)
     setAccessLevel('standard')
     setMessage(null)
     setFormOpen(true)
@@ -504,7 +518,7 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
           options={grantCandidates.map(p => ({ value: p.id, label: p.full_name || p.email, description: `${p.email} · ${(p.membership || []).filter(canGrantOn).map(nameOf).join(', ')}`, keywords: p.role_code }))}
           placeholder="Search a person you can grant to" emptyText="No grantable person matches." />
         <div>
-          <SearchableSelect label="Membership organization" value={form.organizationId} onChange={v => setForm({ ...form, organizationId: v, scopeId: '' })}
+          <SearchableSelect label="Membership organization" value={form.organizationId} onChange={pickMembership}
             options={memberships.map(m => ({ value: m.organization_id, label: nameOf(m), disabled: !applies(m), description: `${orgTypeLabel(one(m.organization)?.org_type_code)}${m.is_primary ? ' · Primary membership' : ''}${applies(m) ? '' : ' · Policy does not apply to this organization type'}` }))}
             placeholder={!form.userId ? 'Choose a person first' : memberships.length ? 'Choose a membership' : 'No active membership'} disabled={!form.userId || memberships.length === 0} />
           {form.userId && memberships.length === 1 && <p className="mt-1 text-xs text-gray-500">Their only active membership — selected for you.</p>}
@@ -677,7 +691,7 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
               <div className="pl-6 md:pl-0 md:text-right">
                 <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400 md:sr-only">Actions</span>
                 <div>{!block
-                  ? <button type="button" onClick={() => startGrant(p.id)} className={`inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 ${FOCUS}`}>
+                  ? <button type="button" onClick={() => startGrant(p)} className={`inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 ${FOCUS}`}>
                     <Plus className="h-3.5 w-3.5" aria-hidden />Grant policy<span className="sr-only"> to {who}</span></button>
                   : <GrantUnavailable person={p} block={block} partner={isPartnerOrgType(orgTypeCode) || ['MANUFACTURER_USER', 'DISTRIBUTOR_USER', 'SHOP_STAFF'].includes(p.principal_type)} userManagementLink={Boolean(dir?.capabilities?.userManagement)} />}</div>
               </div>
