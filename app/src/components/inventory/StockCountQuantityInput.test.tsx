@@ -1,25 +1,20 @@
 // @vitest-environment jsdom
 
 import { useState } from 'react'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { casesToPieces, formatPiecesAsCases } from '@/lib/inventory/stock-count-units'
-import { resolveStockCountPiecesPerCase } from '@/lib/inventory/stock-count-catalog'
-import { isCartridgeLine, classifyProductLine } from '@/lib/returns/format'
+import { resolveStockCountUnit, type StockCountUnit } from '@/lib/inventory/stock-count-catalog'
 import StockCountQuantityInput from './StockCountQuantityInput'
 
-let setExternal: (value: string) => void = () => {}
-
-function Harness({ initial = '', onEnter, disabled, piecesPerCase }: { initial?: string; onEnter?: () => void; disabled?: boolean; piecesPerCase?: number }) {
+function Harness({ initial = '', onEnter, disabled, unit }: { initial?: string; onEnter?: () => void; disabled?: boolean; unit?: StockCountUnit }) {
   const [value, setValue] = useState(initial)
-  setExternal = setValue
   return (
     <>
       <StockCountQuantityInput
         countInputId="cfg-1"
         value={value}
-        piecesPerCase={piecesPerCase}
+        unit={unit}
         disabled={disabled}
         onEnter={onEnter}
         onChange={next => { if (next === '' || /^\d+$/.test(next)) setValue(next) }}
@@ -31,47 +26,24 @@ function Harness({ initial = '', onEnter, disabled, piecesPerCase }: { initial?:
 
 const stored = () => screen.getByTestId('stored').textContent
 
-describe('casesToPieces', () => {
-  it('multiplies whole cases by pieces per case', () => {
-    expect(casesToPieces('10', '4')).toBe(40)
-    expect(casesToPieces('0', '24')).toBe(0)
+describe('resolveStockCountUnit', () => {
+  it('counts Cellera Hero/Zero cartridges in cases — the unit they are stocked in', () => {
+    expect(resolveStockCountUnit('Cellera Hero')).toBe('cases')
+    expect(resolveStockCountUnit('Cellera Zero')).toBe('cases')
   })
 
-  it('waits for both numbers and a case of at least one piece', () => {
-    expect(casesToPieces('', '4')).toBeNull()
-    expect(casesToPieces('3', '')).toBeNull()
-    expect(casesToPieces('3', '0')).toBeNull()
-    expect(casesToPieces('1.5', '4')).toBeNull()
-  })
-})
-
-describe('case size and case display', () => {
-  it('allows Cases only for Cellera Hero/Zero cartridges — never devices or other products', () => {
-    expect(isCartridgeLine(classifyProductLine('Cellera Hero'))).toBe(true)
-    expect(isCartridgeLine(classifyProductLine('Cellera Zero'))).toBe(true)
-    expect(isCartridgeLine(classifyProductLine('Serapod Device S.Box'))).toBe(false)
-    expect(isCartridgeLine(classifyProductLine('Speaker Prestige'))).toBe(false)
-
-    expect(resolveStockCountPiecesPerCase('Cellera Hero', 1)).toBe(4)
-    expect(resolveStockCountPiecesPerCase('Cellera Zero', null)).toBe(4)
-    expect(resolveStockCountPiecesPerCase('Serapod Device S.Box', 1)).toBeNull()
-    expect(resolveStockCountPiecesPerCase('Serapod Device S.Box', 10)).toBeNull()
-    expect(resolveStockCountPiecesPerCase('Moonchair Camping Chair', 1)).toBeNull()
-    expect(resolveStockCountPiecesPerCase('Moonchair Camping Chair', 6)).toBeNull()
-    expect(resolveStockCountPiecesPerCase('SERAPOD PRESTIGE KUREX', 12)).toBeNull()
-  })
-
-  it('restates pieces as cases plus loose pieces', () => {
-    expect(formatPiecesAsCases(28122, 4)).toBe('7,030 cases + 2 pcs')
-    expect(formatPiecesAsCases(4, 4)).toBe('1 case')
-    expect(formatPiecesAsCases(-3014, 4)).toBe('-753 cases + 2 pcs')
+  it('counts devices and every other product in pieces', () => {
+    expect(resolveStockCountUnit('Serapod Device S.Box')).toBe('pcs')
+    expect(resolveStockCountUnit('Moonchair Camping Chair')).toBe('pcs')
+    expect(resolveStockCountUnit('SERAPOD PRESTIGE KUREX')).toBe('pcs')
+    expect(resolveStockCountUnit(null)).toBe('pcs')
   })
 })
 
 describe('StockCountQuantityInput', () => {
   afterEach(cleanup)
 
-  it('is PCS-only for devices and non-cartridge products (no Cases option)', async () => {
+  it('is PCS for devices and non-cartridge products', async () => {
     render(<Harness />)
     expect(screen.queryByLabelText('Count unit')).toBeNull()
     expect(screen.getByText('pcs')).toBeTruthy()
@@ -79,64 +51,29 @@ describe('StockCountQuantityInput', () => {
     expect(stored()).toBe('140')
   })
 
-  it('Enter advances to the next row in PCS-only mode', async () => {
+  it('stores a Cellera count exactly as entered in cases — never multiplied', async () => {
+    render(<Harness unit="cases" />)
+    expect(screen.queryByLabelText('Count unit')).toBeNull()
+    expect(screen.getByText('cases')).toBeTruthy()
+    await userEvent.type(screen.getByLabelText('Physical count in cases'), '478')
+    expect(stored()).toBe('478')
+  })
+
+  it('shows a saved count unchanged', () => {
+    render(<Harness initial="2828" unit="cases" />)
+    expect((screen.getByLabelText('Physical count in cases') as HTMLInputElement).value).toBe('2828')
+  })
+
+  it('Enter advances to the next row', async () => {
     const onEnter = vi.fn()
-    render(<Harness onEnter={onEnter} />)
-    await userEvent.type(screen.getByLabelText('Physical count in pieces'), '5{Enter}')
+    render(<Harness unit="cases" onEnter={onEnter} />)
+    await userEvent.type(screen.getByLabelText('Physical count in cases'), '5{Enter}')
     expect(onEnter).toHaveBeenCalledTimes(1)
     expect(stored()).toBe('5')
   })
 
-  it('locks every field on a posted count in PCS-only mode', () => {
-    render(<Harness initial="9" disabled />)
-    expect((screen.getByLabelText('Physical count in pieces') as HTMLInputElement).disabled).toBe(true)
-  })
-
-  it('starts a Cellera cartridge row in Cases with 4 pcs per case already set', async () => {
-    render(<Harness piecesPerCase={4} />)
-    expect((screen.getByLabelText('Count unit') as HTMLSelectElement).value).toBe('case')
-    expect(screen.queryByLabelText('Pieces per case')).toBeNull()
-    expect(screen.getByText('4 pcs per case')).toBeTruthy()
-    await userEvent.type(screen.getByLabelText('Number of cases'), '10')
-    expect(stored()).toBe('40')
-    expect(screen.getByText('= 40 pcs')).toBeTruthy()
-  })
-
-  it('lets a cartridge switch between Cases and Pieces', async () => {
-    render(<Harness piecesPerCase={4} />)
-    await userEvent.type(screen.getByLabelText('Number of cases'), '10')
-    expect(stored()).toBe('40')
-    await userEvent.selectOptions(screen.getByLabelText('Count unit'), 'pcs')
-    expect((screen.getByLabelText('Physical count in pieces') as HTMLInputElement).value).toBe('40')
-  })
-
-  it('shows a saved cartridge count in cases, and in pieces when it is not whole cases', () => {
-    render(<Harness initial="7028" piecesPerCase={4} />)
-    expect((screen.getByLabelText('Number of cases') as HTMLInputElement).value).toBe('1757')
-    act(() => setExternal('25110'))
-    expect((screen.getByLabelText('Count unit') as HTMLSelectElement).value).toBe('pcs')
-    expect((screen.getByLabelText('Physical count in pieces') as HTMLInputElement).value).toBe('25110')
-    cleanup()
-
-    render(<Harness initial="25110" piecesPerCase={4} />)
-    expect((screen.getByLabelText('Count unit') as HTMLSelectElement).value).toBe('pcs')
-  })
-
-  it('restates an outside change in cases and Enter goes straight to the next row', async () => {
-    const onEnter = vi.fn()
-    render(<Harness piecesPerCase={4} onEnter={onEnter} />)
-    act(() => setExternal('80'))
-    expect((screen.getByLabelText('Number of cases') as HTMLInputElement).value).toBe('20')
-    act(() => setExternal(''))
-    expect((screen.getByLabelText('Number of cases') as HTMLInputElement).value).toBe('')
-    await userEvent.type(screen.getByLabelText('Number of cases'), '3{Enter}')
-    expect(stored()).toBe('12')
-    expect(onEnter).toHaveBeenCalledTimes(1)
-  })
-
-  it('locks every field on a posted cartridge count', () => {
-    render(<Harness initial="9" piecesPerCase={4} disabled />)
-    expect((screen.getByLabelText('Count unit') as HTMLSelectElement).disabled).toBe(true)
-    expect((screen.getByLabelText('Physical count in pieces') as HTMLInputElement).disabled).toBe(true)
+  it('locks the field on a posted count', () => {
+    render(<Harness initial="9" unit="cases" disabled />)
+    expect((screen.getByLabelText('Physical count in cases') as HTMLInputElement).disabled).toBe(true)
   })
 })

@@ -9,6 +9,7 @@
  */
 import { RETURN_STATUSES, RETURN_STATUS_LABELS, RETURN_SOURCE_LABELS, normalizeReturnSourceType, type ReturnStatus, type ReturnSourceType } from './constants'
 import type { ReturnCase } from './types'
+import { itemLineValue } from './compute'
 
 // ── Report periods ─────────────────────────────────────────────────────────
 
@@ -333,7 +334,7 @@ export function aggregateByReason(rows: ReturnCase[], reasonLabels: Record<strin
         for (const it of r.items || []) {
             const code = it.reason || 'unspecified'
             const qty = Number(it.total_units || it.quantity || 0)
-            const value = qty * Number(it.unit_cost || 0)
+            const value = itemLineValue(it)
             grandValue += value
             let slice = map.get(code)
             if (!slice) {
@@ -454,7 +455,7 @@ export function aggregateByProduct(
             const key = it.variant_id || it.sku || `${it.product_name}|${it.variant_name}`
             const name = [it.product_name, it.variant_name].filter(Boolean).join(' — ') || it.sku || 'Unknown product'
             const qty = Number(it.total_units || it.quantity || 0)
-            const value = qty * Number(it.unit_cost || 0)
+            const value = itemLineValue(it)
             let acc = map.get(key)
             if (!acc) {
                 acc = { key, name, productLine: null, qty: 0, value: 0, topReason: null, reasonQty: new Map() }

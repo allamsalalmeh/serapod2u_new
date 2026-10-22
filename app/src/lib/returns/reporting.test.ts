@@ -166,15 +166,15 @@ describe('aggregations', () => {
 
     const labels = { damaged: 'Damaged', expired: 'Expired' }
 
-    it('aggregates by reason with value share', () => {
+    it('aggregates by reason with value share (pieces valued per case of 4)', () => {
         const rows = [
             makeCase({ id: 'a', items: [item(), item({ variant_id: 'v2', reason: 'expired', total_units: 2, unit_cost: 5 })] as any }),
             makeCase({ id: 'b', items: [item({ total_units: 6 })] as any }),
         ]
         const slices = aggregateByReason(rows, labels)
-        expect(slices[0]).toMatchObject({ reason: 'damaged', label: 'Damaged', qty: 10, value: 100, cases: 2 })
-        expect(slices[1]).toMatchObject({ reason: 'expired', qty: 2, value: 10, cases: 1 })
-        expect(slices[0].pct).toBeCloseTo(100 * 100 / 110)
+        expect(slices[0]).toMatchObject({ reason: 'damaged', label: 'Damaged', qty: 10, value: 25, cases: 2 })
+        expect(slices[1]).toMatchObject({ reason: 'expired', qty: 2, value: 2.5, cases: 1 })
+        expect(slices[0].pct).toBeCloseTo(100 * 25 / 27.5)
     })
 
     it('aggregates by source with case share and source type', () => {

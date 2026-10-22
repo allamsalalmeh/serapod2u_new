@@ -1,129 +1,44 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
 import { Input } from '@/components/ui/input'
-import { casesToPieces, isWholeNumberEntry, piecesToWholeCases, type CountEntryUnit } from '@/lib/inventory/stock-count-units'
+import type { StockCountUnit } from '@/lib/inventory/stock-count-catalog'
 
 interface StockCountQuantityInputProps {
-  /** The count in pieces, as stored on the row ('' = not counted). */
+  /** The count as stored on the row, in the row's stock unit ('' = not counted). */
   value: string
   disabled?: boolean
-  /** Receives the count in pieces. */
-  onChange: (pieces: string) => void
+  onChange: (count: string) => void
   /**
-   * Known pieces per case for a vape cartridge (Cellera Hero/Zero).
-   * When set, the row offers Cases / Pieces. When null/absent (devices and
-   * every other product), the row is PCS-only — no Cases option.
+   * Unit the product is stocked in: Cellera Hero/Zero are counted in cases,
+   * every other product in pieces. The entry is never converted.
    */
-  piecesPerCase?: number | null
+  unit?: StockCountUnit
   countInputId?: string
   onEnter?: () => void
 }
 
-export default function StockCountQuantityInput({ value, disabled, onChange, piecesPerCase, countInputId, onEnter }: StockCountQuantityInputProps) {
-  const fixedSize = piecesPerCase && piecesPerCase > 1 ? piecesPerCase : null
-  const casesFor = (pieces: string) => (fixedSize ? piecesToWholeCases(pieces, fixedSize) : null)
-  const [unit, setUnit] = useState<CountEntryUnit>(() => (fixedSize && (value === '' || casesFor(value) !== null) ? 'case' : 'pcs'))
-  const [cases, setCases] = useState(() => { const n = casesFor(value); return n === null ? '' : String(n) })
-  const emitted = useRef(value)
-
-  // A count replaced from outside (draft reload, Excel import, reset) is restated in
-  // cases when it divides evenly by a known case size, otherwise shown in pieces.
-  useEffect(() => {
-    if (value === emitted.current) return
-    emitted.current = value
-    if (!fixedSize || unit !== 'case') return
-    const n = casesFor(value)
-    if (value === '' && fixedSize) setCases('')
-    else if (n !== null) setCases(String(n))
-    else setUnit('pcs')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unit, value, fixedSize])
-
-  // Devices / non-cartridges: PCS only — same pattern as Returns (static PCS badge).
-  if (!fixedSize) {
-    return (
-      <div className="flex items-center gap-1.5">
-        <Input
-          data-count-input={countInputId}
-          aria-label="Physical count in pieces"
-          inputMode="numeric"
-          min="0"
-          value={value}
-          disabled={disabled}
-          onChange={event => onChange(event.target.value)}
-          onKeyDown={event => {
-            if (event.key !== 'Enter') return
-            event.preventDefault()
-            onEnter?.()
-          }}
-          placeholder="Blank"
-          className="w-24 font-semibold tabular-nums"
-        />
-        <span className="inline-flex h-6 items-center rounded-md bg-slate-100 px-2 text-[11px] font-medium text-slate-600">
-          pcs
-        </span>
-      </div>
-    )
-  }
-
-  const changeCases = (nextCases: string) => {
-    if (!isWholeNumberEntry(nextCases)) return
-    setCases(nextCases)
-    const pieces = casesToPieces(nextCases, String(fixedSize))
-    const next = pieces === null ? '' : String(pieces)
-    emitted.current = next
-    onChange(next)
-  }
-
-  const changeUnit = (next: CountEntryUnit) => {
-    if (next === 'case') {
-      emitted.current = value
-      const n = casesFor(value)
-      setCases(n === null ? '' : String(n))
-    }
-    setUnit(next)
-  }
-
-  const enter = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== 'Enter') return
-    event.preventDefault()
-    onEnter?.()
-  }
-
+export default function StockCountQuantityInput({ value, disabled, onChange, unit = 'pcs', countInputId, onEnter }: StockCountQuantityInputProps) {
   return (
-    <div className="space-y-1">
-      <div className="flex items-center gap-1.5">
-        <select
-          aria-label="Count unit"
-          value={unit}
-          disabled={disabled}
-          onChange={event => changeUnit(event.target.value as CountEntryUnit)}
-          className="h-10 rounded-md border border-input bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <option value="case">Cases</option>
-          <option value="pcs">Pieces</option>
-        </select>
-        <Input
-          data-count-input={countInputId}
-          aria-label={unit === 'pcs' ? 'Physical count in pieces' : 'Number of cases'}
-          inputMode="numeric"
-          min="0"
-          value={unit === 'pcs' ? value : cases}
-          disabled={disabled}
-          onChange={event => unit === 'pcs' ? onChange(event.target.value) : changeCases(event.target.value)}
-          onKeyDown={enter}
-          placeholder={unit === 'pcs' ? 'Blank' : 'Cases'}
-          className="w-24 font-semibold tabular-nums"
-        />
-      </div>
-      {unit === 'case' && (
-        <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
-          <span>×</span>
-          <span>{fixedSize} pcs per case</span>
-          <span className="font-semibold text-slate-700">= {value === '' ? '—' : Number(value).toLocaleString('en-US')} pcs</span>
-        </div>
-      )}
+    <div className="flex items-center gap-1.5">
+      <Input
+        data-count-input={countInputId}
+        aria-label={unit === 'cases' ? 'Physical count in cases' : 'Physical count in pieces'}
+        inputMode="numeric"
+        min="0"
+        value={value}
+        disabled={disabled}
+        onChange={event => onChange(event.target.value)}
+        onKeyDown={event => {
+          if (event.key !== 'Enter') return
+          event.preventDefault()
+          onEnter?.()
+        }}
+        placeholder="Blank"
+        className="w-24 font-semibold tabular-nums"
+      />
+      <span className="inline-flex h-6 items-center rounded-md bg-slate-100 px-2 text-[11px] font-medium text-slate-600">
+        {unit}
+      </span>
     </div>
   )
 }
