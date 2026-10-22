@@ -15,7 +15,7 @@ insert into public.organization_types(type_code, type_name, hierarchy_level, is_
 on conflict do nothing;
 
 -- Company A: HQ(1) → WH1(2), DIST1(4) → SHOP1(6), MFG1(7). Unrelated company X: XHQ(8) → XDIST(9).
--- Standalone manufacturer SMFG(10), no parent.
+-- Standalone manufacturer SMFG(10), no parent. Inactive distributor IDIST(11) under HQ.
 insert into public.organizations(id, org_type_code, parent_org_id, org_code, org_name, is_active) values
  (smt.o(1),  'HQ',   null,     'T-HQ',    'Test HQ',                 true),
  (smt.o(2),  'WH',   smt.o(1), 'T-WH1',   'Test Warehouse 1',        true),
@@ -24,10 +24,11 @@ insert into public.organizations(id, org_type_code, parent_org_id, org_code, org
  (smt.o(7),  'MFG',  smt.o(1), 'T-MFG1',  'Test Manufacturer',       true),
  (smt.o(8),  'HQ',   null,     'X-HQ',    'Unrelated HQ',            true),
  (smt.o(9),  'DIST', smt.o(8), 'X-DIST',  'Unrelated Distributor',   true),
- (smt.o(10), 'MFG',  null,     'S-MFG',   'Standalone Manufacturer', true);
+ (smt.o(10), 'MFG',  null,     'S-MFG',   'Standalone Manufacturer', true),
+ (smt.o(11), 'DIST', smt.o(1), 'I-DIST',  'Inactive Distributor',    false);
 
 insert into auth.users(id, email, aud, role)
-select smt.u(n), 'og-test-' || n || '@example.test', 'authenticated', 'authenticated' from generate_series(1, 8) n;
+select smt.u(n), 'og-test-' || n || '@example.test', 'authenticated', 'authenticated' from generate_series(1, 9) n;
 insert into public.users(id, email, full_name, role_code, organization_id, is_active, principal_type, account_status, account_scope)
 select smt.u(n), 'og-test-' || n || '@example.test', label, role_code, smt.o(org), active, principal, case when active then 'ACTIVE' else 'SUSPENDED' end, 'portal'
 from (values
@@ -38,16 +39,17 @@ from (values
   (5, 1,  'USER', true,  'INTERNAL_EMPLOYEE',   'Root Access holder'),
   (6, 10, 'USER', true,  'MANUFACTURER_USER',   'Standalone manufacturer user, Full Access at SMFG'),
   (7, 1,  'USER', false, 'INTERNAL_EMPLOYEE',   'Inactive HQ user, Full Access at HQ'),
-  (8, 1,  'HQ',   true,  'INTERNAL_EMPLOYEE',   'Legacy HQ admin (level 10), self-service only in S&A')
+  (8, 1,  'HQ',   true,  'INTERNAL_EMPLOYEE',   'Legacy HQ admin (level 10), self-service only in S&A'),
+  (9, 7,  'HQ',   true,  'MANUFACTURER_USER',   'Partner manufacturer account, legacy role HQ, legacy-hq at own MFG (as on staging)')
 ) t(n, org, role_code, active, principal, label);
 
 insert into public.sa_organization_memberships(id, user_id, organization_id, membership_type, is_primary, status, source)
 select smt.u(100 + n), smt.u(n), u.organization_id, 'employee', true, 'active', 'manual'
-from generate_series(1, 8) n join public.users u on u.id = smt.u(n);
+from generate_series(1, 9) n join public.users u on u.id = smt.u(n);
 
 insert into public.sa_scope_definitions(id, organization_id, scope_type, scope_value, display_name, status)
 select smt.o(100 + n), smt.o(n), 'organization', smt.o(n)::text, 'Test scope ' || n, 'active'
-from unnest(array[1, 2, 4, 6, 7, 8, 9, 10]) n;
+from unnest(array[1, 2, 4, 6, 7, 8, 9, 10, 11]) n;
 
 do $assign$
 declare r record; v_id uuid;
@@ -60,7 +62,8 @@ begin
     (5, 'employee-self-service', 1),
     (6, 'platform-settings-full-access', 10),
     (7, 'platform-settings-full-access', 1),
-    (8, 'employee-self-service', 1)) t(n, role_key, scope_org)
+    (8, 'employee-self-service', 1),
+    (9, 'legacy-hq', 7)) t(n, role_key, scope_org)
   loop
     insert into public.sa_role_assignments(user_id, role_id, membership_id, status, source, assignment_reason)
     values (smt.u(r.n), (select id from public.sa_business_roles where role_key = r.role_key), smt.u(100 + r.n), 'active', 'manual', 'og test')

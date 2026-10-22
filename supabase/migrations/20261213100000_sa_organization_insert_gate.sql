@@ -22,20 +22,29 @@
 -- /api/organizations/import fail with 42501 "new row violates row-level security policy for table organizations"
 -- (staging Kong 403 at 2026-10-21 07:27:40, 2026-10-22 02:33:32 and 02:50:29 UTC).
 --
--- Fix. The gate's organization argument becomes sa_org_create_context(parent_org_id, org_type_code):
---   * parent given (DIST, SHOP, WH, MFG under an HQ): the parent organization. The caller must hold
---     platform.organization.manage at the parent or an ancestor of it — the same organization-scope reach as every
---     other S&A gate (an HQ grant covers its distributors and shops). The hierarchy trigger validate_org_hierarchy
---     still decides which parent types are allowed.
---   * no parent, type HQ (a new top-level tenant): Root Administrators only. For an active Root holder the context
---     is the top-level HQ of the caller's own chain (Root's evaluator branch then allows); for anyone else NULL,
---     which sa_rls_gate denies. Nobody but Root would hold access scope at a new HQ afterwards, so HQ-scoped
---     administrators must not be able to mint one.
---   * no parent, any other type (standalone MFG): the top-level active HQ of the caller's own organization chain;
---     the caller must hold the permission there. Callers whose chain does not end at an active HQ (for example a
---     standalone manufacturer's users) get NULL and are denied.
--- sa_org_create_context is SECURITY DEFINER (reads organizations/users regardless of the caller's SELECT policies)
--- and returns only an organization id. It does not authorize anything by itself.
+-- Fix (least privilege). The gate's organization argument becomes sa_org_create_context(parent_org_id,
+-- org_type_code), which is NULL — and sa_rls_gate denies a NULL organization — unless the create is a business-valid
+-- one, and otherwise names the top-level HQ at which the permission is decided:
+--   * Business parent-type matrix (app/src/lib/utils/orgHierarchy.ts getValidParentTypes, mirrored here because the
+--     hierarchy trigger only compares hierarchy levels and also admits e.g. DIST/WH/SHOP under a manufacturer, SHOP
+--     under an HQ or a warehouse):
+--         HQ   no parent (Root Access only)        MFG  no parent, or under an HQ
+--         DIST under an HQ                         WH   under an HQ or a distributor
+--         SHOP under a distributor                 any other type / pair: NULL
+--     The parent must exist and be active.
+--   * Decision organization: the top-level active HQ of the PARENT's chain (for a parentless MFG / HQ: of the
+--     caller's own chain). The caller must hold platform.organization.manage at that HQ — i.e. an HQ-scoped
+--     organization administrator (catalogue: "Import, configure and remove organizations", HQ_ADMIN, level <= 10;
+--     Add Organization is an HQ-only screen). Grants scoped below an HQ (a distributor, a manufacturer, a
+--     warehouse) never authorize creating organizations. On staging that excludes the 5 partner MANUFACTURER_USER
+--     accounts whose legacy-hq compatibility role (legacy role HQ, level 10) was materialized at their own
+--     manufacturer, and the warehouse-scoped legacy-hq holder.
+--   * Root Access: the evaluator allows Root at any existing organization, so Root creates every business-valid
+--     pair anywhere, and is the only actor who can create a parentless HQ (a new top-level tenant nobody else would
+--     hold scope at). Root is still refused business-invalid pairs.
+-- sa_org_create_context is SECURITY DEFINER owned by supabase_admin (reads organizations/users regardless of the
+-- caller's SELECT policies, and may call sa_actor_is_root, which authenticated cannot execute directly). It returns
+-- only an organization id and does not authorize anything by itself.
 --
 -- Unchanged: the legacy expression (is_hq_admin() OR is_super_admin()), so LEGACY_ENFORCED / SHADOW environments
 -- behave exactly as before; the dead NEW-mode remainder; every other organizations policy; modes, grants,
@@ -45,10 +54,10 @@
 -- Fails safe. If the live policy text is neither the expected staging text nor already re-pointed, section 2 raises
 -- and nothing is changed (with psql -1 the helper is rolled back too).
 --
--- Intentional behaviour once enforced: a holder whose grant is scoped to a distributor (or manufacturer) can create
--- organizations under it (e.g. a distributor's shops), mirroring orgs_update_hierarchy's distributor → own shops
--- rule. Holders on staging (2026-10-22, read-only): legacy-hq 15, legacy-sa 3, platform-settings-full-access 1
--- users; scopes HQ 13, MFG 5, WH 1.
+-- Holders on staging (2026-10-22, read-only): HQ-scoped 13 (legacy-hq 9, legacy-sa 3, platform-settings-full-access
+-- 1) — can create; MFG-scoped 5 partner accounts and WH-scoped 1 — cannot; Root holders 2. Not covered here (they
+-- write with the service role after their own checks): shop-request approval and createShopOrganization. Legacy
+-- environments keep the legacy rule, which still lets any level <= 10 account create any trigger-valid organization.
 --
 -- Order: requires 20260928100000 (sa_org_ancestry, sa_rls_gate) and 20261026100000 (sa_actor_is_root). Independent of
 -- 20261022100000_sa_actor_org_gates_row_context (already applied on staging; organizations is not one of its
@@ -76,28 +85,49 @@
 -- 1. Organization context for a new organization
 -- ---------------------------------------------------------------------------
 create or replace function public.sa_org_create_context(p_parent_org_id uuid, p_org_type_code text)
-returns uuid language sql stable security definer set search_path = pg_catalog, pg_temp as $$
-  select case
-    when p_parent_org_id is not null then p_parent_org_id
-    -- A new parentless HQ is a new top-level tenant: Root Administrators only.
-    when p_org_type_code = 'HQ' and not public.sa_actor_is_root(auth.uid()) then null
-    else (
-      -- Top of the caller's own organization chain, only if it is an active, parentless HQ.
-      select o.id
-      from public.users u
-      cross join lateral public.sa_org_ancestry(u.organization_id) as a(chain)
-      join public.organizations o on o.id = a.chain[array_length(a.chain, 1)]
-      where u.id = auth.uid() and u.is_active is true
-        and o.org_type_code = 'HQ' and o.parent_org_id is null and o.is_active is true
-    )
-  end
-$$;
+returns uuid language plpgsql stable security definer set search_path = pg_catalog, pg_temp as $$
+declare
+  v_anchor uuid;
+  v_parent_type text;
+  v_parent_active boolean;
+  v_chain uuid[];
+begin
+  if p_parent_org_id is null then
+    -- Parentless: MFG, or HQ for Root Access only. The decision is at the caller's own top-level HQ.
+    if p_org_type_code = 'HQ' then
+      if not public.sa_actor_is_root(auth.uid()) then return null; end if;
+    elsif p_org_type_code is distinct from 'MFG' then
+      return null;
+    end if;
+    select u.organization_id into v_anchor from public.users u where u.id = auth.uid() and u.is_active is true;
+  else
+    select o.org_type_code, o.is_active into v_parent_type, v_parent_active
+    from public.organizations o where o.id = p_parent_org_id;
+    if v_parent_active is not true then return null; end if;
+    if not (
+         (p_org_type_code = 'MFG'  and v_parent_type = 'HQ')
+      or (p_org_type_code = 'DIST' and v_parent_type = 'HQ')
+      or (p_org_type_code = 'WH'   and v_parent_type in ('HQ', 'DIST'))
+      or (p_org_type_code = 'SHOP' and v_parent_type = 'DIST')
+    ) then
+      return null;
+    end if;
+    v_anchor := p_parent_org_id;
+  end if;
+  if v_anchor is null then return null; end if;
+
+  -- Top of the chain, only if it is an active, parentless HQ.
+  v_chain := public.sa_org_ancestry(v_anchor);
+  return (select o.id from public.organizations o
+          where o.id = v_chain[array_length(v_chain, 1)]
+            and o.org_type_code = 'HQ' and o.parent_org_id is null and o.is_active is true);
+end $$;
 revoke all on function public.sa_org_create_context(uuid, text) from public, anon;
 grant execute on function public.sa_org_create_context(uuid, text) to authenticated, service_role;
 comment on function public.sa_org_create_context(uuid, text) is
-  'Organization at which platform.organization.manage is decided for a NEW organization: its parent; for a '
-  'parentless HQ the caller''s top-level HQ only if the caller holds Root Access; for another parentless type the '
-  'top-level HQ of the caller''s own chain; NULL otherwise. Returns an id only.';
+  'Organization at which platform.organization.manage is decided for a NEW organization: the top-level active HQ of '
+  'the parent''s chain (parentless MFG, or parentless HQ for Root Access only: of the caller''s own chain). NULL '
+  'for business-invalid type/parent pairs or an inactive/missing parent. Returns an id only.';
 
 -- ---------------------------------------------------------------------------
 -- 2. Re-point the INSERT gate (only the organization argument changes)
@@ -151,6 +181,10 @@ begin
   end if;
   if not (select prosecdef from pg_proc where oid = 'public.sa_org_create_context(uuid,text)'::regprocedure) then
     raise exception 'postcondition: sa_org_create_context must be SECURITY DEFINER';
+  end if;
+  if (select pg_get_userbyid(proowner) from pg_proc where oid = 'public.sa_org_create_context(uuid,text)'::regprocedure)
+     is distinct from 'supabase_admin' then
+    raise exception 'postcondition: sa_org_create_context must be owned by supabase_admin (apply as supabase_admin)';
   end if;
   if has_function_privilege('anon', 'public.sa_org_create_context(uuid,text)', 'EXECUTE') then
     raise exception 'postcondition: sa_org_create_context must not be executable by anon';
