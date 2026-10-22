@@ -7,7 +7,7 @@ insert into og_cases values
   (1, 'OK-WH001', 'WH',   1,    true,  'HQ holder: warehouse under own HQ'),
   (1, 'OK-MF001', 'MFG',  1,    true,  'HQ holder: manufacturer under own HQ'),
   (1, 'OK-MF002', 'MFG',  null, true,  'HQ holder: parentless manufacturer (anchored at own HQ)'),
-  (1, 'OK-HQ001', 'HQ',   null, true,  'HQ holder: parentless HQ (anchored at own HQ)'),
+  (1, 'NO-HQ001', 'HQ',   null, false, 'HQ holder: parentless HQ (new tenant, Root only)'),
   (1, 'NO-DT001', 'DIST', 8,    false, 'HQ holder: distributor under the UNRELATED HQ'),
   (2, 'OK-SH002', 'SHOP', 4,    true,  'DIST1 holder: shop under own distributor'),
   (2, 'NO-DT002', 'DIST', 1,    false, 'DIST1 holder: distributor under the HQ (above its scope)'),
@@ -19,6 +19,8 @@ insert into og_cases values
   (4, 'NO-DT004', 'DIST', 1,    false, 'Unrelated company holder: distributor under company A HQ'),
   (5, 'OK-DT005', 'DIST', 1,    true,  'Root Access holder: distributor under HQ'),
   (5, 'OK-HQ005', 'HQ',   null, true,  'Root Access holder: parentless HQ'),
+  (5, 'OK-MF005', 'MFG',  null, true,  'Root Access holder: parentless manufacturer'),
+  (5, 'OK-SH005', 'SHOP', 9,    true,  'Root Access holder: shop under the unrelated distributor (global)'),
   (6, 'NO-MF006', 'MFG',  null, false, 'Standalone MFG holder: parentless manufacturer (chain has no HQ)'),
   (6, 'NO-DT006', 'DIST', 1,    false, 'Standalone MFG holder: distributor under company A HQ'),
   (7, 'NO-DT007', 'DIST', 1,    false, 'Inactive HQ holder: distributor'),
@@ -53,11 +55,22 @@ set local role authenticated;
 select smt.expect(smt.add_org('NO-DT011', 'DIST', 6) like 'P0001%', 'hierarchy trigger still rejects a distributor under a shop');
 select smt.expect(smt.add_org('NO-DT010', 'DIST', null) like 'P0001%', 'hierarchy trigger still rejects a parentless distributor');
 rollback;
+-- Registry follows the policy.
+select smt.expect((select organization_expression from public.sa_policy_rewrites
+  where table_name = 'organizations' and policy_name = 'orgs_insert_admin') = 'sa_org_create_context(parent_org_id, org_type_code)',
+  'sa_policy_rewrites row for orgs_insert_admin records the new organization expression');
 -- Context helper never leaks beyond an id and is not callable by anon.
-select smt.expect(not has_function_privilege('anon', 'public.sa_org_create_context(uuid)', 'EXECUTE'), 'anon cannot execute sa_org_create_context');
+select smt.expect(not has_function_privilege('anon', 'public.sa_org_create_context(uuid,text)', 'EXECUTE'), 'anon cannot execute sa_org_create_context');
+select smt.expect(to_regprocedure('public.sa_org_create_context(uuid)') is null, 'no one-argument draft of the helper exists');
 begin;
 select smt.as_user(4);
 set local role authenticated;
-select smt.expect(public.sa_org_create_context(null) = smt.o(8), 'parentless context for the unrelated company is its own HQ');
-select smt.expect(public.sa_org_create_context(smt.o(4)) = smt.o(4), 'context with a parent is the parent');
+select smt.expect(public.sa_org_create_context(null, 'MFG') = smt.o(8), 'parentless MFG context for the unrelated company is its own HQ');
+select smt.expect(public.sa_org_create_context(null, 'HQ') is null, 'parentless HQ context is NULL for a non-Root holder');
+select smt.expect(public.sa_org_create_context(smt.o(4), 'SHOP') = smt.o(4), 'context with a parent is the parent');
+rollback;
+begin;
+select smt.as_user(5);
+set local role authenticated;
+select smt.expect(public.sa_org_create_context(null, 'HQ') = smt.o(1), 'parentless HQ context for a Root holder is the own top-level HQ');
 rollback;

@@ -72,6 +72,11 @@ end $assign$;
 insert into public.sa_root_access_grants(user_id, status, grant_method, reason, granted_at)
 values (smt.u(5), 'active', 'bootstrap', 'organization insert gate test fixture', now());
 
+-- Registry row as on staging (2026-10-22, read-only): organization_expression 'id'.
+insert into public.sa_policy_rewrites(table_name, policy_name, permission_key, organization_expression)
+values ('organizations', 'orgs_insert_admin', 'platform.organization.manage', 'id')
+on conflict (table_name, policy_name) do update set organization_expression = excluded.organization_expression;
+
 set session_replication_role = origin;
 
 -- Insert an organization as the current request user; NULL on success, else SQLSTATE + message.
