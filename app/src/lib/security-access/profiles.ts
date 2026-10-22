@@ -181,4 +181,4 @@ export function buildPermissionPicker(permissions: Array<{ permission_key: strin
 /** Permissions a partner-applicable profile may not hold (mirror of sa_permission_forbidden_for_partner). */
 export const isForbiddenForPartner = (key: string) => /^(hr\.|security\.|platform\.user\.|platform\.data\.|finance\.data\.)/.test(key)
 /** Administrative / destructive permissions (mirror of sa_permission_is_sensitive). */
-export const isSensitivePermission = (key: string) => key.startsWith('security.') || ['hr.data.reset', 'platform.data.destructive', 'finance.data.reset', 'platform.user.password_reset'].includes(key)
+export const isSensitivePermission = (key: string) => key.startsWith('security.') || ['hr.data.reset', 'hr.employee.delete', 'platform.data.destructive', 'finance.data.reset', 'platform.user.password_reset'].includes(key)

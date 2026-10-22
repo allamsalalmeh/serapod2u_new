@@ -21,8 +21,10 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import {
     Search, Users, UserCheck, Building2, Briefcase, Pencil, Check, X,
-    Plus, Copy, Loader2, Eye, Save, ChevronRight, Camera, UserPlus, AlertTriangle, ArrowLeft
+    Plus, Copy, Loader2, Eye, Save, ChevronRight, Camera, UserPlus, AlertTriangle, ArrowLeft,
+    MoreHorizontal, Trash2, RotateCcw, ShieldCheck
 } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { listDepartments } from '@/lib/actions/departments'
 import { fetchHrPositions, updateUserHr } from '@/lib/api/hr'
 import { compressAvatar } from '@/lib/utils/imageCompression'
@@ -55,6 +57,22 @@ interface HrUserRow {
     onboarding_status: 'pending' | 'completed' | 'reset' | null
     hire_date: string | null
 }
+
+type RegistrationAction = 'delete' | 'reset'
+
+/** Server-side eligibility preview (GET /api/hr/employees/registration?user_id=…). */
+interface RegistrationPreview {
+    employee: { user_id: string; full_name: string | null; employee_no: number | null; onboarding_status: 'pending' | 'completed' | 'reset' }
+    phase: 'pre_go_live' | 'live'
+    categories: Record<string, number>
+    kept: { login: boolean; access_assignments: number; employee_no: number | null }
+    blockers: Record<RegistrationAction, Array<{ code: string; message?: string }>>
+    delete_allowed: boolean
+    reset_allowed: boolean
+    preview_token: string
+}
+
+const formatEmployeeNo = (no: number | null | undefined) => (no ? `EMP-${String(no).padStart(4, '0')}` : 'No employee number')
 
 interface OnboardingCandidate {
     found: boolean
@@ -190,6 +208,18 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     const commissionAccess = useCommissionAccess()
     const showCommissionTab = commissionAccess.can('hr.commission.view')
     const [avatarUploading, setAvatarUploading] = useState(false)
+
+    // Delete Employee / Reset HR Registration (one employee; the database decides and audits).
+    const [registrationAllowed, setRegistrationAllowed] = useState(false)
+    const [rowMenuUserId, setRowMenuUserId] = useState<string | null>(null)
+    const [regTarget, setRegTarget] = useState<{ user: HrUserRow; action: RegistrationAction } | null>(null)
+    const [regPreview, setRegPreview] = useState<RegistrationPreview | null>(null)
+    const [regLoading, setRegLoading] = useState(false)
+    const [regSubmitting, setRegSubmitting] = useState(false)
+    const [regReason, setRegReason] = useState('')
+    const [regConfirmed, setRegConfirmed] = useState(false)
+    const [regError, setRegError] = useState<string | null>(null)
+    const [regRequestId, setRegRequestId] = useState('')
     const avatarInputRef = useRef<HTMLInputElement>(null)
 
     const loadUsers = async () => {
@@ -302,6 +332,98 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         loadFilters()
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isReady, organizationId])
+
+    // Only shows the menu entries; every preview and execution is authorized again on the server and in the database.
+    useEffect(() => {
+        if (!isReady) return
+        let cancelled = false
+        fetch('/api/hr/employees/registration')
+            .then(res => res.json())
+            .then(json => { if (!cancelled) setRegistrationAllowed(!!json?.success && !!json.data?.permission) })
+            .catch(() => { if (!cancelled) setRegistrationAllowed(false) })
+        return () => { cancelled = true }
+    }, [isReady, organizationId])
+
+    const loadRegistrationPreview = async (userId: string) => {
+        setRegLoading(true)
+        setRegError(null)
+        try {
+            const res = await fetch(`/api/hr/employees/registration?user_id=${encodeURIComponent(userId)}`)
+            const json = await res.json()
+            if (!res.ok || !json.success) {
+                setRegPreview(null)
+                setRegError(json.error || 'The eligibility check failed.')
+            } else {
+                setRegPreview(json.data as RegistrationPreview)
+            }
+        } catch (err: any) {
+            setRegPreview(null)
+            setRegError(err.message || 'The eligibility check failed.')
+        } finally {
+            setRegLoading(false)
+        }
+    }
+
+    const openRegistrationAction = (user: HrUserRow, action: RegistrationAction) => {
+        setRegTarget({ user, action })
+        setRegPreview(null)
+        setRegReason('')
+        setRegConfirmed(false)
+        setRegRequestId(globalThis.crypto?.randomUUID?.() ?? '')
+        loadRegistrationPreview(user.id)
+    }
+
+    const switchRegistrationAction = (action: RegistrationAction) => {
+        if (!regTarget) return
+        setRegTarget({ ...regTarget, action })
+        setRegConfirmed(false)
+        setRegRequestId(globalThis.crypto?.randomUUID?.() ?? '')
+    }
+
+    const closeRegistrationDialog = () => {
+        if (regSubmitting) return
+        setRegTarget(null)
+        setRegPreview(null)
+        setRegError(null)
+    }
+
+    const submitRegistrationAction = async () => {
+        if (!regTarget || !regPreview || !regRequestId) return
+        const { user, action } = regTarget
+        setRegSubmitting(true)
+        setRegError(null)
+        try {
+            const res = await fetch('/api/hr/employees/registration', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: user.id, action, request_id: regRequestId, preview_token: regPreview.preview_token, reason: regReason.trim() }),
+            })
+            const json = await res.json()
+            if (res.ok && json.success && json.data?.status === 'completed') {
+                toast({
+                    title: action === 'delete' ? 'Employee deleted from HR' : 'HR registration reset',
+                    description: `${user.full_name || 'The employee'} (${formatEmployeeNo(json.data.employee_no ?? user.employee_no)}) is now awaiting onboarding. Login, access and employee number are unchanged.`,
+                })
+                setRegTarget(null)
+                setRegPreview(null)
+                await loadUsers()
+                return
+            }
+            if (json.code === 'BLOCKED' || json.code === 'PREVIEW_STALE') {
+                // Show the current state: the server re-checked and refused.
+                setRegRequestId(globalThis.crypto?.randomUUID?.() ?? '')
+                setRegConfirmed(false)
+                await loadRegistrationPreview(user.id)
+            }
+            setRegError(json.error || 'Nothing was changed.')
+            toast({ title: 'Not changed', description: json.error || 'Nothing was changed.', variant: 'destructive' })
+        } catch (err: any) {
+            setRegError(err.message || 'Nothing was changed.')
+            toast({ title: 'Error', description: err.message || 'Nothing was changed.', variant: 'destructive' })
+        } finally {
+            setRegSubmitting(false)
+        }
+    }
 
     const filteredUsers = useMemo(() => {
         const query = searchQuery.trim().toLowerCase()
@@ -909,25 +1031,47 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     )}
                                 </div>
                                 <div>
-                                    {canEdit && user.onboarding_status && user.onboarding_status !== 'completed' && !isEditing ? (
-                                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Complete HR onboarding" onClick={() => startOnboardingFor(user)}>
-                                            <UserPlus className="h-3.5 w-3.5 text-blue-600" />
-                                        </Button>
-                                    ) : canEdit && (
-                                        isEditing ? (
-                                            <div className="flex gap-0.5">
-                                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => saveInlineEdit(user.id)} disabled={savingInline}>
-                                                    <Check className="h-3.5 w-3.5 text-green-600" />
-                                                </Button>
-                                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={cancelInlineEdit}>
-                                                    <X className="h-3.5 w-3.5 text-gray-400" />
-                                                </Button>
-                                            </div>
-                                        ) : (
-                                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startInlineEdit(user)}>
-                                                <Pencil className="h-3.5 w-3.5 text-gray-400" />
+                                    {isEditing ? (
+                                        <div className="flex gap-0.5">
+                                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => saveInlineEdit(user.id)} disabled={savingInline}>
+                                                <Check className="h-3.5 w-3.5 text-green-600" />
                                             </Button>
-                                        )
+                                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={cancelInlineEdit}>
+                                                <X className="h-3.5 w-3.5 text-gray-400" />
+                                            </Button>
+                                        </div>
+                                    ) : (canEdit || (registrationAllowed && user.onboarding_status && user.onboarding_status !== 'pending')) && (
+                                        <Popover open={rowMenuUserId === user.id} onOpenChange={(open) => setRowMenuUserId(open ? user.id : null)}>
+                                            <PopoverTrigger asChild>
+                                                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Actions for ${user.full_name || 'employee'}`}>
+                                                    <MoreHorizontal className="h-4 w-4 text-gray-500" />
+                                                </Button>
+                                            </PopoverTrigger>
+                                            <PopoverContent align="end" className="w-52 p-1">
+                                                {canEdit && (user.onboarding_status && user.onboarding_status !== 'completed' ? (
+                                                    <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted" onClick={() => { setRowMenuUserId(null); startOnboardingFor(user) }}>
+                                                        <UserPlus className="h-3.5 w-3.5 mr-2 text-blue-600" /> Complete onboarding
+                                                    </button>
+                                                ) : (
+                                                    <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted" onClick={() => { setRowMenuUserId(null); startInlineEdit(user) }}>
+                                                        <Pencil className="h-3.5 w-3.5 mr-2" /> Edit Employee
+                                                    </button>
+                                                ))}
+                                                {registrationAllowed && user.onboarding_status && user.onboarding_status !== 'pending' && (
+                                                    <>
+                                                        {canEdit && <div className="my-1 h-px bg-border" />}
+                                                        {user.onboarding_status === 'completed' && (
+                                                            <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted" onClick={() => { setRowMenuUserId(null); openRegistrationAction(user, 'reset') }}>
+                                                                <RotateCcw className="h-3.5 w-3.5 mr-2" /> Reset HR Registration
+                                                            </button>
+                                                        )}
+                                                        <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted text-red-600" onClick={() => { setRowMenuUserId(null); openRegistrationAction(user, 'delete') }}>
+                                                            <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete Employee
+                                                        </button>
+                                                    </>
+                                                )}
+                                            </PopoverContent>
+                                        </Popover>
                                     )}
                                 </div>
                             </div>
@@ -936,6 +1080,123 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                     </div>
                 )}
             </CardContent>
+
+            {/* ─── Delete Employee / Reset HR Registration (server preview → confirm → server re-check) ──── */}
+            <Dialog open={!!regTarget} onOpenChange={(open) => { if (!open) closeRegistrationDialog() }}>
+                <DialogContent className="sm:max-w-[560px] max-h-[90vh] overflow-y-auto">
+                    {regTarget && (() => {
+                        const action = regTarget.action
+                        const allowed = !!regPreview && (action === 'delete' ? regPreview.delete_allowed : regPreview.reset_allowed)
+                        const blockers = regPreview?.blockers?.[action] ?? []
+                        const employeeNo = regPreview?.employee.employee_no ?? regTarget.user.employee_no
+                        return (
+                            <>
+                                <DialogHeader>
+                                    <DialogTitle className="flex items-center gap-2">
+                                        {action === 'delete' ? <Trash2 className="h-4 w-4 text-red-600" /> : <RotateCcw className="h-4 w-4" />}
+                                        {action === 'delete' ? 'Delete Employee' : 'Reset HR Registration'}
+                                    </DialogTitle>
+                                    <DialogDescription>
+                                        {action === 'delete'
+                                            ? 'Removes this person\'s HR registration. Only possible when they have no HR records.'
+                                            : 'Returns this employee to Awaiting onboarding. Their HR history is kept.'}
+                                    </DialogDescription>
+                                </DialogHeader>
+
+                                <div className="rounded-lg border px-3 py-2">
+                                    <div className="text-sm font-medium">{regPreview?.employee.full_name || regTarget.user.full_name || 'Unknown'}</div>
+                                    <div className="text-xs font-mono text-muted-foreground">{formatEmployeeNo(employeeNo)}</div>
+                                </div>
+
+                                {regLoading ? (
+                                    <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                                        <Loader2 className="h-4 w-4 animate-spin" /> Checking eligibility…
+                                    </div>
+                                ) : !regPreview ? (
+                                    <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                        {regError || 'The eligibility check failed.'}
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3">
+                                        {allowed ? (
+                                            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                                                <div className="flex items-center gap-1.5 font-medium"><Check className="h-4 w-4" /> Allowed</div>
+                                                <p className="mt-1 text-xs">
+                                                    {action === 'delete'
+                                                        ? 'The HR registration is removed. The person leaves the Employees list and appears under Awaiting onboarding. They can be onboarded again later with the same employee number.'
+                                                        : 'The employee moves to Awaiting onboarding. New attendance, leave and payroll records need onboarding again; existing HR history stays.'}
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                                                <div className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-4 w-4" /> {action === 'delete' ? 'Delete is not available' : 'Reset is not available'}</div>
+                                                <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">
+                                                    {blockers.map((b, i) => <li key={`${b.code}-${i}`}>{b.message || b.code}</li>)}
+                                                </ul>
+                                                {action === 'delete' && regPreview.reset_allowed && (
+                                                    <Button variant="outline" size="sm" className="mt-2" onClick={() => switchRegistrationAction('reset')}>
+                                                        <RotateCcw className="h-3.5 w-3.5 mr-1" /> Reset HR Registration instead
+                                                    </Button>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        <div className="rounded-lg border px-3 py-2 text-xs text-muted-foreground">
+                                            <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground"><ShieldCheck className="h-3.5 w-3.5" /> Always kept</div>
+                                            <ul className="list-disc space-y-0.5 pl-5">
+                                                <li>{regPreview.kept.login ? 'Login and password' : 'User account'} (User Management)</li>
+                                                <li>{regPreview.kept.access_assignments} Security &amp; Access assignment{regPreview.kept.access_assignments === 1 ? '' : 's'} and organization membership</li>
+                                                <li>Employee number {formatEmployeeNo(regPreview.kept.employee_no)}, department, position and reporting line</li>
+                                                <li>HR history, Supply Chain, Finance and audit records</li>
+                                            </ul>
+                                        </div>
+
+                                        {allowed && (
+                                            <>
+                                                <div className="space-y-1.5">
+                                                    <Label htmlFor="registration-reason" className="text-xs">Reason (required)</Label>
+                                                    <Textarea
+                                                        id="registration-reason"
+                                                        rows={2}
+                                                        value={regReason}
+                                                        onChange={(e) => setRegReason(e.target.value)}
+                                                        placeholder="e.g. Test record onboarded by mistake"
+                                                    />
+                                                    {regReason.trim().length > 0 && regReason.trim().length < 10 && (
+                                                        <p className="text-[11px] text-red-600">Enter at least 10 characters.</p>
+                                                    )}
+                                                </div>
+                                                <label className="flex items-start gap-2 text-xs">
+                                                    <Checkbox checked={regConfirmed} onCheckedChange={(checked) => setRegConfirmed(checked === true)} className="mt-0.5" />
+                                                    <span>
+                                                        I confirm that {action === 'delete' ? 'this HR registration should be deleted' : 'this HR registration should be reset'} for {regPreview.employee.full_name || 'this employee'}.
+                                                    </span>
+                                                </label>
+                                            </>
+                                        )}
+
+                                        {regError && (
+                                            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{regError}</div>
+                                        )}
+                                    </div>
+                                )}
+
+                                <DialogFooter>
+                                    <Button variant="outline" onClick={closeRegistrationDialog} disabled={regSubmitting}>Cancel</Button>
+                                    <Button
+                                        variant={action === 'delete' ? 'destructive' : 'default'}
+                                        onClick={submitRegistrationAction}
+                                        disabled={!allowed || regLoading || regSubmitting || !regConfirmed || regReason.trim().length < 10 || !regRequestId}
+                                    >
+                                        {regSubmitting && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+                                        {action === 'delete' ? 'Delete Employee' : 'Reset HR Registration'}
+                                    </Button>
+                                </DialogFooter>
+                            </>
+                        )
+                    })()}
+                </DialogContent>
+            </Dialog>
 
             {/* ─── Add Employee Dialog (HR onboarding over one central identity) ──── */}
             <Dialog open={addDialogOpen} onOpenChange={(open) => { setAddDialogOpen(open); if (!open) resetAddForm() }}>

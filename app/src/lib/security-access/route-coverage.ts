@@ -272,6 +272,7 @@ export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
   "hr/employees": { kind: 'ENTERPRISE', permissions: ["hr.employee.manage"] },
   "hr/employees/candidates": { kind: 'ENTERPRISE', permissions: ["hr.employee.manage"] },
   "hr/employees/profile": { kind: 'ENTERPRISE', permissions: ["hr.employee.manage"] },
+  "hr/employees/registration": { kind: 'ENTERPRISE', permissions: ["hr.employee.delete"], via: ["lib/hr/employee-registration.ts"] },
   "hr/finance/gl-mappings": { kind: 'ENTERPRISE', permissions: ["finance.payroll_integration.manage"] },
   "hr/finance/post-benefit-contribution-run": { kind: 'ENTERPRISE', permissions: ["finance.journal.post"] },
   "hr/finance/post-expense-claim": { kind: 'ENTERPRISE', permissions: ["finance.journal.post"] },
