@@ -34,7 +34,7 @@ import { generateReturnPdf } from '@/lib/returns/pdf'
 import { variantAlternativeLabel, variantIdentityLabel } from '@/lib/inventory/variant-display-label'
 import {
     getVariantDisplayName, classifyProductLine, productLineLabel,
-    isCartridgeLine, getRowUnitsPerCase,
+    isCartridgeLine, getRowUnitsPerCase, getSavedRowUnitsPerCase,
     getUnitsPerCase, getUnitsPerBox, computePcsMode, computeBoxMode,
     pcsModeToStorage, boxModeToStorage, storageToPcsMode, storageToBoxMode,
     formatReturnAmount, caseUnitLabel, CASE_UNIT_LABEL,
@@ -315,11 +315,7 @@ function savedItemToExtraRow(it: ReturnCaseItem): WorksheetRow {
     const upc = Number(it.units_per_case_snapshot)
     const productName = it.product_name || 'Product'
     const line = classifyProductLine(productName)
-    const upcVal = getRowUnitsPerCase(
-        line,
-        productName,
-        (Number.isFinite(upc) && upc > 0) ? Math.floor(upc) : getUnitsPerBox(productName),
-    )
+    const upcVal = getSavedRowUnitsPerCase(line, productName, upc, getUnitsPerBox(productName))
     const caseQty = Number(it.case_qty || 0)
     const looseQty = Number(it.loose_piece_qty || 0)
     const total = caseQty * upcVal + looseQty
@@ -513,11 +509,7 @@ function ReturnCaseEditor({
             if (s) {
                 usedKeys.add(k)
                 const upc = Number(s.units_per_case_snapshot)
-                const upcVal = getRowUnitsPerCase(
-                    row.product_line,
-                    row.product_name,
-                    (Number.isFinite(upc) && upc > 0) ? Math.floor(upc) : row.units_per_case,
-                )
+                const upcVal = getSavedRowUnitsPerCase(row.product_line, row.product_name, upc, row.units_per_case)
                 row.units_per_case = upcVal
                 const cq = Number(s.case_qty || 0)
                 const lq = Number(s.loose_piece_qty || 0)

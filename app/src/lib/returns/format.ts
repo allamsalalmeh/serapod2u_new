@@ -115,6 +115,25 @@ export function getRowUnitsPerCase(
     return getUnitsPerCase(productName, masterUnitsPerCase)
 }
 
+/**
+ * Units per case for a line already saved on a return: the snapshot it was
+ * posted to stock with, so a stored line always reads back the quantity that
+ * reached inventory. Lines without a usable snapshot resolve like a new row.
+ */
+export function getSavedRowUnitsPerCase(
+    line: ProductLine,
+    productName: string | null | undefined,
+    snapshotUnitsPerCase: number | null | undefined,
+    fallbackUnitsPerCase?: number | null,
+): number {
+    const snapshot = Number(snapshotUnitsPerCase)
+    if (!Number.isFinite(snapshot) || snapshot < 1) {
+        return getRowUnitsPerCase(line, productName, fallbackUnitsPerCase)
+    }
+    if (isCartridgeLine(line)) return Math.floor(snapshot)
+    return getRowUnitsPerCase(line, productName, Math.floor(snapshot))
+}
+
 /** Short badge label for a Product Line. */
 export function productLineLabel(line: ProductLine): string {
     if (line === 'hero') return 'Hero'

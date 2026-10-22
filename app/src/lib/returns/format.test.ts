@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
     getVariantDisplayName, classifyProductLine, productLineLabel, getUnitsPerCase, getRowUnitsPerCase,
-    isCartridgeLine, isDeviceLine, formatReturnAmount, caseUnitLabel,
+    getSavedRowUnitsPerCase, isCartridgeLine, isDeviceLine, formatReturnAmount, caseUnitLabel,
 } from './format'
 
 describe('getVariantDisplayName', () => {
@@ -84,6 +84,23 @@ describe('isCartridgeLine / getRowUnitsPerCase', () => {
         expect(getRowUnitsPerCase('sbox', 'Serapod Device S.Box', 10)).toBe(1)
         expect(getRowUnitsPerCase('other', 'SERAPOD PRESTIGE KUREX', 12)).toBe(1)
         expect(getRowUnitsPerCase('other', 'Moonchair Camping Chair', 6)).toBe(1)
+    })
+})
+
+describe('getSavedRowUnitsPerCase', () => {
+    it('reads a saved cartridge line back with the pack size it was posted with', () => {
+        expect(getSavedRowUnitsPerCase('hero', 'Cellera Hero', 4, 4)).toBe(4)
+        expect(getSavedRowUnitsPerCase('hero', 'Cellera Hero', 1, 4)).toBe(1)
+        expect(getSavedRowUnitsPerCase('zero', 'Cellera Zero', 6, 4)).toBe(6)
+    })
+    it('resolves like a new row when the line has no usable snapshot', () => {
+        expect(getSavedRowUnitsPerCase('hero', 'Cellera Hero', null, 4)).toBe(4)
+        expect(getSavedRowUnitsPerCase('hero', 'Cellera Hero', 0, 1)).toBe(4)
+        expect(getSavedRowUnitsPerCase('zero', 'Cellera Zero', undefined, null)).toBe(4)
+    })
+    it('keeps devices and other products at 1 pcs whatever was saved', () => {
+        expect(getSavedRowUnitsPerCase('sbox', 'Serapod Device S.Box', 10, 1)).toBe(1)
+        expect(getSavedRowUnitsPerCase('other', 'Moonchair Camping Chair', 6, 6)).toBe(1)
     })
 })
 
