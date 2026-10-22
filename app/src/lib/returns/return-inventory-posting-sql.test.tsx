@@ -13,6 +13,13 @@ const skipExcludedMigration = readFileSync(
   ),
   'utf8',
 )
+const wholeCasesMigration = readFileSync(
+  path.resolve(
+    __dirname,
+    '../../../../supabase/migrations/20261213100000_return_inventory_posts_whole_cases.sql',
+  ),
+  'utf8',
+)
 const statusRoute = readFileSync(
   path.resolve(__dirname, '../../app/api/returns/[id]/status/route.ts'),
   'utf8',
@@ -58,6 +65,38 @@ describe('Return Product warehouse posting contract', () => {
     expect(guardOf(skipExcludedMigration)).toBe(guardOf(saModules))
     expect(skipExcludedMigration.indexOf('sa_inject_operation_guard')).toBeGreaterThan(
       skipExcludedMigration.indexOf('CREATE OR REPLACE FUNCTION public.post_return_case_inventory'),
+    )
+  })
+
+  it('posts whole cases for lines with a pack size and keeps every other rule', () => {
+    expect(wholeCasesMigration).toContain('CREATE OR REPLACE FUNCTION public.post_return_case_inventory')
+    expect(wholeCasesMigration).toContain('IF COALESCE(v_item.units_per_case_snapshot, 1) > 1 THEN')
+    expect(wholeCasesMigration).toContain('v_qty := floor(v_qty::numeric / v_item.units_per_case_snapshot)::integer;')
+    expect(wholeCasesMigration.indexOf('floor(v_qty::numeric')).toBeLessThan(
+      wholeCasesMigration.indexOf('IF v_qty <= 0 OR v_item.variant_id IS NULL THEN'),
+    )
+    for (const rule of [
+      'Return inventory can only be posted at/after Return Received',
+      'inventory_cutoff_excluded_transactions',
+      "AND sm.notes LIKE '%' || v_item.id::text || '%'",
+      'public.resolve_operational_stock_config(v_item.variant_id)',
+      "p_reference_type := 'return'",
+      'p_organization_id := v_case.return_warehouse_id',
+    ]) {
+      expect(wholeCasesMigration).toContain(rule)
+    }
+  })
+
+  it('restores the same S&A return guard after the whole-cases replacement', () => {
+    const saModules = readFileSync(
+      path.resolve(__dirname, '../../../../supabase/migrations/20260928120000_sa_final_modules_supply_chain.sql'),
+      'utf8',
+    )
+    const guardOf = (sql: string) =>
+      sql.match(/'public\.post_return_case_inventory\(uuid\)'::regprocedure, 'inventory\.return\.manage',\s*(\$g\$[\s\S]*?\$g\$)/)?.[1]
+    expect(guardOf(wholeCasesMigration)).toBe(guardOf(saModules))
+    expect(wholeCasesMigration.indexOf('sa_inject_operation_guard')).toBeGreaterThan(
+      wholeCasesMigration.indexOf('CREATE OR REPLACE FUNCTION public.post_return_case_inventory'),
     )
   })
 })

@@ -31,6 +31,7 @@ import {
 } from '@/lib/returns/constants'
 import { ReturnSourceCombobox } from './ReturnSourceCombobox'
 import { generateReturnPdf } from '@/lib/returns/pdf'
+import { itemLineValue } from '@/lib/returns/compute'
 import { variantAlternativeLabel, variantIdentityLabel } from '@/lib/inventory/variant-display-label'
 import {
     getVariantDisplayName, classifyProductLine, productLineLabel,
@@ -793,7 +794,10 @@ function ReturnCaseEditor({
                 totalCase += n.case_qty
                 totalLoose += n.loose_piece_qty
                 totalPcs += n.total_units
-                value += n.total_units * (r.unit_cost || 0)
+                value += itemLineValue({
+                    total_units: n.total_units, quantity: n.total_units,
+                    unit_cost: r.unit_cost, units_per_case_snapshot: r.units_per_case,
+                })
             }
         }
         return { entered, totalRows: rows.length, totalCase, totalLoose, totalPcs, value }
