@@ -22,6 +22,20 @@ describe('itemLineValue', () => {
     })
 })
 
+describe('itemLineValue at the source price', () => {
+    it('values 458 cases at the distributor price, not the factory cost', () => {
+        expect(itemLineValue(line({ total_units: 1832, unit_cost: 14, unit_price: 32, units_per_case_snapshot: 4 }))).toBe(14656)
+    })
+
+    it('values shop returns at the retailer price', () => {
+        expect(itemLineValue(line({ total_units: 800, unit_cost: 14, unit_price: 35, units_per_case_snapshot: 4 }))).toBe(7000)
+    })
+
+    it('keeps the old value for lines saved before prices were recorded', () => {
+        expect(itemLineValue(line({ total_units: 1832, unit_cost: 14, unit_price: null, units_per_case_snapshot: 4 }))).toBe(6412)
+    })
+})
+
 describe('itemsTotalValue', () => {
     it('sums cartridge and device lines on their own units', () => {
         expect(itemsTotalValue([

@@ -287,3 +287,29 @@ export function buildReturnItemRows(
 
     return { rows }
 }
+
+/**
+ * Sets each line's unit_price from master data for the return source: distributor
+ * returns at distributor_price, shop returns at retailer_price. Never taken from the
+ * client. A variant without that price keeps unit_price null.
+ */
+export async function applyReturnSourcePrices(
+    admin: any,
+    rows: ReturnCaseItemRow[],
+    sourceType: ReturnSourceType,
+): Promise<ReturnCaseItemRow[]> {
+    const ids = [...new Set(rows.map((r) => r.variant_id).filter((id): id is string => Boolean(id)))]
+    if (ids.length === 0) return rows.map((r) => ({ ...r, unit_price: null }))
+    const { data, error } = await admin
+        .from('product_variants')
+        .select('id, distributor_price, retailer_price')
+        .in('id', ids)
+    if (error) throw new Error(`Could not load product prices: ${error.message}`)
+    const prices = new Map<string, any>((data || []).map((v: any) => [String(v.id), v]))
+    return rows.map((r) => {
+        const v = r.variant_id ? prices.get(r.variant_id) : null
+        const raw = sourceType === 'distributor' ? v?.distributor_price : v?.retailer_price
+        const price = raw == null ? NaN : Number(raw)
+        return { ...r, unit_price: Number.isFinite(price) && price >= 0 ? price : null }
+    })
+}
