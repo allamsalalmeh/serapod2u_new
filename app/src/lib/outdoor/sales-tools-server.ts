@@ -41,7 +41,7 @@ export async function loadOrderBumpOffer(
     .eq('id', s.orderBumpVariantId)
     .maybeSingle()
   if (error || !variant || variant.is_active === false) return null
-  const stock = await sellableStock(supabase, [variant.id])
+  const stock = await sellableStock(supabase, [variant.id], 'outdoor')
   if (stock && (stock.get(variant.id) ?? 0) <= 0) return null
   const productName = String(variant.products?.product_name || variant.variant_name || 'add-on').trim()
   return {
@@ -91,7 +91,7 @@ export async function loadOutdoorBundles(
       .in('id', variantIds)
     for (const variant of data || []) variants.set(String(variant.id), variant)
   }
-  const stock = options?.withStock === false ? null : await sellableStock(supabase, variantIds)
+  const stock = options?.withStock === false ? null : await sellableStock(supabase, variantIds, 'outdoor')
 
   const out: Array<OutdoorBundle & { isActive: boolean; sortOrder: number; complete: boolean }> = []
   for (const row of rows || []) {

@@ -237,7 +237,7 @@ async function productPhoto(
 export async function getOutdoorProductDetail(
   productId: string,
 ): Promise<StorefrontProductDetail | null> {
-  const product = await getProductDetail(productId);
+  const product = await getProductDetail(productId, "outdoor");
   if (!product) return null;
 
   const scope = await resolveOutdoorCatalogScope();

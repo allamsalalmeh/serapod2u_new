@@ -73,7 +73,7 @@ async function loadProducts(admin: any): Promise<OutdoorDeskProduct[]> {
     .in('product_id', products.map((p) => p.id))
     .eq('is_active', true)
   const sellable = (variantRows || []).filter((row: any) => !row.attributes?.outdoor_only_variant && !row.attributes?.outdoor_hidden)
-  const stock = await sellableStock(admin, sellable.map((row: any) => String(row.id)))
+  const stock = await sellableStock(admin, sellable.map((row: any) => String(row.id)), 'outdoor')
 
   return products.map((product) => {
     const units = stock

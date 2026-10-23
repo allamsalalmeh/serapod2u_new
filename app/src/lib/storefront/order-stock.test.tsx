@@ -33,6 +33,14 @@ describe('order stock', () => {
     expect(stockShortfall([{ variantId: 'v1', quantity: 5, name: 'Cellera' }], null)).toBeNull()
   })
 
+  it('asks for the stock of the shop it sells in', async () => {
+    const admin = { rpc: vi.fn(async () => ({ data: [], error: null })) }
+    await sellableStock(admin, ['v1'])
+    await sellableStock(admin, ['v1'], 'outdoor')
+    expect(admin.rpc).toHaveBeenNthCalledWith(1, 'storefront_variant_stock', { p_variant_ids: ['v1'], p_channel: 'store' })
+    expect(admin.rpc).toHaveBeenNthCalledWith(2, 'storefront_variant_stock', { p_variant_ids: ['v1'], p_channel: 'outdoor' })
+  })
+
   it('stops a cart the warehouse cannot cover', async () => {
     const admin = { rpc: vi.fn(async () => ({ data: [{ variant_id: 'v1', available: 2 }, { variant_id: 'v2', available: 0 }], error: null })) }
     const stock = await sellableStock(admin, ['v1', 'v2'])
