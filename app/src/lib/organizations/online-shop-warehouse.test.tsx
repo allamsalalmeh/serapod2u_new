@@ -25,7 +25,7 @@ describe('Online shop warehouse', () => {
     expect(api).toContain("body.purpose === 'online_shop'")
     expect(api).toContain('storefront_warehouse_org_id: warehouse_org_id')
     expect(api).toContain('Only HQ Admin can update the default fulfillment warehouse.')
-    expect(card).toContain("purpose: 'online_shop'")
+    expect(card).toContain("purpose: 'online_shop' | 'outdoor_shop' = 'online_shop'")
     expect(card).toContain("rpc('is_hq_admin')")
   })
 

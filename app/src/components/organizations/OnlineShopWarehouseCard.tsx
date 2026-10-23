@@ -26,8 +26,12 @@ interface OnlineShopWarehouseCardProps {
 type ShopSetting = {
   explicitId: string | null
   defaultId: string | null
+  /** undefined = the Outdoor shop warehouse setting is not installed yet */
+  outdoorId?: string | null
   names: Record<string, string>
 }
+
+type Confirm = 'use' | 'follow' | 'outdoor_use' | 'outdoor_follow'
 
 /** Which warehouse website orders (Outdoor + /store) ship from; distributor orders keep their own default. */
 export default function OnlineShopWarehouseCard({ warehouse, parentHq }: OnlineShopWarehouseCardProps) {
@@ -37,7 +41,7 @@ export default function OnlineShopWarehouseCard({ warehouse, parentHq }: OnlineS
   const [setting, setSetting] = useState<ShopSetting | null>(null)
   const [notInstalled, setNotInstalled] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [confirm, setConfirm] = useState<'use' | 'follow' | null>(null)
+  const [confirm, setConfirm] = useState<Confirm | null>(null)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -53,11 +57,20 @@ export default function OnlineShopWarehouseCard({ warehouse, parentHq }: OnlineS
   const refresh = async () => {
     setLoading(true)
     try {
-      const { data: hq, error } = await supabase
+      let { data: hq, error } = await supabase
         .from('organizations')
-        .select('id, default_warehouse_org_id, storefront_warehouse_org_id')
+        .select('id, default_warehouse_org_id, storefront_warehouse_org_id, outdoor_warehouse_org_id')
         .eq('id', parentHq.id)
         .maybeSingle()
+      let outdoorInstalled = true
+      if (error && /outdoor_warehouse_org_id/i.test(error.message || '')) {
+        outdoorInstalled = false
+        ;({ data: hq, error } = await supabase
+          .from('organizations')
+          .select('id, default_warehouse_org_id, storefront_warehouse_org_id')
+          .eq('id', parentHq.id)
+          .maybeSingle())
+      }
       if (error) {
         if (/storefront_warehouse_org_id/i.test(error.message || '')) {
           setNotInstalled(true)
@@ -65,17 +78,22 @@ export default function OnlineShopWarehouseCard({ warehouse, parentHq }: OnlineS
         }
         throw error
       }
-      const row = hq as { default_warehouse_org_id?: string | null; storefront_warehouse_org_id?: string | null } | null
+      const row = hq as {
+        default_warehouse_org_id?: string | null
+        storefront_warehouse_org_id?: string | null
+        outdoor_warehouse_org_id?: string | null
+      } | null
       const explicitId = row?.storefront_warehouse_org_id || null
       const defaultId = row?.default_warehouse_org_id || null
-      const ids = [explicitId, defaultId].filter((id): id is string => Boolean(id))
+      const outdoorId = outdoorInstalled ? row?.outdoor_warehouse_org_id || null : undefined
+      const ids = [explicitId, defaultId, outdoorId].filter((id): id is string => Boolean(id))
       const names: Record<string, string> = { [warehouse.id]: warehouse.org_name }
       if (ids.some((id) => !names[id])) {
         const { data: orgs } = await supabase.from('organizations').select('id, org_name').in('id', ids)
         for (const org of (orgs || []) as Array<{ id: string; org_name: string }>) names[org.id] = org.org_name
       }
       setNotInstalled(false)
-      setSetting({ explicitId, defaultId, names })
+      setSetting({ explicitId, defaultId, outdoorId, names })
     } catch (err) {
       console.error('Failed to load online shop warehouse:', err)
       setSetting(null)
@@ -89,18 +107,18 @@ export default function OnlineShopWarehouseCard({ warehouse, parentHq }: OnlineS
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parentHq.id, warehouse.id])
 
-  const save = async (warehouseOrgId: string | null) => {
+  const save = async (warehouseOrgId: string | null, purpose: 'online_shop' | 'outdoor_shop' = 'online_shop') => {
     setSaving(true)
     try {
       const response = await fetch('/api/organizations/set-default-warehouse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hq_org_id: parentHq.id, warehouse_org_id: warehouseOrgId, purpose: 'online_shop' }),
+        body: JSON.stringify({ hq_org_id: parentHq.id, warehouse_org_id: warehouseOrgId, purpose }),
       })
       const result = await response.json().catch(() => null)
       if (!response.ok) throw new Error(result?.error || 'Failed to change the online shop warehouse')
       await refresh()
-      toast({ title: 'Online shop warehouse updated', description: result?.message })
+      toast({ title: purpose === 'outdoor_shop' ? 'Outdoor shop warehouse updated' : 'Online shop warehouse updated', description: result?.message })
       setConfirm(null)
     } catch (err: any) {
       toast({ title: 'Unable to update', description: err?.message || 'Failed to change the online shop warehouse', variant: 'destructive' })
@@ -114,6 +132,10 @@ export default function OnlineShopWarehouseCard({ warehouse, parentHq }: OnlineS
   const defaultName = setting?.defaultId ? setting.names[setting.defaultId] || 'Unknown warehouse' : null
   const shipsHere = effectiveId === warehouse.id
   const chosenHere = setting?.explicitId === warehouse.id
+  const outdoorInstalled = setting?.outdoorId !== undefined
+  const outdoorId = setting?.outdoorId || effectiveId
+  const outdoorName = outdoorId ? setting?.names[outdoorId] || 'Unknown warehouse' : null
+  const outdoorHere = setting?.outdoorId === warehouse.id
 
   return (
     <>
@@ -124,8 +146,8 @@ export default function OnlineShopWarehouseCard({ warehouse, parentHq }: OnlineS
             Online Shop Orders
           </CardTitle>
           <CardDescription>
-            Website orders (Outdoor and the online store) are sold against, and shipped from, one warehouse under {parentHq.org_name}.
-            Distributor orders are not affected.
+            Website orders are sold against, and shipped from, one warehouse under {parentHq.org_name}. The Outdoor shop can use its own
+            warehouse instead. Distributor orders are not affected.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -179,6 +201,42 @@ export default function OnlineShopWarehouseCard({ warehouse, parentHq }: OnlineS
               ) : (
                 <p className="text-xs text-muted-foreground">Only HQ Admin can change the online shop warehouse.</p>
               )}
+
+              {outdoorInstalled ? (
+                <div className="space-y-2 border-t border-orange-200 pt-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Outdoor shop</p>
+                  {outdoorHere ? (
+                    <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3">
+                      <Badge className="mb-1 bg-emerald-600 hover:bg-emerald-600">
+                        <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+                        Sells Outdoor orders
+                      </Badge>
+                      <p className="text-sm text-emerald-900">Outdoor shop orders take their stock from this warehouse.</p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-foreground">
+                      Outdoor orders ship from <span className="font-medium">{outdoorName || 'no warehouse yet'}</span>
+                      {!setting?.outdoorId && outdoorName ? (
+                        <span className="text-muted-foreground"> · same as the other website orders</span>
+                      ) : null}
+                    </p>
+                  )}
+                  {isHqAdmin ? (
+                    <div className="flex flex-wrap gap-2">
+                      {!outdoorHere && warehouse.is_active !== false ? (
+                        <Button type="button" variant="outline" onClick={() => setConfirm('outdoor_use')} disabled={saving}>
+                          Sell Outdoor Orders From This Warehouse
+                        </Button>
+                      ) : null}
+                      {outdoorHere ? (
+                        <Button type="button" variant="outline" onClick={() => setConfirm('outdoor_follow')} disabled={saving}>
+                          Use the Website Warehouse for Outdoor
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </>
           )}
         </CardContent>
@@ -188,12 +246,22 @@ export default function OnlineShopWarehouseCard({ warehouse, parentHq }: OnlineS
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {confirm === 'follow' ? 'Follow the default warehouse?' : `Ship website orders from ${warehouse.org_name}?`}
+              {confirm === 'follow'
+                ? 'Follow the default warehouse?'
+                : confirm === 'outdoor_use'
+                  ? `Sell Outdoor orders from ${warehouse.org_name}?`
+                  : confirm === 'outdoor_follow'
+                    ? 'Use the website warehouse for Outdoor?'
+                    : `Ship website orders from ${warehouse.org_name}?`}
             </AlertDialogTitle>
             <AlertDialogDescription className="whitespace-pre-line">
               {confirm === 'follow'
                 ? `Website orders will take their stock from the default fulfillment warehouse${defaultName ? ` (${defaultName})` : ''}. Products with no stock there will show as sold out on the website.`
-                : `Website orders will take their stock from ${warehouse.org_name}. Products with no stock there will show as sold out on the website, so move stock here first.\n\nDistributor orders keep using ${defaultName || 'their default warehouse'}. Orders that already shipped are not changed.`}
+                : confirm === 'outdoor_use'
+                  ? `Outdoor shop orders will take their stock from ${warehouse.org_name}. Outdoor products with no stock there will show as sold out, so move stock here first.\n\nThe Serapod2U store keeps using ${effectiveName || 'the website warehouse'}, and distributor orders are unchanged. Orders that already shipped are not changed.`
+                  : confirm === 'outdoor_follow'
+                    ? `Outdoor shop orders will take their stock from ${effectiveName || 'the website warehouse'}, like the other website orders. Outdoor products with no stock there will show as sold out.`
+                    : `Website orders will take their stock from ${warehouse.org_name}. Products with no stock there will show as sold out on the website, so move stock here first.\n\nDistributor orders keep using ${defaultName || 'their default warehouse'}. Orders that already shipped are not changed.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -202,7 +270,9 @@ export default function OnlineShopWarehouseCard({ warehouse, parentHq }: OnlineS
               disabled={saving}
               onClick={(event) => {
                 event.preventDefault()
-                void save(confirm === 'follow' ? null : warehouse.id)
+                if (confirm === 'outdoor_use') void save(warehouse.id, 'outdoor_shop')
+                else if (confirm === 'outdoor_follow') void save(null, 'outdoor_shop')
+                else void save(confirm === 'follow' ? null : warehouse.id)
               }}
             >
               {saving ? (
@@ -210,7 +280,7 @@ export default function OnlineShopWarehouseCard({ warehouse, parentHq }: OnlineS
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Saving…
                 </>
-              ) : confirm === 'follow' ? 'Follow Default' : 'Ship From Here'}
+              ) : confirm === 'follow' ? 'Follow Default' : confirm === 'outdoor_follow' ? 'Use Website Warehouse' : confirm === 'outdoor_use' ? 'Sell Outdoor From Here' : 'Ship From Here'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

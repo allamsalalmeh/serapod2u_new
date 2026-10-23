@@ -5,13 +5,42 @@ import { DEFAULT_DISTRIBUTOR_FULFILLMENT_WAREHOUSE_SETTING_KEY } from '@/lib/ord
 
 function onlineShopSaveError(error: { message?: string }) {
   console.error('Failed to set online shop warehouse:', error)
-  if (/storefront_warehouse_org_id/i.test(String(error.message || ''))) {
+  if (/storefront_warehouse_org_id|outdoor_warehouse_org_id/i.test(String(error.message || ''))) {
     return NextResponse.json(
-      { error: 'The online shop warehouse setting is not installed yet. Apply the storefront online shop warehouse migration first.' },
+      { error: 'The online shop warehouse setting is not installed yet. Apply the storefront warehouse migrations first.' },
       { status: 503 },
     )
   }
   return NextResponse.json({ error: error.message || 'Failed to set the online shop warehouse' }, { status: 400 })
+}
+
+async function followWebsiteForOutdoorShop(supabase: any, userId: string, hqOrgId: string) {
+  const { data: isHqAdmin, error: adminError } = await supabase.rpc('is_hq_admin')
+  if (adminError) {
+    return NextResponse.json({ error: 'Unable to verify admin permissions.' }, { status: 500 })
+  }
+  if (!(await userAllowed(userId, 'platform.organization.manage', () => Boolean(isHqAdmin)))) {
+    return NextResponse.json({ error: 'Only HQ Admin can change the Outdoor shop warehouse.' }, { status: 403 })
+  }
+  const { data: hq } = await supabase
+    .from('organizations')
+    .select('id, org_type_code, is_active')
+    .eq('id', hqOrgId)
+    .maybeSingle()
+  if (!hq || hq.org_type_code !== 'HQ') {
+    return NextResponse.json({ error: 'HQ organization not found' }, { status: 404 })
+  }
+  const { error } = await supabase
+    .from('organizations')
+    .update({ outdoor_warehouse_org_id: null, updated_at: new Date().toISOString() })
+    .eq('id', hqOrgId)
+  if (error) return onlineShopSaveError(error)
+  return NextResponse.json({
+    success: true,
+    message: 'The Outdoor shop now uses the same warehouse as the other website orders.',
+    hq_org_id: hqOrgId,
+    warehouse_org_id: null,
+  })
 }
 
 async function followDefaultForOnlineShop(supabase: any, userId: string, hqOrgId: string) {
@@ -50,6 +79,8 @@ async function followDefaultForOnlineShop(supabase: any, userId: string, hqOrgId
  *
  * With purpose 'online_shop' it sets organizations.storefront_warehouse_org_id
  * instead (website orders only); warehouse_org_id null = follow the default.
+ * With purpose 'outdoor_shop' it sets organizations.outdoor_warehouse_org_id
+ * (Outdoor shop only); warehouse_org_id null = same as the website warehouse.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -63,9 +94,13 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { hq_org_id, warehouse_org_id } = body
     const onlineShop = body.purpose === 'online_shop'
+    const outdoorShop = body.purpose === 'outdoor_shop'
 
     if (onlineShop && hq_org_id && warehouse_org_id === null) {
       return followDefaultForOnlineShop(supabase, user.id, hq_org_id)
+    }
+    if (outdoorShop && hq_org_id && warehouse_org_id === null) {
+      return followWebsiteForOutdoorShop(supabase, user.id, hq_org_id)
     }
 
     if (!hq_org_id || !warehouse_org_id) {
@@ -120,6 +155,21 @@ export async function POST(request: NextRequest) {
         { error: 'Warehouse must be an active child of this HQ' },
         { status: 400 },
       )
+    }
+
+    if (outdoorShop) {
+      const { error: shopError } = await supabase
+        .from('organizations')
+        .update({ outdoor_warehouse_org_id: warehouse_org_id, updated_at: new Date().toISOString() })
+        .eq('id', hq_org_id)
+      if (shopError) return onlineShopSaveError(shopError)
+      return NextResponse.json({
+        success: true,
+        message: `The Outdoor shop now sells from ${warehouse.org_name}. The Serapod2U store and distributor orders are unchanged.`,
+        hq_org_id,
+        warehouse_org_id,
+        warehouse_name: warehouse.org_name,
+      })
     }
 
     if (onlineShop) {

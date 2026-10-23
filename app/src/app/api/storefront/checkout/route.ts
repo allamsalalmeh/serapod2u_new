@@ -287,7 +287,7 @@ export async function POST(request: NextRequest) {
         quantity: li.quantity,
         name: [li.product_name, li.variant_name].filter(Boolean).join(' · '),
       })),
-      await sellableStock(supabase, lineItems.map((li) => li.variant_id)),
+      await sellableStock(supabase, lineItems.map((li) => li.variant_id), isOutdoor ? 'outdoor' : 'store'),
     )
     if (shortfall) {
       return NextResponse.json({ error: shortfall }, { status: 409 })

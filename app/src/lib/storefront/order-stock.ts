@@ -76,17 +76,24 @@ export function stockMoveNote(result: StockMoveResult, direction: 'out' | 'back'
   return null
 }
 
+export type StorefrontStockChannel = 'store' | 'outdoor'
+
 /**
- * How many of each variant the shop can still sell. Null when stock cannot be read
- * (functions not deployed, no warehouse configured): callers then keep selling.
+ * How many of each variant the shop can still sell: its warehouse's free stock, capped by
+ * the variant's online allocation. Null when stock cannot be read (functions not deployed,
+ * no warehouse configured): callers then keep selling.
  */
-export async function sellableStock(admin: any, variantIds: string[]): Promise<Map<string, number> | null> {
+export async function sellableStock(
+  admin: any,
+  variantIds: string[],
+  channel: StorefrontStockChannel = 'store',
+): Promise<Map<string, number> | null> {
   const ids = [...new Set(variantIds.filter(Boolean))]
   if (ids.length === 0) return new Map()
   let data: unknown
   let error: any
   try {
-    ;({ data, error } = await admin.rpc('storefront_variant_stock', { p_variant_ids: ids }))
+    ;({ data, error } = await admin.rpc('storefront_variant_stock', { p_variant_ids: ids, p_channel: channel }))
   } catch (err) {
     error = err
   }

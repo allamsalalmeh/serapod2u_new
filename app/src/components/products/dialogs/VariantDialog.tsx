@@ -82,6 +82,8 @@ export interface Variant {
   retailer_price?: number | null
   distributor_price?: number | null
   other_price?: number | null
+  /** Units the website may still sell; null = no limit. */
+  online_stock_allocation?: number | null
   is_active: boolean
   is_default: boolean
   image_url?: string | null
@@ -201,6 +203,7 @@ export default function VariantDialog({
             retailer_price: variant.retailer_price,
             distributor_price: variant.distributor_price,
             other_price: variant.other_price,
+            online_stock_allocation: variant.online_stock_allocation ?? null,
             is_active: variant.is_active !== false,
             is_default: variant.is_default || false,
           }
@@ -218,6 +221,7 @@ export default function VariantDialog({
             retailer_price: null,
             distributor_price: null,
             other_price: null,
+            online_stock_allocation: null,
             is_active: true,
             is_default: false,
           },
@@ -304,6 +308,10 @@ export default function VariantDialog({
     if (productCodeError) e.product_code = productCodeError
     const priceError = retailPriceError(formData.suggested_retail_price)
     if (priceError) e.suggested_retail_price = priceError
+    const allocation = formData.online_stock_allocation
+    if (allocation != null && (!Number.isInteger(allocation) || allocation < 0)) {
+      e.online_stock_allocation = 'Enter a whole number of 0 or more, or leave it blank for no limit.'
+    }
     setErrors(e)
     return Object.keys(e).length === 0
   }
@@ -620,6 +628,27 @@ export default function VariantDialog({
           <div className="space-y-2">
             <Label htmlFor="otherPrice">Promo Price (RM)</Label>
             <div className="flex items-center"><span className="text-gray-600 mr-2">RM</span><Input id="otherPrice" type="number" step="0.01" placeholder="0.00" value={formData.other_price ?? ''} onChange={(e) => setFormData((p) => ({ ...p, other_price: e.target.value ? parseFloat(e.target.value) : null }))} className="flex-1" /></div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="onlineStockAllocation">Online Stock Limit (website)</Label>
+            <Input
+              id="onlineStockAllocation"
+              type="number"
+              step="1"
+              min="0"
+              placeholder="No limit"
+              value={formData.online_stock_allocation ?? ''}
+              onChange={(e) => {
+                setFormData((p) => ({ ...p, online_stock_allocation: e.target.value === '' ? null : Number(e.target.value) }))
+                if (errors.online_stock_allocation) setErrors((p) => ({ ...p, online_stock_allocation: '' }))
+              }}
+              className={errors.online_stock_allocation ? 'border-red-500' : ''}
+              aria-invalid={Boolean(errors.online_stock_allocation)}
+            />
+            <p className="text-xs text-gray-500">
+              How many the website may still sell. It goes down as website orders ship. Leave blank to sell all stock in the shop&apos;s warehouse. Warehouse stock is not changed.
+            </p>
+            {errors.online_stock_allocation && <p className="text-xs text-red-500">{errors.online_stock_allocation}</p>}
           </div>
 
           <div className="flex items-center gap-2">
