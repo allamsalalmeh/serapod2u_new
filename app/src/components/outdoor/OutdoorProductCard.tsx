@@ -70,12 +70,12 @@ export default function OutdoorProductCard({ product }: { product: StorefrontPro
         </div>
       ) : null}
 
-      <div className="mt-2 flex items-start justify-between gap-2 px-1">
-        <h3 className="text-sm font-semibold leading-snug text-[var(--out-bark)]">
+      <div className="mt-2 flex flex-wrap items-start justify-between gap-x-2 gap-y-0.5 px-1">
+        <h3 className="min-w-min flex-1 text-sm font-semibold leading-snug text-[var(--out-bark)]">
           {product.product_name}
         </h3>
         {product.specLabel ? (
-          <p className="shrink-0 text-xs text-[var(--out-muted)]">{product.specLabel}</p>
+          <p className="max-w-full shrink-0 text-xs text-[var(--out-muted)]">{product.specLabel}</p>
         ) : null}
       </div>
       <p key={price ?? 'ask'} className="out-swap mt-1 px-1 text-sm font-medium text-[var(--out-bark)]">{formatPrice(price)}</p>
