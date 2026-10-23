@@ -44,7 +44,7 @@ describe('self-service consumer registration resolves before creating a login', 
     expect(register.indexOf('resolveConsumerRegistrationIdentity(')).toBeLessThan(register.indexOf('auth.admin.createUser('))
     const helper = actions.slice(actions.indexOf('async function resolveConsumerRegistrationIdentity'), actions.indexOf('export async function registerConsumer('))
     expect(helper).toContain("p_source: 'consumer_signup'")
-    expect(helper).toContain("if (outcome === 'NO_MATCH') return null")
+    expect(helper).toContain("if (outcome === 'NO_MATCH' || outcome === 'IDENTITY_PREVIOUSLY_RELEASED') return null")
   })
 })
 

@@ -117,6 +117,8 @@ export async function createUserWithAuth(userData: {
    * false = excluded (non-employee HQ account); true is rejected for a non-HQ organization. Judged on the stored org type.
    */
   include_ess?: boolean | null
+  /** The email/phone was released by an archived former user and the administrator confirmed this is a DIFFERENT person. */
+  released_identifier_decision?: 'new_person' | null
 }, _callerInfo?: { id: string, role_code: string }) {
   try {
     const supabase = await createClient()
@@ -243,6 +245,7 @@ export async function createUserWithAuth(userData: {
       // Never reuse an account silently: an existing person is either linked explicitly (HQ employee) or the request stops.
       requireNewIdentity: true,
       linkUserId: userData.linked_user_id || null,
+      releasedIdentifierDecision: userData.released_identifier_decision === 'new_person' ? 'new_person' : null,
       source: 'user_management',
     })
     if (!provisioned.ok) {
@@ -970,7 +973,8 @@ async function resolveConsumerRegistrationIdentity(adminClient: any, email: stri
   const { data, error } = await adminClient.rpc('identity_resolve', { p_email: email, p_phone: phone ?? null })
   if (error) return 'Registration is temporarily unavailable. Please try again.'
   const outcome = data?.outcome
-  if (outcome === 'NO_MATCH') return null
+  // A released identifier of an archived identity: self-registration (ownership verified by the sign-up) is a new person.
+  if (outcome === 'NO_MATCH' || outcome === 'IDENTITY_PREVIOUSLY_RELEASED') return null
   if (outcome === 'INVALID_INPUT') return 'Please check your email address and mobile number.'
   if (outcome === 'MATCH' && data?.matched_by !== 'phone') return 'An account with this email already exists. Please sign in instead.'
   if (outcome === 'MATCH') return 'This mobile number is already registered. Please sign in with it instead.'

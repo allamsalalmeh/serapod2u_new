@@ -70,11 +70,13 @@ describe('every identity removal path decides Archive Identities', () => {
     expect(fn).not.toMatch(/\.delete\(\)|deleteUser\(/)
   })
 
-  it('the helper decides for the target organization and archives through the governance function once enforced', () => {
+  it('the helper decides for the target organization and archives through the canonical database archive', () => {
     const code = src(helper)
     expect(code).toContain("export const IDENTITY_REMOVAL_PERMISSION = 'platform.identity.delete'")
     expect(code).toMatch(/organizationResource\('user', row\?\.organization_id \?\? actorOrganizationId/)
-    expect(code).toContain("setIdentityAccountStatus(actorId, targetUserId, 'ARCHIVED', reason)")
+    expect(code).toContain("archivePreview(actorId, targetUserId, 'user_management')")
+    expect(code).toContain('archiveExecute({')
+    expect(code).not.toMatch(/account_status: 'ARCHIVED'/) // never a direct status write
     expect(code).toContain('targetProtectionAllows(actorId, target.id, IDENTITY_REMOVAL_PERMISSION')
     expect(code).not.toMatch(/auth\.admin\.deleteUser/) // archive never deletes
   })

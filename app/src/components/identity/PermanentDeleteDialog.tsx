@@ -186,7 +186,7 @@ export default function PermanentDeleteDialog({ target, entry, onClose, onDelete
                                 </ul>
                                 {onArchiveInstead && target && (
                                     <Button variant="outline" size="sm" className="mt-2" onClick={() => onArchiveInstead(target)}>
-                                        Archive instead (history kept)
+                                        Archive &amp; Revoke Access instead (history kept)
                                     </Button>
                                 )}
                             </div>

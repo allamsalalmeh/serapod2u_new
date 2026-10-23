@@ -9,6 +9,9 @@
  *   verified phone matches, email new   → MATCH     (reuse; email not attached)
  *   unverified phone matches only       → IDENTITY_VERIFICATION_REQUIRED
  *   email → A, phone → B                → IDENTITY_CONFLICT (never merged)
+ *   no match, but the email/phone was
+ *   released by an archived identity    → IDENTITY_PREVIOUSLY_RELEASED (a returning person is
+ *                                         reactivated; a different person needs an explicit decision)
  */
 
 export type IdentityResolutionOutcome =
@@ -20,6 +23,7 @@ export type IdentityResolutionOutcome =
   | 'IDENTITY_AMBIGUOUS_PHONE'
   | 'IDENTITY_VERIFICATION_REQUIRED'
   | 'IDENTITY_ARCHIVED'
+  | 'IDENTITY_PREVIOUSLY_RELEASED'
 
 export type IdentityBlockCode =
   | Exclude<IdentityResolutionOutcome, 'NO_MATCH' | 'MATCH' | 'INVALID_INPUT'>
@@ -61,6 +65,8 @@ export interface IdentityResolution {
   matchedBy: 'email' | 'phone' | 'email+phone' | null
   matchedUserIds: string[]
   hasProfile: boolean | null
+  /** Archived identities that released this email/phone (IDENTITY_PREVIOUSLY_RELEASED). */
+  releasedUserIds: string[]
 }
 
 export function parseResolution(data: any): IdentityResolution {
@@ -70,6 +76,7 @@ export function parseResolution(data: any): IdentityResolution {
     matchedBy: data?.matched_by ?? null,
     matchedUserIds: Array.isArray(data?.matched_user_ids) ? data.matched_user_ids : [],
     hasProfile: typeof data?.has_profile === 'boolean' ? data.has_profile : null,
+    releasedUserIds: Array.isArray(data?.released_user_ids) ? data.released_user_ids : [],
   }
 }
 
@@ -84,6 +91,8 @@ export const IDENTITY_BLOCK_MESSAGES: Record<IdentityBlockCode, string> = {
     'This phone number belongs to an existing account but has not been verified. Use the person\'s email address, or verify the phone first.',
   IDENTITY_ARCHIVED:
     'This person already has an archived account. A Super Admin can reactivate it; a second account is never created for the same person.',
+  IDENTITY_PREVIOUSLY_RELEASED:
+    'This email or phone number belonged to a former user whose account was archived and released. If it is the same person returning, reactivate their archived account (User Management → Archived). If it is a different person, confirm that in User Management → Add User to create a new account.',
   IDENTITY_INACTIVE:
     'This person already has an account that is suspended or disabled. Reactivate it instead of creating a new one.',
   IDENTITY_PRINCIPAL_UPGRADE_REQUIRED:

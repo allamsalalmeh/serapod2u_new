@@ -22,7 +22,7 @@ import { useToast } from '@/components/ui/use-toast'
 import {
     Search, Users, UserCheck, Building2, Briefcase, Pencil, Check, X,
     Plus, Copy, Loader2, Eye, Save, ChevronRight, Camera, UserPlus, AlertTriangle, ArrowLeft,
-    MoreHorizontal, Trash2, RotateCcw, ShieldCheck, UserMinus
+    MoreHorizontal, Trash2, RotateCcw, ShieldCheck, UserMinus, Archive, Unlock
 } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { listDepartments } from '@/lib/actions/departments'
@@ -31,6 +31,7 @@ import { compressAvatar } from '@/lib/utils/imageCompression'
 import EmployeeCommissionPanel from '@/components/hr/commission/EmployeeCommissionPanel'
 import { useCommissionAccess } from '@/lib/hr/commission/use-commission-access'
 import PermanentDeleteDialog from '@/components/identity/PermanentDeleteDialog'
+import ArchiveIdentityDialog, { type ArchiveMode } from '@/components/identity/ArchiveIdentityDialog'
 
 interface HrPeopleViewProps {
     organizationId: string
@@ -57,6 +58,11 @@ interface HrUserRow {
     /** HR registration state of the employment record in this organization. */
     onboarding_status: 'pending' | 'completed' | 'reset' | null
     hire_date: string | null
+    /** Account lifecycle: ARCHIVED = former employee (Archive & Revoke Access); never an onboarding state. */
+    account_status: string | null
+    /** Employment record status and end date (resigned / terminated for former employees). */
+    employment_status: string | null
+    end_date: string | null
 }
 
 type RegistrationAction = 'delete' | 'reset'
@@ -175,7 +181,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     const [addDialogOpen, setAddDialogOpen] = useState(false)
     const [addLoading, setAddLoading] = useState(false)
     const [statusFilter, setStatusFilter] = useState('active')
-    const [onboardingView, setOnboardingView] = useState<'completed' | 'awaiting'>('completed')
+    const [onboardingView, setOnboardingView] = useState<'completed' | 'awaiting' | 'former'>('completed')
     const [onboardingSupported, setOnboardingSupported] = useState(true)
     const [addStep, setAddStep] = useState<'find' | 'details' | 'done'>('find')
     const [nameQuery, setNameQuery] = useState('')
@@ -224,6 +230,8 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     // Delete Employee Permanently: the canonical identity deletion shared with User Management.
     const [permanentDeleteAllowed, setPermanentDeleteAllowed] = useState(false)
     const [permanentTarget, setPermanentTarget] = useState<{ id: string; name: string } | null>(null)
+    // Archive & Revoke Access / Release Email & Phone (same backend and authority as permanent deletion).
+    const [archiveTarget, setArchiveTarget] = useState<{ id: string; name: string; mode: ArchiveMode } | null>(null)
     const avatarInputRef = useRef<HTMLInputElement>(null)
 
     const loadUsers = async () => {
@@ -238,6 +246,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 avatar_url,
                 role_code,
                 is_active,
+                account_status,
                 department_id,
                 manager_user_id,
                 position_id,
@@ -250,7 +259,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         let { data, error } = await (supabase as any)
             .from('users')
             .select(`${baseColumns},
-                hr_employees!hr_employees_user_id_fkey!inner (organization_id, onboarding_status, hire_date, hire_date_confirmed)`)
+                hr_employees!hr_employees_user_id_fkey!inner (organization_id, onboarding_status, hire_date, hire_date_confirmed, status, end_date)`)
             .eq('organization_id', organizationId)
             .eq('hr_employees.organization_id', organizationId)
             .order('full_name', { ascending: true })
@@ -312,6 +321,9 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 onboarding_status: onboardingAvailable ? (employment?.onboarding_status ?? null) : 'completed',
                 // A login creation date is never shown as a confirmed hire date.
                 hire_date: employment?.hire_date_confirmed ? employment.hire_date : null,
+                account_status: u.account_status ?? null,
+                employment_status: employment?.status ?? null,
+                end_date: employment?.end_date ?? null,
             } as HrUserRow
         })
 
@@ -436,8 +448,12 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     const filteredUsers = useMemo(() => {
         const query = searchQuery.trim().toLowerCase()
         return users.filter(u => {
+            // Former employees (archived accounts) are listed only under Former, whatever their onboarding state.
+            const archived = u.account_status === 'ARCHIVED'
+            if (onboardingView === 'former' ? !archived : archived) return false
             const onboarded = u.onboarding_status === 'completed'
-            if (onboardingView === 'completed' ? !onboarded : onboarded) return false
+            if (onboardingView === 'completed' && !onboarded) return false
+            if (onboardingView === 'awaiting' && onboarded) return false
             if (departmentFilter !== 'all' && u.department_id !== departmentFilter) return false
             // Status filter
             if (statusFilter === 'active' && !u.is_active) return false
@@ -451,8 +467,9 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         })
     }, [users, searchQuery, departmentFilter, statusFilter, onboardingView])
 
-    const awaitingCount = useMemo(() => users.filter(u => u.onboarding_status !== 'completed').length, [users])
-    const onboardedUsers = useMemo(() => users.filter(u => u.onboarding_status === 'completed'), [users])
+    const awaitingCount = useMemo(() => users.filter(u => u.account_status !== 'ARCHIVED' && u.onboarding_status !== 'completed').length, [users])
+    const onboardedUsers = useMemo(() => users.filter(u => u.account_status !== 'ARCHIVED' && u.onboarding_status === 'completed'), [users])
+    const formerCount = useMemo(() => users.filter(u => u.account_status === 'ARCHIVED').length, [users])
 
     const departmentById = useMemo(() => {
         const map = new Map<string, { id: string; dept_name: string; dept_code: string | null }>()
@@ -787,6 +804,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                         {([
                             { id: 'completed', label: 'Onboarded', count: onboardedUsers.length },
                             { id: 'awaiting', label: 'Awaiting onboarding', count: awaitingCount },
+                            { id: 'former', label: 'Former employees', count: formerCount },
                         ] as const).map(tab => (
                             <button
                                 key={tab.id}
@@ -801,6 +819,11 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                             </button>
                         ))}
                     </div>
+                )}
+                {onboardingSupported && onboardingView === 'former' && (
+                    <p className="text-xs text-muted-foreground">
+                        Archived accounts: their sign-in and access were revoked. Employee number, employment history and every record they created are kept under their original ID.
+                    </p>
                 )}
                 {onboardingSupported && onboardingView === 'awaiting' && (
                     <p className="text-xs text-muted-foreground">
@@ -1011,7 +1034,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                             </SelectTrigger>
                                             <SelectContent>
                                                 <SelectItem value="none">Top leader</SelectItem>
-                                                {users.filter(u => u.id !== user.id).map(u => (
+                                                {users.filter(u => u.id !== user.id && u.account_status !== 'ARCHIVED').map(u => (
                                                     <SelectItem key={u.id} value={u.id}>{u.full_name || u.email}</SelectItem>
                                                 ))}
                                             </SelectContent>
@@ -1028,7 +1051,11 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                 </div>
                                 <div className="text-xs text-gray-500">{user.role_name || user.role_code}</div>
                                 <div>
-                                    {user.onboarding_status && user.onboarding_status !== 'completed' ? (
+                                    {user.account_status === 'ARCHIVED' ? (
+                                        <Badge variant="secondary" className="text-[10px]" title={user.end_date ? `Employment ended ${user.end_date}` : undefined}>
+                                            Former{user.employment_status === 'terminated' ? ' · terminated' : user.employment_status === 'resigned' ? ' · resigned' : ''}
+                                        </Badge>
+                                    ) : user.onboarding_status && user.onboarding_status !== 'completed' ? (
                                         <Badge variant="outline" className="text-[10px] border-amber-200 text-amber-700">
                                             {user.onboarding_status === 'reset' ? 'Reset' : 'Pending'}
                                         </Badge>
@@ -1048,7 +1075,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                                 <X className="h-3.5 w-3.5 text-gray-400" />
                                             </Button>
                                         </div>
-                                    ) : (canEdit || (registrationAllowed && user.onboarding_status && user.onboarding_status !== 'pending')
+                                    ) : ((user.account_status !== 'ARCHIVED' && (canEdit || (registrationAllowed && user.onboarding_status && user.onboarding_status !== 'pending')))
                                          || (permanentDeleteAllowed && user.onboarding_status)) && (
                                         <Popover open={rowMenuUserId === user.id} onOpenChange={(open) => setRowMenuUserId(open ? user.id : null)}>
                                             <PopoverTrigger asChild>
@@ -1057,7 +1084,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                                 </Button>
                                             </PopoverTrigger>
                                             <PopoverContent align="end" className="w-52 p-1">
-                                                {canEdit && (user.onboarding_status && user.onboarding_status !== 'completed' ? (
+                                                {canEdit && user.account_status !== 'ARCHIVED' && (user.onboarding_status && user.onboarding_status !== 'completed' ? (
                                                     <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted" onClick={() => { setRowMenuUserId(null); startOnboardingFor(user) }}>
                                                         <UserPlus className="h-3.5 w-3.5 mr-2 text-blue-600" /> Complete onboarding
                                                     </button>
@@ -1066,7 +1093,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                                         <Pencil className="h-3.5 w-3.5 mr-2" /> Edit Employee
                                                     </button>
                                                 ))}
-                                                {registrationAllowed && user.onboarding_status && user.onboarding_status !== 'pending' && (
+                                                {registrationAllowed && user.account_status !== 'ARCHIVED' && user.onboarding_status && user.onboarding_status !== 'pending' && (
                                                     <>
                                                         {canEdit && <div className="my-1 h-px bg-border" />}
                                                         {user.onboarding_status === 'completed' && (
@@ -1082,7 +1109,20 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                                 {/* Any onboarding state: eligibility is decided by permissions, protections and dependencies. */}
                                                 {permanentDeleteAllowed && user.onboarding_status && (
                                                     <>
-                                                        {(canEdit || registrationAllowed) && <div className="my-1 h-px bg-border" />}
+                                                        {user.account_status !== 'ARCHIVED' && (canEdit || registrationAllowed) && <div className="my-1 h-px bg-border" />}
+                                                        {user.account_status === 'ARCHIVED' ? (
+                                                            !/@released\.invalid$/i.test(user.email) && (
+                                                                <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+                                                                    onClick={() => { setRowMenuUserId(null); setArchiveTarget({ id: user.id, name: user.full_name || user.email, mode: 'release' }) }}>
+                                                                    <Unlock className="h-3.5 w-3.5 mr-2" /> Release Email &amp; Phone
+                                                                </button>
+                                                            )
+                                                        ) : (
+                                                            <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+                                                                onClick={() => { setRowMenuUserId(null); setArchiveTarget({ id: user.id, name: user.full_name || user.email, mode: 'archive' }) }}>
+                                                                <Archive className="h-3.5 w-3.5 mr-2" /> Archive &amp; Revoke Access
+                                                            </button>
+                                                        )}
                                                         <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted text-red-600"
                                                             onClick={() => { setRowMenuUserId(null); setPermanentTarget({ id: user.id, name: user.full_name || user.email }) }}>
                                                             <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete Employee Permanently
@@ -1223,6 +1263,17 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 entry="hr"
                 onClose={() => setPermanentTarget(null)}
                 onDeleted={async () => { await loadUsers() }}
+                onArchiveInstead={(t) => { setPermanentTarget(null); setArchiveTarget({ ...t, mode: 'archive' }) }}
+                notify={(m) => toast(m)}
+            />
+
+            {/* ─── Archive & Revoke Access / Release Email & Phone (former employees; shared with User Management) ──── */}
+            <ArchiveIdentityDialog
+                target={archiveTarget}
+                mode={archiveTarget?.mode}
+                entry="hr"
+                onClose={() => setArchiveTarget(null)}
+                onDone={async () => { await loadUsers() }}
                 notify={(m) => toast(m)}
             />
 

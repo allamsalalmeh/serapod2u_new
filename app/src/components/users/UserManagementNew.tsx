@@ -52,6 +52,8 @@ import {
   AlertTriangle,
   Shield,
   Building2,
+  Archive,
+  Unlock,
 } from "lucide-react";
 import {
   Dialog,
@@ -63,6 +65,7 @@ import {
 } from "@/components/ui/dialog";
 import UserDialogNew, { type EditAccessSubmission } from "./UserDialogNew";
 import PermanentDeleteDialog from "@/components/identity/PermanentDeleteDialog";
+import ArchiveIdentityDialog, { type ArchiveMode } from "@/components/identity/ArchiveIdentityDialog";
 import type { User as UserType, Role, Organization } from "@/types/user";
 import { getAvatarSrc } from "@/lib/utils";
 import { compressAvatar, formatFileSize } from "@/lib/utils/imageCompression";
@@ -118,6 +121,9 @@ const formatDateTime = (dateString: string | null): string => {
 };
 
 // Check if user is online (logged in within last 15 minutes)
+/** Email of an archived account whose identifiers were released (identity_released_placeholder_email). */
+const isReleasedPlaceholder = (email?: string | null): boolean => !!email && /@released\.invalid$/i.test(email);
+
 const isUserOnline = (lastLoginAt: string | null): boolean => {
   if (!lastLoginAt) return false;
   try {
@@ -298,6 +304,8 @@ export default function UserManagementNew({
   const [roleFilter, setRoleFilter] = useState("");
   const [orgFilter, setOrgFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  // Lifecycle view: archived (former) users are historical master data, never counted or listed as active users.
+  const [lifecycleView, setLifecycleView] = useState<"active" | "archived" | "all">("active");
   const [orgTypeFilter, setOrgTypeFilter] = useState("");
   const [programFilter, setProgramFilter] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -1056,6 +1064,7 @@ export default function UserManagementNew({
             ? ((userData as any).initial_profiles || []).filter((p: any) => p.roleId && p.scopeId).map((p: any) => ({ role_id: p.roleId, scope_id: p.scopeId }))
             : null,
           linked_user_id: linkedUserId || null,
+          released_identifier_decision: (userData as any).released_identifier_decision === "new_person" ? "new_person" : null,
           // HQ only: Employee Self Service is the default (true); an explicit exclusion travels as false. Re-judged on the server.
           ...(typeof (userData as any).include_ess === 'boolean' ? { include_ess: (userData as any).include_ess } : {}),
         }, {
@@ -1063,6 +1072,11 @@ export default function UserManagementNew({
           role_code: userProfile.role_code,
         });
 
+        if (!result.success && (result as any).code === "IDENTITY_PREVIOUSLY_RELEASED") {
+          // Never decided silently: the administrator chooses "same person" (reactivate) or "different person".
+          setReleasedDecision({ userData, avatarFile });
+          return;
+        }
         if (!result.success) {
           // The account exists but a later step failed: say so honestly and refresh the list so it is visible.
           // A retry cannot create a duplicate (the identity check now finds the account).
@@ -1244,16 +1258,10 @@ export default function UserManagementNew({
   };
 
   // --- OTP-protected deletion state ---
-  const [deleteOtpOpen, setDeleteOtpOpen] = useState(false);
-  const [deleteOtpStep, setDeleteOtpStep] = useState<'confirm' | 'otp' | 'deleting'>('confirm');
-  const [deleteTargetUser, setDeleteTargetUser] = useState<{ id: string; name: string } | null>(null);
-  const [deleteOtpCode, setDeleteOtpCode] = useState('');
-  const [deleteOtpCodeId, setDeleteOtpCodeId] = useState('');
-  const [deleteOtpMaskedRecipient, setDeleteOtpMaskedRecipient] = useState('');
-  const [deleteOtpChannel, setDeleteOtpChannel] = useState<'whatsapp' | 'sms' | 'email' | null>(null);
-  const [deleteOtpError, setDeleteOtpError] = useState('');
-  const [deleteOtpSending, setDeleteOtpSending] = useState(false);
-  const [, setDeleteOtpRemovalMode] = useState<'delete' | 'archive' | null>(null);
+  // Archive & Revoke Access / Release Email & Phone (shared with HR → Employees; the database decides and records).
+  const [archiveTarget, setArchiveTarget] = useState<{ id: string; name: string; mode: ArchiveMode } | null>(null);
+  // Add User: the email/phone was released by an archived former user — the administrator decides "different person".
+  const [releasedDecision, setReleasedDecision] = useState<{ userData: Partial<UserType> & { password?: string }; avatarFile?: File | null } | null>(null);
   // Delete User = canonical permanent identity deletion (shared with HR); the OTP dialog below only archives.
   const [permanentTarget, setPermanentTarget] = useState<{ id: string; name: string } | null>(null);
 
@@ -1269,73 +1277,10 @@ export default function UserManagementNew({
     setPermanentTarget({ id: userId, name: userName });
   };
 
-  // Archive (history kept, identifiers reserved) through the OTP-protected flow; offered when permanent deletion is blocked.
+  // Archive & Revoke Access: offered when permanent deletion is blocked (never applied automatically).
   const openArchiveDialog = (target: { id: string; name: string }) => {
     setPermanentTarget(null);
-    setDeleteTargetUser({ id: target.id, name: target.name });
-    setDeleteOtpStep('confirm');
-    setDeleteOtpCode('');
-    setDeleteOtpCodeId('');
-    setDeleteOtpMaskedRecipient('');
-    setDeleteOtpChannel(null);
-    setDeleteOtpError('');
-    setDeleteOtpRemovalMode(null);
-    setDeleteOtpOpen(true);
-  };
-
-  const handleDeleteOtpRequest = async () => {
-    if (!deleteTargetUser) return;
-    setDeleteOtpSending(true);
-    setDeleteOtpError('');
-    try {
-      const res = await fetch('/api/admin/delete-user-otp/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetUserId: deleteTargetUser.id }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to send OTP');
-      setDeleteOtpCodeId(data.codeId);
-      setDeleteOtpMaskedRecipient(data.maskedRecipient || data.maskedEmail || data.maskedPhone || '');
-      setDeleteOtpChannel(
-        data.channel === 'email' ? 'email' : data.channel === 'sms' ? 'sms' : 'whatsapp',
-      );
-      setDeleteOtpRemovalMode(data.removalMode === 'archive' ? 'archive' : 'delete');
-      setDeleteOtpStep('otp');
-    } catch (err: any) {
-      setDeleteOtpError(err.message);
-    } finally {
-      setDeleteOtpSending(false);
-    }
-  };
-
-  const handleDeleteOtpVerify = async () => {
-    if (!deleteTargetUser || !deleteOtpCode || !deleteOtpCodeId) return;
-    setDeleteOtpSending(true);
-    setDeleteOtpError('');
-    try {
-      setDeleteOtpStep('deleting');
-      const res = await fetch('/api/admin/delete-user-otp/verify-and-delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetUserId: deleteTargetUser.id, code: deleteOtpCode, codeId: deleteOtpCodeId }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setDeleteOtpStep('otp');
-        throw new Error(data.error || 'Verification failed');
-      }
-      toast({
-        title: "User Archived",
-        description: data.message || `${deleteTargetUser.name} was archived`,
-      });
-      setDeleteOtpOpen(false);
-      await loadUsers();
-    } catch (err: any) {
-      setDeleteOtpError(err.message);
-    } finally {
-      setDeleteOtpSending(false);
-    }
+    setArchiveTarget({ ...target, mode: "archive" });
   };
 
   const organizationById = useMemo(
@@ -1401,13 +1346,16 @@ export default function UserManagementNew({
           (statusFilter === "consumer-verified" && hasConsumerLaneConfirmation(user));
         const matchesProgram =
           !programFilter || getProgramLabelFromMemberships(user.loyalty_program_user_memberships) === programFilter;
+        const archived = user.account_status === "ARCHIVED";
+        const matchesLifecycle = lifecycleView === "all" || (lifecycleView === "archived" ? archived : !archived);
 
         return (
           matchesSearch &&
           matchesRole &&
           matchesOrganization &&
           matchesStatus &&
-          matchesProgram
+          matchesProgram &&
+          matchesLifecycle
         );
       })
       .sort((a, b) => {
@@ -1464,6 +1412,7 @@ export default function UserManagementNew({
     orgFilter,
     orgTypeFilter,
     statusFilter,
+    lifecycleView,
     programFilter,
     sortField,
     sortDirection,
@@ -1489,6 +1438,7 @@ export default function UserManagementNew({
     orgFilter,
     orgTypeFilter,
     statusFilter,
+    lifecycleView,
     programFilter,
     pageSize,
   ]);
@@ -1927,6 +1877,23 @@ export default function UserManagementNew({
               </select>
             </div>
 
+            {/* Lifecycle view */}
+            <div>
+              <label className="block text-sm font-medium text-[var(--sera-ink)]/80 mb-2">
+                Users
+              </label>
+              <select
+                aria-label="Lifecycle view"
+                className="w-full px-3 py-2 border border-[var(--sera-line)] rounded-md focus:outline-none focus:ring-2 focus:ring-[var(--sera-orange)]/100 bg-white"
+                onChange={(e) => setLifecycleView(e.target.value as "active" | "archived" | "all")}
+                value={lifecycleView}
+              >
+                <option value="active">Current users</option>
+                <option value="archived">Archived (former) users</option>
+                <option value="all">All, incl. archived</option>
+              </select>
+            </div>
+
             {/* Status Filter */}
             <div>
               <label className="block text-sm font-medium text-[var(--sera-ink)]/80 mb-2">
@@ -2209,6 +2176,11 @@ export default function UserManagementNew({
                               >
                                 {getUserDisplayName(user)}
                               </button>
+                              {user.account_status === "ARCHIVED" && (
+                                <span className="inline-flex items-center rounded border border-[var(--sera-line)] px-1.5 text-[10px] text-[var(--sera-muted)]">
+                                  Archived{isReleasedPlaceholder(user.email) ? " · email/phone released" : ""}
+                                </span>
+                              )}
                               {user.phone && (
                                 <div className="text-xs text-[var(--sera-muted)] truncate">
                                   {user.phone}
@@ -2326,6 +2298,33 @@ export default function UserManagementNew({
                                   </TooltipContent>
                                 </Tooltip>
                               )}
+                              {user.account_status === "ARCHIVED" ? (
+                                <>
+                                  {canManageUserDeletion() && !isReleasedPlaceholder(user.email) && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => setArchiveTarget({ id: user.id, name: user.full_name || user.email, mode: "release" })}
+                                      disabled={isSaving}
+                                      className="h-8 w-8 shrink-0 p-0 text-[var(--sera-muted)] hover:text-[var(--sera-ink)] hover:bg-[var(--sera-ink)]/[0.02]"
+                                      title="Release email & phone for a new person"
+                                    >
+                                      <Unlock className="w-4 h-4" />
+                                    </Button>
+                                  )}
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleAccountStatus(user.id, "ACTIVE", user.full_name || user.email)}
+                                    disabled={isSaving}
+                                    className="h-8 w-8 shrink-0 p-0 text-[var(--sera-muted)]/70 hover:text-[var(--sera-muted)] hover:bg-[var(--sera-ink)]/[0.02]"
+                                    title="Reactivate (same person returning; access must be granted again)"
+                                  >
+                                    <Power className="w-4 h-4" />
+                                  </Button>
+                                </>
+                              ) : (
+                                <>
                               {user.account_status === "SUSPENDED" ? (
                                 <Button
                                   variant="ghost"
@@ -2375,6 +2374,20 @@ export default function UserManagementNew({
                               >
                                 <Power className="w-4 h-4" />
                               </Button>
+                                </>
+                              )}
+                              {canManageUserDeletion() && user.account_status !== "ARCHIVED" && user.id !== userProfile.id && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setArchiveTarget({ id: user.id, name: user.full_name || user.email, mode: "archive" })}
+                                  disabled={isSaving}
+                                  className="h-8 w-8 shrink-0 p-0 text-[var(--sera-muted)] hover:text-[var(--sera-ink)] hover:bg-[var(--sera-ink)]/[0.02]"
+                                  title="Archive & revoke access (former user; history kept)"
+                                >
+                                  <Archive className="w-4 h-4" />
+                                </Button>
+                              )}
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -2514,104 +2527,39 @@ export default function UserManagementNew({
         notify={(m) => toast(m)}
       />
 
-      {/* OTP-Protected Archive User Dialog (history kept; never a hard delete) */}
-      <Dialog open={deleteOtpOpen} onOpenChange={(open) => { if (!deleteOtpSending) { setDeleteOtpOpen(open); } }}>
+      {/* Archive & Revoke Access / Release Email & Phone (same backend as HR → Employees) */}
+      <ArchiveIdentityDialog
+        target={archiveTarget}
+        mode={archiveTarget?.mode}
+        entry="user_management"
+        onClose={() => setArchiveTarget(null)}
+        onDone={async () => { setSelectedUsers(new Set()); await loadUsers(); }}
+        notify={(m) => toast(m)}
+      />
+
+      {/* Add User: released identifier of an archived former user — same person (reactivate) or a different person? */}
+      <Dialog open={!!releasedDecision} onOpenChange={(open) => { if (!open) setReleasedDecision(null); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-red-700">
-              <AlertTriangle className="w-5 h-5" />
-              {deleteOtpStep === 'confirm'
-                ? 'Archive User'
-                : deleteOtpStep === 'otp'
-                  ? 'Enter Verification Code'
-                  : 'Archiving User...'}
-            </DialogTitle>
+            <DialogTitle>Email or phone used by a former user</DialogTitle>
             <DialogDescription>
-              {deleteOtpStep === 'confirm' && (
-                <>A verification code will be sent to the organization contact using the <strong>User Deletion OTP</strong> routing in Notifications → Types before archiving <strong>{deleteTargetUser?.name}</strong>.</>
-              )}
-              {deleteOtpStep === 'otp' && (
-                <>
-                  A 4-digit code was sent via {deleteOtpChannel === 'email' ? 'email' : deleteOtpChannel === 'sms' ? 'SMS' : 'WhatsApp'} to <strong>{deleteOtpMaskedRecipient}</strong>. Enter it below to confirm.
-                  {' The account will be archived: its history is kept and its email and phone stay reserved (reactivate the account if the person returns).'}
-                </>
-              )}
-              {deleteOtpStep === 'deleting' && 'Please wait while the user is being archived...'}
+              {releasedDecision?.userData.email} (or the phone number) belonged to a former user whose account was archived and released.
+              A returning person keeps their history by reactivating the archived account; a different person gets a new account with no access or history from it.
             </DialogDescription>
           </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            {deleteOtpStep === 'confirm' && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                <div className="flex items-start gap-2">
-                  <Shield className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
-                  <div className="text-sm text-red-800">
-                    <p className="font-medium mb-1">Archiving keeps everything.</p>
-                    <ul className="list-disc ml-4 space-y-0.5 text-xs">
-                      <li>Orders, documents and other business history stay attributed to this person.</li>
-                      <li>Archived users cannot sign in; their email and phone stay reserved — reactivate them if they return.</li>
-                      <li>Nothing is deleted. Permanent deletion is the separate Delete User check.</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {deleteOtpStep === 'otp' && (
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-sm font-medium text-[var(--sera-ink)]/80 mb-1">Verification Code</label>
-                  <Input
-                    type="text"
-                    maxLength={4}
-                    value={deleteOtpCode}
-                    onChange={(e) => setDeleteOtpCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                    placeholder="0000"
-                    className="text-center text-2xl tracking-widest font-mono h-12"
-                    autoFocus
-                  />
-                </div>
-                <p className="text-xs text-[var(--sera-muted)] text-center">Code expires in 5 minutes</p>
-              </div>
-            )}
-
-            {deleteOtpStep === 'deleting' && (
-              <div className="flex items-center justify-center py-4">
-                <Loader2 className="w-8 h-8 animate-spin text-red-600" />
-              </div>
-            )}
-
-            {deleteOtpError && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                <p className="text-sm text-red-600 text-center">{deleteOtpError}</p>
-              </div>
-            )}
-          </div>
-
           <DialogFooter className="flex gap-2 sm:gap-2">
-            {deleteOtpStep !== 'deleting' && (
-              <Button variant="outline" onClick={() => setDeleteOtpOpen(false)} disabled={deleteOtpSending}>
-                Cancel
-              </Button>
-            )}
-            {deleteOtpStep === 'confirm' && (
-              <Button
-                variant="destructive"
-                onClick={handleDeleteOtpRequest}
-                disabled={deleteOtpSending}
-              >
-                {deleteOtpSending ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Sending...</> : 'Check & Send Verification Code'}
-              </Button>
-            )}
-            {deleteOtpStep === 'otp' && (
-              <Button
-                variant="destructive"
-                onClick={handleDeleteOtpVerify}
-                disabled={deleteOtpSending || deleteOtpCode.length !== 4}
-              >
-                {deleteOtpSending ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Verifying...</> : 'Verify & Archive'}
-              </Button>
-            )}
+            <Button variant="outline" onClick={() => { setReleasedDecision(null); setDialogOpen(false); setLifecycleView("archived"); }}>
+              Same person — show archived users
+            </Button>
+            <Button
+              onClick={() => {
+                const pending = releasedDecision;
+                setReleasedDecision(null);
+                if (pending) handleSaveUser({ ...pending.userData, released_identifier_decision: "new_person" } as any, pending.avatarFile);
+              }}
+            >
+              Different person — create new account
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
