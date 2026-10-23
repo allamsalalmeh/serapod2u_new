@@ -16,6 +16,8 @@ export interface ReturnCaseItem {
     units_per_case_snapshot: number | null
     total_units: number
     unit_cost: number
+    /** Price of one stock unit to the return source; values the return. */
+    unit_price?: number | null
     reason: string | null
     condition: string | null
     photo_url: string | null
@@ -155,6 +157,8 @@ export interface EligibleProduct {
     image_url: string | null
     units_per_case: number
     unit_cost: number
+    distributor_price?: number | null
+    retailer_price?: number | null
     is_active: boolean
 }
 

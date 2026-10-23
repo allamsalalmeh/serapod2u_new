@@ -1,6 +1,6 @@
 import { guardUserOperation } from '@/lib/security-access/operation'
 import { NextRequest, NextResponse } from 'next/server'
-import { getReturnContext, loadAccessibleCase, buildReturnItemRows, validateReturnSource, validateReturnWarehouse, RETURN_ORG_SELECT } from '@/lib/returns/server'
+import { getReturnContext, loadAccessibleCase, buildReturnItemRows, applyReturnSourcePrices, validateReturnSource, validateReturnWarehouse, RETURN_ORG_SELECT } from '@/lib/returns/server'
 import { decorateCase } from '@/lib/returns/compute'
 import { normalizeReturnSourceType } from '@/lib/returns/constants'
 import type { ReturnSettings } from '@/lib/returns/types'
@@ -152,9 +152,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         const { rows: itemRows, error: itemError } = buildReturnItemRows(id, body.items)
         if (itemError) return NextResponse.json({ error: itemError }, { status: 400 })
 
+        const sourceType = normalizeReturnSourceType(patch.return_source_type ?? rc.return_source_type)
+        const pricedRows = itemRows && itemRows.length > 0
+            ? await applyReturnSourcePrices(ctx.admin, itemRows, sourceType)
+            : []
+
         await ctx.admin.from('return_case_items').delete().eq('return_case_id', id)
-        if (itemRows && itemRows.length > 0) {
-            const insertRows = itemRows.map(({ id: _id, ...r }) => r)
+        if (pricedRows.length > 0) {
+            const insertRows = pricedRows.map(({ id: _id, ...r }) => r)
             const { error: itemsErr } = await ctx.admin.from('return_case_items').insert(insertRows)
             if (itemsErr) return NextResponse.json({ error: itemsErr.message }, { status: 500 })
         }

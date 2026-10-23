@@ -28,7 +28,7 @@ const ORG_SELECT = 'id, org_code, org_name, org_type_code, branch'
 
 /** Slim item projection — only the fields aggregation needs. */
 const ITEMS_SELECT =
-    'product_id, variant_id, sku, product_name, variant_name, quantity, case_qty, loose_piece_qty, units_per_case_snapshot, total_units, unit_cost, reason'
+    'product_id, variant_id, sku, product_name, variant_name, quantity, case_qty, loose_piece_qty, units_per_case_snapshot, total_units, unit_cost, unit_price, reason'
 
 export interface ReportFilters {
     sourceType: ReturnSourceType | null

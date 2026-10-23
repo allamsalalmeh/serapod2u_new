@@ -1,6 +1,6 @@
 import { guardUserOperation } from '@/lib/security-access/operation'
 import { NextRequest, NextResponse } from 'next/server'
-import { getReturnContext, buildReturnItemRows, validateReturnSource, validateReturnWarehouse, RETURN_ORG_SELECT } from '@/lib/returns/server'
+import { getReturnContext, buildReturnItemRows, applyReturnSourcePrices, validateReturnSource, validateReturnWarehouse, RETURN_ORG_SELECT } from '@/lib/returns/server'
 import { decorateCase } from '@/lib/returns/compute'
 import { normalizeReturnSourceType, sourceTypeForOrgTypeCode } from '@/lib/returns/constants'
 import { triggerReturnNotification } from '@/lib/returns/notifications'
@@ -157,7 +157,8 @@ export async function POST(request: NextRequest) {
     // Persist the full worksheet breakdown (case_qty, loose_piece_qty,
     // units_per_case_snapshot, total_units, …) — not just the legacy quantity.
     if (itemRows && itemRows.length > 0) {
-        const insertRows = itemRows.map(({ id: _id, ...r }) => ({ ...r, return_case_id: created.id }))
+        const pricedRows = await applyReturnSourcePrices(ctx.admin, itemRows, sourceType)
+        const insertRows = pricedRows.map(({ id: _id, ...r }) => ({ ...r, return_case_id: created.id }))
         const { error: insertErr } = await ctx.admin.from('return_case_items').insert(insertRows)
         if (insertErr) {
             return NextResponse.json({ error: insertErr.message }, { status: 500 })
