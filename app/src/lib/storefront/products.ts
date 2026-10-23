@@ -8,7 +8,7 @@ import {
 import { formatStorefrontError } from "@/lib/storefront/error";
 import { getStorageUrl } from "@/lib/utils";
 import { mergeStructuredAttributes } from "@/lib/products/structured-attributes";
-import { sellableStock } from "@/lib/storefront/order-stock";
+import { sellableStock, type StorefrontStockChannel } from "@/lib/storefront/order-stock";
 
 /**
  * Resolve a variant image/media URL to a full public URL.
@@ -222,6 +222,7 @@ export async function listProducts(params: ListProductsParams = {}) {
     limit = 12,
     outdoorOnly = false,
   } = params;
+  const stockChannel = outdoorOnly || params.channel === "outdoor" ? "outdoor" : "store";
   const supabase = createAdminClient();
   const offset = (page - 1) * limit;
 
@@ -344,6 +345,7 @@ export async function listProducts(params: ListProductsParams = {}) {
   const stock = await sellableStock(
     supabase,
     (data || []).flatMap((p: any) => sellableVariants(p).map((v: any) => v.id)),
+    stockChannel,
   );
 
   // Transform data
@@ -471,6 +473,7 @@ export async function isOutdoorStoreOnly(productId: string) {
 
 export async function getProductDetail(
   productId: string,
+  channel: StorefrontStockChannel = "store",
 ): Promise<StorefrontProductDetail | null> {
   const supabase = createAdminClient();
 
@@ -526,6 +529,7 @@ export async function getProductDetail(
   const stock = await sellableStock(
     supabase,
     (p.product_variants || []).filter((v: any) => v.is_active !== false).map((v: any) => v.id),
+    channel,
   );
 
   return {

@@ -58,6 +58,7 @@ interface Variant {
   retailer_price: number | null
   distributor_price: number | null
   other_price: number | null
+  online_stock_allocation?: number | null
   is_active: boolean
   is_default: boolean
   created_at: string
@@ -301,6 +302,12 @@ export default function VariantsTab({ userProfile, onRefresh, refreshTrigger }: 
       if (!editingVariant) {
         dataToSave.product_id = productId
         dataToSave.variant_code = dbDataClean.variant_code || `VAR-${Date.now().toString().slice(-6)}`
+      }
+
+      // Written only when changed: website shipments lower it while the dialog is open.
+      const allocation = dbDataClean.online_stock_allocation ?? null
+      if (allocation !== (editingVariant?.online_stock_allocation ?? null)) {
+        dataToSave.online_stock_allocation = allocation
       }
 
       let variantId: string
