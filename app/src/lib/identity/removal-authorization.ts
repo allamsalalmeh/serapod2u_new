@@ -14,7 +14,7 @@ import { setIdentityAccountStatus } from './provisioning'
  *   - /api/admin/delete-user-otp/request and /verify-and-delete (User Management
  *     archive; permanent deletion is the canonical identity deletion,
  *     lib/identity/permanent-deletion.ts, decided by the database)
- *   - /api/admin/bulk-delete-users (guarded staging tool)
+ *   (/api/admin/bulk-delete-users also deletes only through that service)
  *   - organization deletion (/api/organizations/delete/request-otp,
  *     /verify-and-delete and the guarded /api/organizations/delete), which
  *     deletes every member identity of the organization

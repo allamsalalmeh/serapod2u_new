@@ -17,6 +17,7 @@ export type RouteCoverage =
   | { kind: 'ENTERPRISE'; permissions: string[]; via?: string[] }
 
 export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
+  "security-access/governance/legacy-preview": { kind: 'ENTERPRISE', permissions: ["security.audit.view"] },
   "accounting/accounts": { kind: 'ENTERPRISE', permissions: ["finance.account.manage", "finance.ledger.view"] },
   "accounting/accounts/[id]": { kind: 'ENTERPRISE', permissions: ["finance.account.manage", "finance.ledger.view"] },
   "accounting/accounts/[id]/toggle-active": { kind: 'ENTERPRISE', permissions: ["finance.account.manage"] },
@@ -55,7 +56,7 @@ export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
   "admin/adjustments/[id]/status": { kind: 'ENTERPRISE', permissions: ["manufacturing.adjustment.manage", "manufacturing.adjustment.administer"] },
   "admin/apply-migration": { kind: 'ENTERPRISE', permissions: ["platform.data.destructive"], via: ["lib/server/destructive-ops-guard.ts"] },
   "admin/apply-rls-fix": { kind: 'ENTERPRISE', permissions: ["platform.data.destructive"], via: ["lib/server/destructive-ops-guard.ts"] },
-  "admin/bulk-delete-users": { kind: 'ENTERPRISE', permissions: ["platform.data.destructive", "platform.identity.delete"], via: ["lib/server/destructive-ops-guard.ts", "lib/identity/removal-authorization.ts"] },
+  "admin/bulk-delete-users": { kind: 'ENTERPRISE', permissions: ["platform.data.destructive", "platform.identity.delete"], via: ["lib/server/destructive-ops-guard.ts", "lib/identity/permanent-deletion.ts"] },
   "admin/categories/upload": { kind: 'ENTERPRISE', permissions: ["product.catalog.manage"] },
   "admin/cleanup/export": { kind: 'ENTERPRISE', permissions: ["platform.data.destructive"] },
   "admin/cleanup/runtime-report": { kind: 'ENTERPRISE', permissions: ["platform.data.destructive"] },

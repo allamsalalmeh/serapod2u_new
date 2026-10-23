@@ -57,9 +57,11 @@ describe('every identity removal path decides Archive Identities', () => {
     expect(verify).not.toMatch(/auth\.admin\.deleteUser/)
     expect(verify).not.toMatch(/account_status:\s*'ARCHIVED'/) // the archive write lives in the shared helper only
 
+    // The bulk tool deletes only through the canonical permanent deletion (decided by the database per identity).
     const bulk = src('app/api/admin/bulk-delete-users/route.ts')
-    expect(bulk.indexOf('authorizeIdentityRemoval(callerId, id)')).toBeGreaterThan(-1)
-    expect(bulk.indexOf('authorizeIdentityRemoval(')).toBeLessThan(bulk.indexOf('batchDeleteRelatedData(batch'))
+    expect(bulk).toContain("deletionPreview(callerId, id, 'user_management')")
+    expect(bulk).toContain('deletionExecute({')
+    expect(bulk).not.toMatch(/\.from\(["']audit_logs["']\)|\.from\(["']orders["']\)|\.from\(["']users["']\)|auth\.admin\.deleteUser/)
 
     const actions = src('lib/actions.ts')
     const fn = actions.slice(actions.indexOf('export async function deleteUserWithAuth'), actions.indexOf('export async function', actions.indexOf('export async function deleteUserWithAuth') + 10))
@@ -100,12 +102,15 @@ describe('every identity removal path decides Archive Identities', () => {
   })
 
   it('route coverage declares platform.identity.delete with the helper for every removal route', () => {
-    for (const route of ['admin/delete-user-otp/request', 'admin/delete-user-otp/verify-and-delete', 'admin/bulk-delete-users',
+    for (const route of ['admin/delete-user-otp/request', 'admin/delete-user-otp/verify-and-delete',
       'organizations/delete', 'organizations/delete/request-otp', 'organizations/delete/verify-and-delete']) {
       const coverage = ROUTE_COVERAGE[route] as any
       expect(coverage.permissions, route).toContain('platform.identity.delete')
       expect(coverage.via, route).toContain(helper)
     }
+    const bulkCoverage = ROUTE_COVERAGE['admin/bulk-delete-users'] as any
+    expect(bulkCoverage.permissions).toContain('platform.identity.delete')
+    expect(bulkCoverage.via).toContain('lib/identity/permanent-deletion.ts')
   })
 
   it('the User Management delete control follows the S&A answer once enforced', () => {

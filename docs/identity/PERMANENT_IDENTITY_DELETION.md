@@ -91,8 +91,10 @@ Create disposable people first (Add User / Add Employee) with an email like `uat
 
 ## 7. Risks / open items
 
-- `/api/admin/bulk-delete-users` (guarded staging tool, env-gated) still has its own hard delete that deletes `audit_logs` and
-  re-assigns orders. Not wired to any UI; should be rebuilt on `identity_deletion_execute` or removed.
+- `/api/admin/bulk-delete-users` (guarded staging tool, env-gated, no UI) was rebuilt on the canonical service: body
+  `{ userIds, reason, confirmation: "DELETE <n> USERS" }`, max 500, each account previewed and deleted in its own transaction
+  (3 at a time), blocked/unauthorized accounts reported and kept. It no longer deletes `audit_logs`, re-assigns orders or calls
+  `auth.admin.deleteUser` directly.
 - User Management permanent deletion no longer uses the WhatsApp/SMS OTP (OTP now protects archive only); it relies on explicit
   S&A authority + reason + typed confirmation + server re-check.
 - `before_image` keeps the deleted person's profile row (PII) as audit evidence; no credentials.
