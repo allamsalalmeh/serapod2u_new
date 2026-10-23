@@ -61,7 +61,8 @@ export async function POST(request: NextRequest) {
             || typeof reason !== 'string') {
             return NextResponse.json({ success: false, error: 'The request is incomplete.' }, { status: 400 })
         }
-        if (reason.trim().length < 10) {
+        // Archive & Revoke Access makes the reason optional; releasing identifiers still requires one.
+        if (action === 'release' && reason.trim().length < 10) {
             return NextResponse.json({ success: false, error: 'Enter a reason of at least 10 characters.', code: 'REASON_REQUIRED' }, { status: 400 })
         }
 

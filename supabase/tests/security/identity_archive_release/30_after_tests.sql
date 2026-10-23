@@ -18,7 +18,7 @@ select ipd.expect((public.identity_archive_preview(ipd.u(28), ipd.u(30), 'user_m
 select ipd.expect(not (public.identity_archive_preview(ipd.u(28), ipd.u(30), 'user_management')->>'release_allowed')::boolean is false
                   and (select count(*) from jsonb_array_elements(public.identity_archive_preview(ipd.u(28), ipd.u(30), 'user_management')->'warnings') w
                        where w->>'code' in ('ACCESS_REVOKED','SESSIONS_REVOKED')) = 2, 'preview: explains that access and sessions will be revoked');
-select ipd.expect(ipd.try($$select ipd.archive(28, 30, 2, 'user_management', false, null, 'short')$$) like '22023 identity_archive_reason_required%', 'validate: reason');
+-- Reason is optional now: an empty reason is accepted (asserted at the archive below).
 select ipd.expect(ipd.try($$select ipd.archive(28, 30, 3, 'user_management', false, null, 'Employee left the company', 'nobody@example.test')$$) like '22023 identity_deletion_confirmation_mismatch%', 'validate: typed confirmation');
 select ipd.expect(ipd.try($$select ipd.archive(28, 30, 4, 'user_management', false, null, 'Employee left the company', null, 'retired')$$) like '22023 identity_archive_employment_end_invalid%', 'validate: employment end');
 select ipd.expect((select account_status from public.users where id = ipd.u(30)) = 'ACTIVE', 'validate: refused attempts changed nothing');
@@ -28,7 +28,7 @@ select ipd.expect(not (public.identity_deletion_preview(ipd.u(28), ipd.u(30), 'u
   'delete: 30 has protected history → permanent deletion blocked (archive is the alternative, never automatic)');
 
 -- ── Archive & Revoke Access (30: Supply Chain, warehouse, documents, finance, leave, S&A, SoD) ──
-select ipd.expect(ipd.archive(28, 30, 10)->>'status' = 'completed', 'archive: completed');
+select ipd.expect(ipd.archive(28, 30, 10, 'user_management', false, null, '')->>'status' = 'completed', 'archive: completed (empty reason accepted)');
 select ipd.expect((select account_status = 'ARCHIVED' and is_active is false and id = ipd.u(30) and full_name = 'Deanna Finance' and employee_no = 910030
                    from public.users where id = ipd.u(30)), 'archive: UUID, name and employee number unchanged; account ARCHIVED');
 select ipd.expect((select fp from h0) = ipd.history_fp(), 'history: orders, stock movement, document, GL journal, leave, payroll, SoD and assignment rows unchanged');
@@ -55,6 +55,10 @@ select ipd.expect(ipd.archive_codes(public.identity_archive_preview(ipd.u(28), i
   'idempotency: an archived identity cannot be archived again');
 select ipd.expect((select count(*) from public.identity_lifecycle_actions where target_user_id = ipd.u(30) and action = 'archive' and status = 'completed') = 1,
   'record: one completed archive record');
+select ipd.expect((select reason = '' from public.identity_lifecycle_actions where request_id = ipd.x(8010)),
+  'record: empty administrator reason recorded exactly (not fabricated, not "resigned"/"terminated")');
+select ipd.expect((select account_status_reason = 'Archived (Archive & Revoke Access; no administrator reason recorded)' from public.users where id = ipd.u(30)),
+  'record: system-generated audit metadata when no reason was supplied');
 
 -- ── Release email and phone ────────────────────────────────────────────────
 select ipd.expect(ipd.release(28, 30, 20)->>'status' = 'completed', 'release: completed');

@@ -46,11 +46,20 @@ describe('Archive & Revoke Access route (User Management + HR share it)', () => 
 
   it('validates before the database', async () => {
     const { POST } = await import('./route')
-    for (const bad of [{ ...archive, action: 'purge' }, { ...archive, reason: 'short' }, { ...archive, confirmation: ' ' },
-      { ...archive, employment_end: 'retired' }, { ...archive, release_identifiers: 'yes' }, { ...archive, request_id: 'x' }]) {
+    for (const bad of [{ ...archive, action: 'purge' }, { ...archive, confirmation: ' ' },
+      { ...archive, employment_end: 'retired' }, { ...archive, release_identifiers: 'yes' }, { ...archive, request_id: 'x' },
+      { ...archive, action: 'release', reason: 'short' }]) {
       expect((await POST(post(bad))).status).toBeGreaterThanOrEqual(400)
     }
     expect(rpc).not.toHaveBeenCalled()
+  })
+
+  it('archive accepts an empty (optional) reason and passes it through unchanged', async () => {
+    rpc.mockResolvedValue({ data: { status: 'completed', action_id: 'a-0', release: { released: false } }, error: null })
+    const { POST } = await import('./route')
+    const res = await POST(post({ ...archive, reason: '' }))
+    expect(res.status).toBe(200)
+    expect(rpc).toHaveBeenCalledWith('identity_archive_execute', expect.objectContaining({ p_reason: '' }))
   })
 
   it('archive passes the session actor (never body values), release choice and employment end', async () => {

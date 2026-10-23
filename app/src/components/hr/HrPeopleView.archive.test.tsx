@@ -101,9 +101,8 @@ describe('HR People: former employees (Archive & Revoke Access)', () => {
     fireEvent.click(screen.getByLabelText('Terminated'))
     // Releasing email/phone is the default for a new archive.
     expect((screen.getByRole('checkbox', { name: /Release email and phone/ }) as HTMLInputElement).checked).toBe(true)
-    fireEvent.change(screen.getByLabelText('Reason (required)'), { target: { value: 'Contract ended last Friday' } })
+    fireEvent.change(screen.getByLabelText('Reason (optional)'), { target: { value: 'Contract ended last Friday' } })
     fireEvent.change(screen.getByLabelText(/to confirm/), { target: { value: 'tess@example.test' } })
-    fireEvent.click(screen.getByRole('checkbox', { name: /should lose all access/ }))
     await waitFor(() => expect(confirm.disabled).toBe(false))
     rows.splice(0, rows.length, row('completed', { account_status: 'ARCHIVED', is_active: false }))
     fireEvent.click(confirm)
@@ -117,6 +116,24 @@ describe('HR People: former employees (Archive & Revoke Access)', () => {
     expect((screen.getByRole('button', { name: /^Onboarded/ })).textContent).toContain('0')
     fireEvent.click(screen.getByRole('button', { name: /Former employees/ }))
     expect(await screen.findByRole('button', { name: 'Actions for Tess Tester' })).toBeTruthy()
+  })
+
+  it('archive with an empty (optional) reason succeeds and submits reason: "" with the chosen outcome', async () => {
+    mockFetch()
+    render(<HrPeopleView organizationId="org-a" canEdit />)
+    await openMenu()
+    fireEvent.click(await screen.findByText(/Archive & Revoke Access/))
+    await screen.findByText(/This is not a deletion/)
+    const confirm = screen.getByRole('button', { name: /Archive & revoke access/ }) as HTMLButtonElement
+    // No extra "I confirm …" checkbox is required any more.
+    expect(screen.queryByRole('checkbox', { name: /should lose all access/ })).toBeNull()
+    fireEvent.change(screen.getByLabelText(/to confirm/), { target: { value: 'tess@example.test' } })
+    await waitFor(() => expect(confirm.disabled).toBe(false)) // reason left empty
+    fireEvent.click(confirm)
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Archived — access revoked' })))
+    const post = fetchMock.mock.calls.find(([url, init]) => url === '/api/identity/archive' && init?.method === 'POST')!
+    expect(JSON.parse(post[1].body)).toEqual({ action: 'archive', user_id: EMP, entry: 'hr', request_id: '00000000-0000-0000-0000-00000000f001',
+      preview_token: 'tok-a', reason: '', confirmation: 'tess@example.test', release_identifiers: true, employment_end: 'resigned' })
   })
 
   it('a blocked archive explains why and never enables the action', async () => {

@@ -90,7 +90,11 @@ export default function ArchiveIdentityDialog({ target, entry, mode = 'archive',
     const allowed = !!preview && (mode === 'archive' ? preview.archive_allowed : preview.release_allowed)
     const phrase = preview?.confirmation_phrase ?? ''
     const phraseOk = mode === 'release' || (!!phrase && typed.trim().toLowerCase() === phrase.trim().toLowerCase())
-    const canSubmit = allowed && !loading && !submitting && confirmed && reason.trim().length >= 10 && phraseOk && !!requestId
+    // Archive & Revoke Access: typed email is the only confirmation; reason is optional.
+    // Release Email & Phone keeps its reason + confirmation checkbox (it has no typed phrase).
+    const confirmOk = mode === 'release' ? confirmed : true
+    const reasonOk = mode === 'release' ? reason.trim().length >= 10 : true
+    const canSubmit = allowed && !loading && !submitting && confirmOk && reasonOk && phraseOk && !!requestId
     const hasEmployment = (preview?.employment?.length ?? 0) > 0
 
     const submit = async () => {
@@ -216,9 +220,9 @@ export default function ArchiveIdentityDialog({ target, entry, mode = 'archive',
                                     </label>
                                 )}
                                 <div className="space-y-1.5">
-                                    <Label htmlFor="archive-reason" className="text-xs">Reason (required)</Label>
-                                    <Textarea id="archive-reason" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Resigned effective 31 Oct 2026" />
-                                    {reason.trim().length > 0 && reason.trim().length < 10 && <p className="text-[11px] text-red-600">Enter at least 10 characters.</p>}
+                                    <Label htmlFor="archive-reason" className="text-xs">{mode === 'archive' ? 'Reason (optional)' : 'Reason (required)'}</Label>
+                                    <Textarea id="archive-reason" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={mode === 'archive' ? 'Optional — e.g. Resigned effective 31 Oct 2026' : 'e.g. Resigned effective 31 Oct 2026'} />
+                                    {mode === 'release' && reason.trim().length > 0 && reason.trim().length < 10 && <p className="text-[11px] text-red-600">Enter at least 10 characters.</p>}
                                 </div>
                                 {mode === 'archive' && (
                                     <div className="space-y-1.5">
@@ -226,12 +230,12 @@ export default function ArchiveIdentityDialog({ target, entry, mode = 'archive',
                                         <Input id="archive-phrase" value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" spellCheck={false} />
                                     </div>
                                 )}
-                                <label className="flex items-start gap-2 text-xs">
-                                    <Checkbox checked={confirmed} onCheckedChange={(c) => setConfirmed(c === true)} className="mt-0.5" />
-                                    <span>{mode === 'archive'
-                                        ? `I confirm that ${preview.target.full_name || 'this person'} should lose all access and be archived.`
-                                        : `I confirm that ${preview.target.full_name || 'this person'}'s email and phone should be released for reuse.`}</span>
-                                </label>
+                                {mode === 'release' && (
+                                    <label className="flex items-start gap-2 text-xs">
+                                        <Checkbox checked={confirmed} onCheckedChange={(c) => setConfirmed(c === true)} className="mt-0.5" />
+                                        <span>I confirm that {preview.target.full_name || 'this person'}'s email and phone should be released for reuse.</span>
+                                    </label>
+                                )}
                             </>
                         )}
                         {error && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}

@@ -32,10 +32,9 @@ const releaseBox = () => screen.getByRole('checkbox', { name: 'Release email and
 const isChecked = () => (releaseBox() as HTMLInputElement).checked
 const ui = (target: typeof A | null) => <ArchiveIdentityDialog target={target} entry="user_management" onClose={vi.fn()} onDone={vi.fn()} />
 
-async function confirmAndSubmit(userId: string) {
-  fireEvent.change(screen.getByLabelText('Reason (required)'), { target: { value: 'Resigned effective today' } })
+async function confirmAndSubmit(userId: string, reasonValue?: string) {
+  if (reasonValue !== undefined) fireEvent.change(screen.getByLabelText('Reason (optional)'), { target: { value: reasonValue } })
   fireEvent.change(screen.getByLabelText(/to confirm/), { target: { value: `${userId}@example.test` } })
-  fireEvent.click(screen.getByRole('checkbox', { name: /should lose all access/ }))
   const submit = screen.getByRole('button', { name: /Archive & revoke access/ }) as HTMLButtonElement
   await waitFor(() => expect(submit.disabled).toBe(false))
   fireEvent.click(submit)
@@ -44,12 +43,19 @@ async function confirmAndSubmit(userId: string) {
 }
 
 describe('Archive & Revoke Access: email/phone release defaults to checked', () => {
-  it('a new archive opens with release checked and submits release_identifiers: true', async () => {
+  it('a new archive opens with release checked and submits release_identifiers: true (reason optional, left empty)', async () => {
     render(ui(A))
     await screen.findByText(/This is not a deletion/)
     expect(isChecked()).toBe(true)
     const body = await confirmAndSubmit(A.id)
-    expect(body).toMatchObject({ action: 'archive', user_id: A.id, release_identifiers: true, employment_end: 'resigned', preview_token: `tok-${A.id}` })
+    expect(body).toMatchObject({ action: 'archive', user_id: A.id, release_identifiers: true, employment_end: 'resigned', preview_token: `tok-${A.id}`, reason: '' })
+  })
+
+  it('an optional reason is submitted and preserved exactly', async () => {
+    render(ui(A))
+    await screen.findByText(/This is not a deletion/)
+    const body = await confirmAndSubmit(A.id, 'Contract ended last Friday')
+    expect(body.reason).toBe('Contract ended last Friday')
   })
 
   it('the administrator can opt out: unchecked submits release_identifiers: false', async () => {
@@ -88,15 +94,16 @@ describe('Archive & Revoke Access: email/phone release defaults to checked', () 
     expect((await confirmAndSubmit(A.id)).release_identifiers).toBe(false)
   })
 
-  it('confirmation rules are unchanged: reason, typed phrase and confirmation are still required', async () => {
+  it('confirmation rules: only the typed email is required — no extra checkbox, and reason is optional', async () => {
     render(ui(A))
     await screen.findByText(/This is not a deletion/)
     const submit = screen.getByRole('button', { name: /Archive & revoke access/ }) as HTMLButtonElement
-    expect(submit.disabled).toBe(true)
-    fireEvent.change(screen.getByLabelText('Reason (required)'), { target: { value: 'Resigned effective today' } })
-    fireEvent.click(screen.getByRole('checkbox', { name: /should lose all access/ }))
     expect(submit.disabled).toBe(true) // typed phrase still missing
+    // The redundant "I confirm …" checkbox is gone for archive.
+    expect(screen.queryByRole('checkbox', { name: /should lose all access/ })).toBeNull()
     fireEvent.change(screen.getByLabelText(/to confirm/), { target: { value: 'wrong@example.test' } })
     expect(submit.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText(/to confirm/), { target: { value: `${A.id}@example.test` } })
+    await waitFor(() => expect(submit.disabled).toBe(false)) // reason left empty
   })
 })

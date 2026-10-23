@@ -78,7 +78,7 @@ version as step 2 — rename one before using the Supabase CLI.
 ## H. Localhost UAT (after applying; localhost = STAGING database — synthetic accounts only)
 
 1. Add User `uat-former-1@example.test` (+ phone), sign in once in another browser, create a draft order with it.
-2. User Management → trash icon → blocked (orders) → *Archive & Revoke Access instead* → reason, type the email, confirm.
+2. User Management → trash icon → blocked (orders) → *Archive & Revoke Access instead* → type the email (reason optional; no extra confirm checkbox).
    The other browser's next request should be signed out (GoTrue refuses a token whose session row was deleted —
    `session_not_found`; **verify this in UAT**, it was not testable without a live GoTrue); the user leaves *Current users* and appears under *Archived*; HR shows them
    under *Former employees*; the order still shows their name.
@@ -93,6 +93,6 @@ version as step 2 — rename one before using the Supabase CLI.
   inactive actors). Not exhaustively audited.
 - A JWT issued before archive stays cryptographically valid until expiry, but GoTrue rejects it once its session row is gone; any
   code path that trusts a JWT without calling GoTrue (`getUser`) would accept it until expiry.
-- UM archive no longer uses the WhatsApp/SMS OTP in the UI (same safeguards as permanent delete: explicit S&A + reason + typed
-  confirmation); the OTP API routes still work and use the canonical archive.
+- UM archive no longer uses the WhatsApp/SMS OTP in the UI (same safeguards as permanent delete: explicit S&A + typed-email
+  confirmation; the reason is optional); the OTP API routes still work and use the canonical archive.
 - `before_image`/release snapshot keep the former person's contact details (restricted tables) as audit evidence.
