@@ -6,17 +6,19 @@ export function itemsTotalQty(items?: ReturnCaseItem[] | null): number {
 }
 
 /**
- * Value of one return line. Quantities are recorded in pieces while unit_cost
- * is the cost of one stock unit — a case for lines with a pack size — so the
- * pieces are restated in cases first.
+ * Value of one return line at the return source's price (unit_price); lines
+ * saved before prices were recorded fall back to unit_cost. Prices are per
+ * stock unit — a case for lines with a pack size — while quantities are in
+ * pieces, so the pieces are restated in cases first.
  */
 export function itemLineValue(
-    it: Pick<ReturnCaseItem, 'total_units' | 'quantity' | 'unit_cost' | 'units_per_case_snapshot'>,
+    it: Pick<ReturnCaseItem, 'total_units' | 'quantity' | 'unit_cost' | 'units_per_case_snapshot'> & { unit_price?: number | null },
 ): number {
     const qty = Number(it.total_units || it.quantity || 0)
     const perCase = Number(it.units_per_case_snapshot)
     const stockUnits = Number.isFinite(perCase) && perCase > 1 ? qty / perCase : qty
-    return stockUnits * Number(it.unit_cost || 0)
+    const price = it.unit_price != null ? Number(it.unit_price) : Number(it.unit_cost || 0)
+    return stockUnits * (Number.isFinite(price) ? price : 0)
 }
 
 export function itemsTotalValue(items?: ReturnCaseItem[] | null): number {
