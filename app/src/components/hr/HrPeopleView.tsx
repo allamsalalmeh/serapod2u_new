@@ -32,6 +32,7 @@ import EmployeeCommissionPanel from '@/components/hr/commission/EmployeeCommissi
 import { useCommissionAccess } from '@/lib/hr/commission/use-commission-access'
 import PermanentDeleteDialog from '@/components/identity/PermanentDeleteDialog'
 import ArchiveIdentityDialog, { type ArchiveMode } from '@/components/identity/ArchiveIdentityDialog'
+import BulkRemovalDialog from '@/components/identity/BulkRemovalDialog'
 
 interface HrPeopleViewProps {
     organizationId: string
@@ -251,6 +252,8 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     const [permanentTarget, setPermanentTarget] = useState<{ id: string; name: string } | null>(null)
     // Archive & Revoke Access / Release Email & Phone (same backend and authority as permanent deletion).
     const [archiveTarget, setArchiveTarget] = useState<{ id: string; name: string; mode: ArchiveMode } | null>(null)
+    // Bulk removal: the same per-identity deletion/archival services, reviewed and confirmed as a batch.
+    const [bulkRemovalOpen, setBulkRemovalOpen] = useState(false)
     const avatarInputRef = useRef<HTMLInputElement>(null)
 
     const loadUsers = async () => {
@@ -518,12 +521,42 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         return `${dept.dept_code ? `${dept.dept_code} - ` : ''}${dept.dept_name}`
     }
 
+    // Rows the existing checkboxes can select: the current tab, search, department and status filter.
+    // There is no pagination on this list, so "select all" means every selectable row in the current filtered list.
+    const selectableUsers = useMemo(() => filteredUsers.filter(u => employeeCategory(u) !== 'former'), [filteredUsers])
+    const allVisibleSelected = selectableUsers.length > 0 && selectableUsers.every(u => selectedUsers.has(u.id))
+    const someVisibleSelected = !allVisibleSelected && selectableUsers.some(u => selectedUsers.has(u.id))
+    const selectedTargets = useMemo(
+        () => users
+            .filter(u => selectedUsers.has(u.id))
+            .map(u => ({ id: u.id, name: u.full_name || u.email, employeeNo: u.employee_no })),
+        [users, selectedUsers],
+    )
+
+    const clearSelection = () => setSelectedUsers(new Set())
+
+    const handleBulkRemovalCompleted = async (result: {
+        outcomes: Array<{ userId: string; name: string; outcome: string }>
+    }) => {
+        // Completed identities leave the selection and the working lists; blocked/failed stay selected and visible.
+        const finished = result.outcomes
+            .filter(outcome => outcome.outcome === 'deleted' || outcome.outcome === 'archived')
+            .map(outcome => outcome.userId)
+        setSelectedUsers(previous => {
+            const next = new Set(previous)
+            finished.forEach(id => next.delete(id))
+            return next
+        })
+        // Counts (Onboarded / Awaiting onboarding / Former) and every row come from the database again.
+        await loadUsers()
+    }
+
     const toggleSelectAll = (checked: boolean) => {
         if (!checked) {
             setSelectedUsers(new Set())
             return
         }
-        setSelectedUsers(new Set(filteredUsers.filter(u => employeeCategory(u) !== 'former').map(u => u.id)))
+        setSelectedUsers(new Set(selectableUsers.map(u => u.id)))
     }
 
     const toggleSelectUser = (userId: string, checked: boolean) => {
@@ -907,9 +940,15 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 </div>
 
                 {selectedUsers.size > 0 && (
-                    <div className="flex flex-col lg:flex-row lg:items-center gap-3 p-3 border rounded-md bg-blue-50">
-                        <div className="text-sm font-medium text-blue-900">
-                            {selectedUsers.size} selected
+                    <div data-testid="bulk-actions" className="flex flex-col lg:flex-row lg:items-center gap-3 p-3 border rounded-md bg-blue-50">
+                        <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-blue-900">
+                            <span>{selectedUsers.size} {selectedUsers.size === 1 ? 'employee' : 'employees'} selected</span>
+                            <button type="button" onClick={clearSelection} className="text-xs font-medium text-blue-700 underline underline-offset-2 hover:text-blue-900">
+                                Clear selection
+                            </button>
+                            <Button size="sm" variant="destructive" onClick={() => setBulkRemovalOpen(true)}>
+                                <Trash2 className="h-3.5 w-3.5 mr-1" /> Remove Selected
+                            </Button>
                         </div>
                         <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-end gap-3 w-full">
                             <div className="space-y-1 w-full sm:w-auto">
@@ -977,10 +1016,11 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                         <div className="grid grid-cols-[40px_1fr_1fr_1fr_1fr_100px_90px_80px_40px] gap-2 px-4 py-2 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wide min-w-[1100px]">
                             <div>
                                 <Checkbox
-                                    checked={selectedUsers.size > 0 && selectedUsers.size === filteredUsers.length}
+                                    checked={allVisibleSelected}
+                                    indeterminate={someVisibleSelected}
                                     onCheckedChange={(checked) => toggleSelectAll(checked as boolean)}
                                     disabled={onboardingView === 'former'}
-                                    aria-label="Select all"
+                                    aria-label="Select all employees in the current list"
                                 />
                             </div>
                             <div>Name</div>
@@ -1011,6 +1051,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                         checked={selectedUsers.has(user.id)}
                                         onCheckedChange={(checked) => toggleSelectUser(user.id, checked as boolean)}
                                         disabled={employeeCategory(user) === 'former'}
+                                        aria-label={`Select ${user.full_name || user.email}`}
                                     />
                                 </div>
                                 <div className="flex items-center gap-3 cursor-pointer group" onClick={() => openProfile(user)}>
@@ -1324,6 +1365,16 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 onDone={async () => { await loadUsers() }}
                 notify={(m) => toast(m)}
             />
+
+            {/* ─── Bulk removal of the selected employees (per-identity canonical preview → confirm → execute) ──── */}
+            {bulkRemovalOpen && (
+                <BulkRemovalDialog
+                    targets={selectedTargets}
+                    onClose={() => setBulkRemovalOpen(false)}
+                    onCompleted={handleBulkRemovalCompleted}
+                    notify={(m) => toast(m)}
+                />
+            )}
 
             {/* ─── Add Employee Dialog (HR onboarding over one central identity) ──── */}
             <Dialog open={addDialogOpen} onOpenChange={(open) => { setAddDialogOpen(open); if (!open) resetAddForm() }}>

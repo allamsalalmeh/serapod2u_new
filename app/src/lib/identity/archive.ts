@@ -31,6 +31,8 @@ export interface ArchivePreview {
     full_name: string | null
     email: string | null
     phone: string | null
+    /** Present in the database payload; used to keep bulk operations inside one organization. */
+    organization_id?: string | null
     organization_name: string | null
     account_status: string | null
     employee_no: number | null
