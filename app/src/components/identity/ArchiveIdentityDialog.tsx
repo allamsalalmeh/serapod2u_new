@@ -57,7 +57,8 @@ export default function ArchiveIdentityDialog({ target, entry, mode = 'archive',
     const [reason, setReason] = useState('')
     const [confirmed, setConfirmed] = useState(false)
     const [typed, setTyped] = useState('')
-    const [release, setRelease] = useState(false)
+    // Releasing email/phone is the default for every new archive; the administrator may opt out.
+    const [release, setRelease] = useState(true)
     const [employmentEnd, setEmploymentEnd] = useState<'resigned' | 'terminated'>('resigned')
     const [requestId, setRequestId] = useState('')
 
@@ -79,7 +80,7 @@ export default function ArchiveIdentityDialog({ target, entry, mode = 'archive',
 
     useEffect(() => {
         if (!target) return
-        setPreview(null); setReason(''); setConfirmed(false); setTyped(''); setRelease(false); setEmploymentEnd('resigned')
+        setPreview(null); setReason(''); setConfirmed(false); setTyped(''); setRelease(true); setEmploymentEnd('resigned')
         setRequestId(newRequestId())
         loadPreview(target.id)
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -99,7 +100,7 @@ export default function ArchiveIdentityDialog({ target, entry, mode = 'archive',
         try {
             const body = mode === 'archive'
                 ? { action: 'archive', user_id: target.id, entry, request_id: requestId, preview_token: preview.preview_token,
-                    reason: reason.trim(), confirmation: typed.trim(), release_identifiers: release, employment_end: employmentEnd }
+                    reason: reason.trim(), confirmation: typed.trim(), release_identifiers: release && preview.releasable, employment_end: employmentEnd }
                 : { action: 'release', user_id: target.id, entry, request_id: requestId, reason: reason.trim() }
             const res = await fetch('/api/identity/archive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
             const json = await res.json().catch(() => ({}))

@@ -99,7 +99,8 @@ describe('HR People: former employees (Archive & Revoke Access)', () => {
     const confirm = screen.getByRole('button', { name: /Archive & revoke access/ }) as HTMLButtonElement
     expect(confirm.disabled).toBe(true)
     fireEvent.click(screen.getByLabelText('Terminated'))
-    fireEvent.click(screen.getByRole('checkbox', { name: /Release email and phone/ }))
+    // Releasing email/phone is the default for a new archive.
+    expect((screen.getByRole('checkbox', { name: /Release email and phone/ }) as HTMLInputElement).checked).toBe(true)
     fireEvent.change(screen.getByLabelText('Reason (required)'), { target: { value: 'Contract ended last Friday' } })
     fireEvent.change(screen.getByLabelText(/to confirm/), { target: { value: 'tess@example.test' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /should lose all access/ }))
