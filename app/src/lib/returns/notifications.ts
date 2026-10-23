@@ -136,7 +136,7 @@ export async function buildReturnNotificationContext(
 
     const { data: items } = await admin
         .from('return_case_items')
-        .select('total_units, quantity, unit_cost')
+        .select('total_units, quantity, unit_cost, units_per_case_snapshot')
         .eq('return_case_id', returnCaseId)
 
     const sourceType = normalizeReturnSourceType(rc.return_source_type)
