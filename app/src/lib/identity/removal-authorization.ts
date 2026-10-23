@@ -11,8 +11,9 @@ import { setIdentityAccountStatus } from './provisioning'
  *
  * Every path that removes another person's identity decides here, so the
  * permission can be enforced:
- *   - /api/admin/delete-user-otp/request and /verify-and-delete (User Management)
- *   - deleteUserWithAuth (server action)
+ *   - /api/admin/delete-user-otp/request and /verify-and-delete (User Management
+ *     archive; permanent deletion is the canonical identity deletion,
+ *     lib/identity/permanent-deletion.ts, decided by the database)
  *   - /api/admin/bulk-delete-users (guarded staging tool)
  *   - organization deletion (/api/organizations/delete/request-otp,
  *     /verify-and-delete and the guarded /api/organizations/delete), which

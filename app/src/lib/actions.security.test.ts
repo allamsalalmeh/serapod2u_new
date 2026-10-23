@@ -357,54 +357,17 @@ describe('setUserAccountStatus', () => {
   })
 })
 
-describe('deleteUserWithAuth history protection', () => {
-  // targetUserOrganization, then the Archive Identities decision (lib/identity/removal-authorization.ts): actor row, target row.
-  const removalRows = (actorLevel: number, targetLevel: number) => {
-    usersSelectRow
-      .mockResolvedValueOnce({ data: { organization_id: 'org-a' }, error: null })
-      .mockResolvedValueOnce({ data: { organization_id: 'org-hq', roles: { role_level: actorLevel } }, error: null })
-      .mockResolvedValueOnce({ data: { id: 'target', organization_id: 'org-a', account_status: 'ACTIVE', roles: { role_level: targetLevel } }, error: null })
-  }
-
-  it('refuses to hard-delete an identity with business or audit history, before any cleanup', async () => {
+describe('deleteUserWithAuth (retired)', () => {
+  it('never deletes: permanent deletion is the canonical identity deletion service', async () => {
     authGetUser.mockResolvedValue({ data: { user: { id: 'admin' } }, error: null })
     checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 1 } })
-    removalRows(1, 40)
-    rpcRoutes({ identity_history_references: () => ({ data: ['stock_movements.created_by'] }) })
     const { deleteUserWithAuth } = await import('./actions')
 
     const result = await deleteUserWithAuth('target')
 
-    expect(result).toMatchObject({ success: false, code: 'IDENTITY_HAS_HISTORY' })
-    expect(adminFromTables.filter(t => t !== 'users')).toEqual([])
-    expect(deleteAuthUser).not.toHaveBeenCalled()
-  })
-
-  it('fails closed when history cannot be verified', async () => {
-    authGetUser.mockResolvedValue({ data: { user: { id: 'admin' } }, error: null })
-    checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 1 } })
-    removalRows(1, 40)
-    rpcRoutes({ identity_history_references: () => ({ error: { message: 'unavailable' } }) })
-    const { deleteUserWithAuth } = await import('./actions')
-
-    const result = await deleteUserWithAuth('target')
-
-    expect(result.success).toBe(false)
-    expect(deleteAuthUser).not.toHaveBeenCalled()
-  })
-
-  it('managing users alone does not authorize removal: Archive Identities and target protection decide first', async () => {
-    authGetUser.mockResolvedValue({ data: { user: { id: 'admin' } }, error: null })
-    checkPermissionForUser.mockResolvedValue({ allowed: true, context: { role_level: 20 } })
-    removalRows(20, 40) // legacy Archive Identities rule: HQ Admin / Super Admin (<= 10)
-    const { deleteUserWithAuth } = await import('./actions')
-    expect((await deleteUserWithAuth('target')).success).toBe(false)
-
-    removalRows(10, 1) // a Super Admin account needs a Super Admin
-    expect((await deleteUserWithAuth('target')).success).toBe(false)
-
-    expect(adminFromTables.filter(t => t !== 'users')).toEqual([])
-    expect(adminRpc).not.toHaveBeenCalledWith('identity_history_references', expect.anything())
+    expect(result).toMatchObject({ success: false, code: 'USE_PERMANENT_DELETE' })
+    expect(adminFromTables).toEqual([])
+    expect(adminRpc).not.toHaveBeenCalled()
     expect(deleteAuthUser).not.toHaveBeenCalled()
   })
 })

@@ -65,7 +65,7 @@ export function describeBlocker(b: RegistrationBlocker): string {
   switch (b.code) {
     case 'SELF': return 'You cannot delete or reset your own HR registration. Another HR administrator must do it.'
     case 'HR_LIVE': return 'HR for this organization is live. Individual deletes and resets are only available before HR goes live.'
-    case 'NOT_REGISTERED': return 'This person is not registered in HR (awaiting onboarding), so there is nothing to delete.'
+    case 'NOT_REGISTERED': return 'This person is not registered in HR (awaiting onboarding), so there is no registration to remove. To remove the person entirely, use Delete Employee Permanently.'
     case 'NOT_COMPLETED': return 'Only an employee whose HR onboarding is completed can be reset.'
     case 'DIRECT_REPORTS':
       return `${b.count ?? 'Some'} employee(s) report to this person. Assign them another manager first.`

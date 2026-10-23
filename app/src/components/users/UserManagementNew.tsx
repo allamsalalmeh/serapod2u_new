@@ -62,6 +62,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import UserDialogNew, { type EditAccessSubmission } from "./UserDialogNew";
+import PermanentDeleteDialog from "@/components/identity/PermanentDeleteDialog";
 import type { User as UserType, Role, Organization } from "@/types/user";
 import { getAvatarSrc } from "@/lib/utils";
 import { compressAvatar, formatFileSize } from "@/lib/utils/imageCompression";
@@ -842,7 +843,7 @@ export default function UserManagementNew({
 
     toast({
       title: "OTP Required",
-      description: "Bulk delete is disabled because each user deletion requires OTP confirmation. Delete users one at a time.",
+      description: "Bulk delete is disabled: each deletion has its own eligibility check and confirmation. Delete users one at a time.",
       variant: "default",
     });
     return;
@@ -1252,7 +1253,9 @@ export default function UserManagementNew({
   const [deleteOtpChannel, setDeleteOtpChannel] = useState<'whatsapp' | 'sms' | 'email' | null>(null);
   const [deleteOtpError, setDeleteOtpError] = useState('');
   const [deleteOtpSending, setDeleteOtpSending] = useState(false);
-  const [deleteOtpRemovalMode, setDeleteOtpRemovalMode] = useState<'delete' | 'archive' | null>(null);
+  const [, setDeleteOtpRemovalMode] = useState<'delete' | 'archive' | null>(null);
+  // Delete User = canonical permanent identity deletion (shared with HR); the OTP dialog below only archives.
+  const [permanentTarget, setPermanentTarget] = useState<{ id: string; name: string } | null>(null);
 
   const handleDeleteUser = async (userId: string, userName: string) => {
     if (!canManageUserDeletion()) {
@@ -1263,7 +1266,13 @@ export default function UserManagementNew({
       toast({ title: "Not Allowed", description: "Cannot delete your own account.", variant: "destructive" });
       return;
     }
-    setDeleteTargetUser({ id: userId, name: userName });
+    setPermanentTarget({ id: userId, name: userName });
+  };
+
+  // Archive (history kept, identifiers reserved) through the OTP-protected flow; offered when permanent deletion is blocked.
+  const openArchiveDialog = (target: { id: string; name: string }) => {
+    setPermanentTarget(null);
+    setDeleteTargetUser({ id: target.id, name: target.name });
     setDeleteOtpStep('confirm');
     setDeleteOtpCode('');
     setDeleteOtpCodeId('');
@@ -1317,8 +1326,8 @@ export default function UserManagementNew({
         throw new Error(data.error || 'Verification failed');
       }
       toast({
-        title: data.mode === 'archive' ? "User Archived" : "User Deleted",
-        description: data.message || `${deleteTargetUser.name} removed successfully`,
+        title: "User Archived",
+        description: data.message || `${deleteTargetUser.name} was archived`,
       });
       setDeleteOtpOpen(false);
       await loadUsers();
@@ -2394,7 +2403,7 @@ export default function UserManagementNew({
                                   title={
                                     user.id === userProfile.id
                                       ? "Cannot delete yourself"
-                                      : "Delete user (OTP required)"
+                                      : "Delete user (eligibility check first)"
                                   }
                                 >
                                   <Trash2 className="w-4 h-4" />
@@ -2495,29 +2504,39 @@ export default function UserManagementNew({
         </CardContent>
       </Card>
 
-      {/* OTP-Protected Delete User Dialog */}
+      {/* Delete User: permanent identity deletion (same backend as HR → Employees) */}
+      <PermanentDeleteDialog
+        target={permanentTarget}
+        entry="user_management"
+        onClose={() => setPermanentTarget(null)}
+        onDeleted={async () => { setSelectedUsers(new Set()); await loadUsers(); }}
+        onArchiveInstead={openArchiveDialog}
+        notify={(m) => toast(m)}
+      />
+
+      {/* OTP-Protected Archive User Dialog (history kept; never a hard delete) */}
       <Dialog open={deleteOtpOpen} onOpenChange={(open) => { if (!deleteOtpSending) { setDeleteOtpOpen(open); } }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-red-700">
               <AlertTriangle className="w-5 h-5" />
               {deleteOtpStep === 'confirm'
-                ? 'Remove User'
+                ? 'Archive User'
                 : deleteOtpStep === 'otp'
                   ? 'Enter Verification Code'
-                  : 'Removing User...'}
+                  : 'Archiving User...'}
             </DialogTitle>
             <DialogDescription>
               {deleteOtpStep === 'confirm' && (
-                <>A verification code will be sent to the organization contact using the <strong>User Deletion OTP</strong> routing in Notifications → Types before removing <strong>{deleteTargetUser?.name}</strong>.</>
+                <>A verification code will be sent to the organization contact using the <strong>User Deletion OTP</strong> routing in Notifications → Types before archiving <strong>{deleteTargetUser?.name}</strong>.</>
               )}
               {deleteOtpStep === 'otp' && (
                 <>
                   A 4-digit code was sent via {deleteOtpChannel === 'email' ? 'email' : deleteOtpChannel === 'sms' ? 'SMS' : 'WhatsApp'} to <strong>{deleteOtpMaskedRecipient}</strong>. Enter it below to confirm.
-                  {deleteOtpRemovalMode === 'archive' && ' This account has business history, so it will be archived: its history is kept and its email and phone stay reserved (reactivate the account if the person returns).'}
+                  {' The account will be archived: its history is kept and its email and phone stay reserved (reactivate the account if the person returns).'}
                 </>
               )}
-              {deleteOtpStep === 'deleting' && 'Please wait while the user is being removed...'}
+              {deleteOtpStep === 'deleting' && 'Please wait while the user is being archived...'}
             </DialogDescription>
           </DialogHeader>
 
@@ -2527,11 +2546,11 @@ export default function UserManagementNew({
                 <div className="flex items-start gap-2">
                   <Shield className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
                   <div className="text-sm text-red-800">
-                    <p className="font-medium mb-1">A history check will run before removal.</p>
+                    <p className="font-medium mb-1">Archiving keeps everything.</p>
                     <ul className="list-disc ml-4 space-y-0.5 text-xs">
-                      <li>Users without business history are deleted permanently.</li>
-                      <li>Users with orders or documents are archived to protect history. Their email and phone stay reserved; reactivate them if they return.</li>
-                      <li>Archived users cannot sign in; their original email and phone are released for reuse.</li>
+                      <li>Orders, documents and other business history stay attributed to this person.</li>
+                      <li>Archived users cannot sign in; their email and phone stay reserved — reactivate them if they return.</li>
+                      <li>Nothing is deleted. Permanent deletion is the separate Delete User check.</li>
                     </ul>
                   </div>
                 </div>
@@ -2590,7 +2609,7 @@ export default function UserManagementNew({
                 onClick={handleDeleteOtpVerify}
                 disabled={deleteOtpSending || deleteOtpCode.length !== 4}
               >
-                {deleteOtpSending ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Verifying...</> : deleteOtpRemovalMode === 'archive' ? 'Verify & Archive' : 'Verify & Delete'}
+                {deleteOtpSending ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Verifying...</> : 'Verify & Archive'}
               </Button>
             )}
           </DialogFooter>

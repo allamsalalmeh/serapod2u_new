@@ -3,7 +3,6 @@ import { authorizeIdentityRemoval } from '@/lib/identity/removal-authorization'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { identityHistoryReferences } from '@/lib/identity/provisioning'
 import { generateOtp, hashOtp } from '@/server/auth/passwordResetService'
 import { maskEmail } from '@/lib/auth/registration-otp-email'
 import { maskPhone, normalizePhoneE164 } from '@/utils/phone'
@@ -17,18 +16,6 @@ import {
 
 const PURPOSE = 'user_deletion'
 const MAX_SENDS_PER_15MIN = 3
-type UserRemovalMode = 'delete' | 'archive'
-
-async function getUserRemovalMode(_admin: any, userId: string): Promise<UserRemovalMode> {
-    // Same definition of "history" as the confirmation step and the database
-    // delete guard (public.identity_history_references): orders, documents,
-    // signatures, Supply Chain movements, finance and audit references all
-    // mean archive. A failed check never falls through to hard deletion.
-    const references = await identityHistoryReferences(userId)
-    if (references === null) return 'archive'
-    return references.length > 0 ? 'archive' : 'delete'
-}
-
 function normalizeOrgEmail(email: string | null | undefined): string | null {
     const value = String(email || '').trim().toLowerCase()
     if (!value || !value.includes('@')) return null
@@ -149,7 +136,8 @@ export async function POST(request: NextRequest) {
         }
 
         const targetUser = removal.target
-        const removalMode = await getUserRemovalMode(admin, targetUserId)
+        // This OTP flow only archives; permanent deletion is /api/identity/permanent-delete.
+        const removalMode = 'archive' as const
         const targetLabel = targetUser.full_name || targetUser.email || targetUserId
 
         if (phoneForSend) {

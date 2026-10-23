@@ -22,12 +22,16 @@ const managementView = fs.readFileSync(
 )
 
 describe('user deletion archive-and-release safety contract', () => {
-  it('classifies retained history before removal with the database definition (orders, documents, signatures, Supply Chain, audit)', () => {
+  it('the OTP flow only archives; permanent deletion is the canonical identity deletion shared with HR', () => {
     for (const source of [requestRoute, verifyRoute]) {
-      expect(source).toContain('identityHistoryReferences(userId)')
-      expect(source).toContain("if (references === null) return 'archive'")
-      expect(source).toContain("return references.length > 0 ? 'archive' : 'delete'")
+      expect(source).not.toContain("removalMode = await getUserRemovalMode")
+      expect(source).toContain('/api/identity/permanent-delete')
     }
+    expect(verifyRoute).not.toContain("from('users').delete()")
+    expect(verifyRoute).not.toMatch(/from\('audit_logs'\)\.delete\(\)/)
+    expect(verifyRoute).not.toMatch(/auth\.admin\.deleteUser/)
+    expect(managementView).toContain('<PermanentDeleteDialog')
+    expect(managementView).toContain('entry="user_management"')
   })
 
   it('marks archived identities with the canonical terminal lifecycle state', () => {
@@ -49,7 +53,7 @@ describe('user deletion archive-and-release safety contract', () => {
   })
 
   it('explains archive behavior instead of reporting a generic failure', () => {
-    expect(managementView).toContain('Users with orders or documents are archived to protect history.')
+    expect(managementView).toContain('Orders, documents and other business history stay attributed to this person.')
     expect(managementView).toContain('Verify & Archive')
     expect(requestRoute).not.toContain("error: 'Something went wrong'")
     expect(verifyRoute).not.toContain("error: 'Something went wrong'")

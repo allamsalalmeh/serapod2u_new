@@ -22,7 +22,7 @@ import { useToast } from '@/components/ui/use-toast'
 import {
     Search, Users, UserCheck, Building2, Briefcase, Pencil, Check, X,
     Plus, Copy, Loader2, Eye, Save, ChevronRight, Camera, UserPlus, AlertTriangle, ArrowLeft,
-    MoreHorizontal, Trash2, RotateCcw, ShieldCheck
+    MoreHorizontal, Trash2, RotateCcw, ShieldCheck, UserMinus
 } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { listDepartments } from '@/lib/actions/departments'
@@ -30,6 +30,7 @@ import { fetchHrPositions, updateUserHr } from '@/lib/api/hr'
 import { compressAvatar } from '@/lib/utils/imageCompression'
 import EmployeeCommissionPanel from '@/components/hr/commission/EmployeeCommissionPanel'
 import { useCommissionAccess } from '@/lib/hr/commission/use-commission-access'
+import PermanentDeleteDialog from '@/components/identity/PermanentDeleteDialog'
 
 interface HrPeopleViewProps {
     organizationId: string
@@ -220,6 +221,9 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     const [regConfirmed, setRegConfirmed] = useState(false)
     const [regError, setRegError] = useState<string | null>(null)
     const [regRequestId, setRegRequestId] = useState('')
+    // Delete Employee Permanently: the canonical identity deletion shared with User Management.
+    const [permanentDeleteAllowed, setPermanentDeleteAllowed] = useState(false)
+    const [permanentTarget, setPermanentTarget] = useState<{ id: string; name: string } | null>(null)
     const avatarInputRef = useRef<HTMLInputElement>(null)
 
     const loadUsers = async () => {
@@ -341,6 +345,10 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
             .then(res => res.json())
             .then(json => { if (!cancelled) setRegistrationAllowed(!!json?.success && !!json.data?.permission) })
             .catch(() => { if (!cancelled) setRegistrationAllowed(false) })
+        fetch('/api/identity/permanent-delete?entry=hr')
+            .then(res => res.json())
+            .then(json => { if (!cancelled) setPermanentDeleteAllowed(!!json?.success && !!json.data?.permission) })
+            .catch(() => { if (!cancelled) setPermanentDeleteAllowed(false) })
         return () => { cancelled = true }
     }, [isReady, organizationId])
 
@@ -401,7 +409,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
             const json = await res.json()
             if (res.ok && json.success && json.data?.status === 'completed') {
                 toast({
-                    title: action === 'delete' ? 'Employee deleted from HR' : 'HR registration reset',
+                    title: action === 'delete' ? 'HR registration removed' : 'HR registration reset',
                     description: `${user.full_name || 'The employee'} (${formatEmployeeNo(json.data.employee_no ?? user.employee_no)}) is now awaiting onboarding. Login, access and employee number are unchanged.`,
                 })
                 setRegTarget(null)
@@ -1040,7 +1048,8 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                                 <X className="h-3.5 w-3.5 text-gray-400" />
                                             </Button>
                                         </div>
-                                    ) : (canEdit || (registrationAllowed && user.onboarding_status && user.onboarding_status !== 'pending')) && (
+                                    ) : (canEdit || (registrationAllowed && user.onboarding_status && user.onboarding_status !== 'pending')
+                                         || (permanentDeleteAllowed && user.onboarding_status)) && (
                                         <Popover open={rowMenuUserId === user.id} onOpenChange={(open) => setRowMenuUserId(open ? user.id : null)}>
                                             <PopoverTrigger asChild>
                                                 <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Actions for ${user.full_name || 'employee'}`}>
@@ -1065,8 +1074,18 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                                                 <RotateCcw className="h-3.5 w-3.5 mr-2" /> Reset HR Registration
                                                             </button>
                                                         )}
-                                                        <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted text-red-600" onClick={() => { setRowMenuUserId(null); openRegistrationAction(user, 'delete') }}>
-                                                            <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete Employee
+                                                        <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted" onClick={() => { setRowMenuUserId(null); openRegistrationAction(user, 'delete') }}>
+                                                            <UserMinus className="h-3.5 w-3.5 mr-2" /> Remove HR Registration
+                                                        </button>
+                                                    </>
+                                                )}
+                                                {/* Any onboarding state: eligibility is decided by permissions, protections and dependencies. */}
+                                                {permanentDeleteAllowed && user.onboarding_status && (
+                                                    <>
+                                                        {(canEdit || registrationAllowed) && <div className="my-1 h-px bg-border" />}
+                                                        <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted text-red-600"
+                                                            onClick={() => { setRowMenuUserId(null); setPermanentTarget({ id: user.id, name: user.full_name || user.email }) }}>
+                                                            <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete Employee Permanently
                                                         </button>
                                                     </>
                                                 )}
@@ -1094,11 +1113,11 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                 <DialogHeader>
                                     <DialogTitle className="flex items-center gap-2">
                                         {action === 'delete' ? <Trash2 className="h-4 w-4 text-red-600" /> : <RotateCcw className="h-4 w-4" />}
-                                        {action === 'delete' ? 'Delete Employee' : 'Reset HR Registration'}
+                                        {action === 'delete' ? 'Remove HR Registration' : 'Reset HR Registration'}
                                     </DialogTitle>
                                     <DialogDescription>
                                         {action === 'delete'
-                                            ? 'Removes this person\'s HR registration. Only possible when they have no HR records.'
+                                            ? 'Removes this person\'s HR registration only (login and user account stay). Only possible when they have no HR records. To remove the person entirely, use Delete Employee Permanently.'
                                             : 'Returns this employee to Awaiting onboarding. Their HR history is kept.'}
                                     </DialogDescription>
                                 </DialogHeader>
@@ -1129,7 +1148,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                             </div>
                                         ) : (
                                             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                                                <div className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-4 w-4" /> {action === 'delete' ? 'Delete is not available' : 'Reset is not available'}</div>
+                                                <div className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-4 w-4" /> {action === 'delete' ? 'Removing the registration is not available' : 'Reset is not available'}</div>
                                                 <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">
                                                     {blockers.map((b, i) => <li key={`${b.code}-${i}`}>{b.message || b.code}</li>)}
                                                 </ul>
@@ -1169,7 +1188,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                                 <label className="flex items-start gap-2 text-xs">
                                                     <Checkbox checked={regConfirmed} onCheckedChange={(checked) => setRegConfirmed(checked === true)} className="mt-0.5" />
                                                     <span>
-                                                        I confirm that {action === 'delete' ? 'this HR registration should be deleted' : 'this HR registration should be reset'} for {regPreview.employee.full_name || 'this employee'}.
+                                                        I confirm that {action === 'delete' ? 'this HR registration should be removed' : 'this HR registration should be reset'} for {regPreview.employee.full_name || 'this employee'}.
                                                     </span>
                                                 </label>
                                             </>
@@ -1189,7 +1208,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                         disabled={!allowed || regLoading || regSubmitting || !regConfirmed || regReason.trim().length < 10 || !regRequestId}
                                     >
                                         {regSubmitting && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
-                                        {action === 'delete' ? 'Delete Employee' : 'Reset HR Registration'}
+                                        {action === 'delete' ? 'Remove HR Registration' : 'Reset HR Registration'}
                                     </Button>
                                 </DialogFooter>
                             </>
@@ -1197,6 +1216,15 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                     })()}
                 </DialogContent>
             </Dialog>
+
+            {/* ─── Delete Employee Permanently (canonical identity deletion, shared with User Management) ──── */}
+            <PermanentDeleteDialog
+                target={permanentTarget}
+                entry="hr"
+                onClose={() => setPermanentTarget(null)}
+                onDeleted={async () => { await loadUsers() }}
+                notify={(m) => toast(m)}
+            />
 
             {/* ─── Add Employee Dialog (HR onboarding over one central identity) ──── */}
             <Dialog open={addDialogOpen} onOpenChange={(open) => { setAddDialogOpen(open); if (!open) resetAddForm() }}>

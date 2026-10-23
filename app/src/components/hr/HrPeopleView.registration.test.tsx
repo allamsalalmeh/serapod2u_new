@@ -63,27 +63,27 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
-describe('HR People: Delete Employee / Reset HR Registration', () => {
-  it('shows Reset and Delete only when the server says the caller holds the permission', async () => {
+describe('HR People: Remove HR Registration / Reset HR Registration', () => {
+  it('shows Reset and Remove only when the server says the caller holds the permission', async () => {
     mockFetch({ permission: false })
     render(<HrPeopleView organizationId="org-a" canEdit />)
     await openMenu()
     expect(screen.getByText('Edit Employee')).toBeTruthy()
-    expect(screen.queryByText('Delete Employee')).toBeNull()
+    expect(screen.queryByText('Remove HR Registration')).toBeNull()
     expect(screen.queryByText('Reset HR Registration')).toBeNull()
   })
 
-  it('delete: server preview → reason + confirmation → server execution → toast and list refresh', async () => {
+  it('remove registration: server preview → reason + confirmation → server execution → toast and list refresh', async () => {
     mockFetch({})
     render(<HrPeopleView organizationId="org-a" canEdit />)
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/hr/employees/registration'))
     await openMenu()
-    fireEvent.click(await screen.findByText('Delete Employee'))
+    fireEvent.click(await screen.findByText('Remove HR Registration'))
     expect(await screen.findByText('Allowed')).toBeTruthy()
     expect(screen.getAllByText('EMP-0042').length).toBeGreaterThan(0)
     expect(fetchMock).toHaveBeenCalledWith(`/api/hr/employees/registration?user_id=${encodeURIComponent(EMP)}`)
 
-    const confirm = screen.getAllByRole('button', { name: 'Delete Employee' }).at(-1)!
+    const confirm = screen.getAllByRole('button', { name: 'Remove HR Registration' }).at(-1)!
     expect((confirm as HTMLButtonElement).disabled).toBe(true)
     fireEvent.change(screen.getByLabelText('Reason (required)'), { target: { value: 'Test record onboarded by mistake' } })
     expect((confirm as HTMLButtonElement).disabled).toBe(true)
@@ -92,7 +92,7 @@ describe('HR People: Delete Employee / Reset HR Registration', () => {
     rows.splice(0, rows.length, row('pending'))
     fireEvent.click(confirm)
 
-    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Employee deleted from HR' })))
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'HR registration removed' })))
     const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')!
     expect(JSON.parse(post[1].body)).toEqual({ user_id: EMP, action: 'delete', request_id: '00000000-0000-0000-0000-00000000f001',
       preview_token: 'tok-1', reason: 'Test record onboarded by mistake' })
@@ -100,15 +100,15 @@ describe('HR People: Delete Employee / Reset HR Registration', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Actions for Tess Tester' })).toBeNull())
   })
 
-  it('blocked delete explains why, offers Reset instead, and never enables Delete', async () => {
+  it('blocked removal explains why, offers Reset instead, and never enables Remove', async () => {
     mockFetch({ preview: () => preview({ delete_allowed: false,
       blockers: { delete: [{ code: 'HR_RECORDS', message: 'This employee has 3 attendance records.' }], reset: [] } }) })
     render(<HrPeopleView organizationId="org-a" canEdit />)
     await openMenu()
-    fireEvent.click(await screen.findByText('Delete Employee'))
+    fireEvent.click(await screen.findByText('Remove HR Registration'))
     expect(await screen.findByText('This employee has 3 attendance records.')).toBeTruthy()
     expect(screen.queryByLabelText('Reason (required)')).toBeNull()
-    expect((screen.getAllByRole('button', { name: 'Delete Employee' }).at(-1) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getAllByRole('button', { name: 'Remove HR Registration' }).at(-1) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: /Reset HR Registration instead/ }))
     expect(await screen.findByText('Allowed')).toBeTruthy()
     expect(screen.getAllByRole('button', { name: 'Reset HR Registration' }).length).toBeGreaterThan(0)
@@ -118,15 +118,15 @@ describe('HR People: Delete Employee / Reset HR Registration', () => {
     mockFetch({ execute: () => [{ success: false, code: 'BLOCKED', error: 'Not allowed for this employee. Nothing was changed.' }, 409] })
     render(<HrPeopleView organizationId="org-a" canEdit />)
     await openMenu()
-    fireEvent.click(await screen.findByText('Delete Employee'))
+    fireEvent.click(await screen.findByText('Remove HR Registration'))
     await screen.findByText('Allowed')
     fireEvent.change(screen.getByLabelText('Reason (required)'), { target: { value: 'Test record onboarded by mistake' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /I confirm that/ }))
-    const confirm = screen.getAllByRole('button', { name: 'Delete Employee' }).at(-1)!
+    const confirm = screen.getAllByRole('button', { name: 'Remove HR Registration' }).at(-1)!
     await waitFor(() => expect((confirm as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(confirm)
     await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Not changed', variant: 'destructive' })))
-    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: 'Employee deleted from HR' }))
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: 'HR registration removed' }))
     expect(await screen.findByText('Not allowed for this employee. Nothing was changed.')).toBeTruthy()
   })
 })

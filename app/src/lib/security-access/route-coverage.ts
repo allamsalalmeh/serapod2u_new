@@ -371,6 +371,7 @@ export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
   "hr/time-expense/entries": { kind: 'ENTERPRISE', permissions: ["hr.expense.manage"] },
   "hr/time-expense/items": { kind: 'ENTERPRISE', permissions: ["hr.expense.manage"] },
   "hr/time-expense/timesheets": { kind: 'ENTERPRISE', permissions: ["hr.expense.manage"] },
+  "identity/permanent-delete": { kind: 'ENTERPRISE', permissions: ["platform.identity.delete", "hr.employee.delete"], via: ["lib/identity/permanent-deletion.ts"] },
   "inventory/opening-balance/allocation-resolve": { kind: 'ENTERPRISE', permissions: ["inventory.opening_balance.manage", "inventory.stock_config.manage"], via: ["lib/server/stock-config-admin.ts"] },
   "inventory/opening-balance/carry-forward-preflight": { kind: 'ENTERPRISE', permissions: ["inventory.opening_balance.manage", "inventory.stock_config.manage"], via: ["lib/server/stock-config-admin.ts"] },
   "inventory/opening-balance/d2h-policy": { kind: 'ENTERPRISE', permissions: ["inventory.opening_balance.manage", "inventory.stock_config.manage"], via: ["lib/server/stock-config-admin.ts"] },

@@ -53,7 +53,8 @@ describe('every identity removal path decides Archive Identities', () => {
     // Decided before the OTP is read, counted or consumed, and before any account mutation.
     expect(decide).toBeLessThan(verify.indexOf("from('auth_verification_codes')"))
     expect(decide).toBeLessThan(verify.indexOf('archiveIdentityKeepingIdentifiers('))
-    expect(decide).toBeLessThan(verify.indexOf("from('users').delete()"))
+    expect(verify).not.toContain("from('users').delete()") // archive only: permanent deletion is the canonical service
+    expect(verify).not.toMatch(/auth\.admin\.deleteUser/)
     expect(verify).not.toMatch(/account_status:\s*'ARCHIVED'/) // the archive write lives in the shared helper only
 
     const bulk = src('app/api/admin/bulk-delete-users/route.ts')
@@ -62,8 +63,9 @@ describe('every identity removal path decides Archive Identities', () => {
 
     const actions = src('lib/actions.ts')
     const fn = actions.slice(actions.indexOf('export async function deleteUserWithAuth'), actions.indexOf('export async function', actions.indexOf('export async function deleteUserWithAuth') + 10))
-    expect(fn.indexOf('authorizeIdentityRemoval(currentUser!.id, userId)')).toBeGreaterThan(-1)
-    expect(fn.indexOf('authorizeIdentityRemoval(')).toBeLessThan(fn.indexOf(".from('audit_logs')"))
+    // retired: it can no longer delete anything
+    expect(fn).toContain("code: 'USE_PERMANENT_DELETE'")
+    expect(fn).not.toMatch(/\.delete\(\)|deleteUser\(/)
   })
 
   it('the helper decides for the target organization and archives through the governance function once enforced', () => {
