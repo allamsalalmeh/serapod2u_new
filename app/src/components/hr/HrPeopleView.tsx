@@ -63,6 +63,23 @@ interface HrUserRow {
     /** Employment record status and end date (resigned / terminated for former employees). */
     employment_status: string | null
     end_date: string | null
+    /** When the account reached its current status (the archive date for a former employee). */
+    account_status_changed_at: string | null
+}
+
+type EmployeeCategory = 'completed' | 'awaiting' | 'former'
+
+/**
+ * One lifecycle classification for the tab counts AND the tab lists. Every row is an employment record of this
+ * organization (the query joins hr_employees), so permanently deleted people (no identity, no record) never appear.
+ *   former    account ARCHIVED (Archive & Revoke Access) — whatever its onboarding or employment state
+ *   completed HR registration completed (any non-archived account status; Suspended/Disabled stay current employees)
+ *   awaiting  HR registration pending or reset
+ * Onboarding "reset", is_active=false and employment "terminated" are NOT "former" on their own.
+ */
+export function employeeCategory(u: Pick<HrUserRow, 'account_status' | 'onboarding_status'>): EmployeeCategory {
+    if (u.account_status === 'ARCHIVED') return 'former'
+    return u.onboarding_status === 'completed' ? 'completed' : 'awaiting'
 }
 
 type RegistrationAction = 'delete' | 'reset'
@@ -206,6 +223,8 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     // HR Profile sheet state
     const [profileOpen, setProfileOpen] = useState(false)
     const [profileUser, setProfileUser] = useState<HrUserRow | null>(null)
+    // A former employee's record is historical: viewable, never edited from here.
+    const profileEditable = canEdit && profileUser?.account_status !== 'ARCHIVED'
     const [profileData, setProfileData] = useState<HrProfileData>({})
     const [profileLoading, setProfileLoading] = useState(false)
     const [profileSaving, setProfileSaving] = useState(false)
@@ -247,6 +266,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 role_code,
                 is_active,
                 account_status,
+                account_status_changed_at,
                 department_id,
                 manager_user_id,
                 position_id,
@@ -324,6 +344,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 account_status: u.account_status ?? null,
                 employment_status: employment?.status ?? null,
                 end_date: employment?.end_date ?? null,
+                account_status_changed_at: u.account_status_changed_at ?? null,
             } as HrUserRow
         })
 
@@ -448,16 +469,14 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     const filteredUsers = useMemo(() => {
         const query = searchQuery.trim().toLowerCase()
         return users.filter(u => {
-            // Former employees (archived accounts) are listed only under Former, whatever their onboarding state.
-            const archived = u.account_status === 'ARCHIVED'
-            if (onboardingView === 'former' ? !archived : archived) return false
-            const onboarded = u.onboarding_status === 'completed'
-            if (onboardingView === 'completed' && !onboarded) return false
-            if (onboardingView === 'awaiting' && onboarded) return false
+            // The tab decides the lifecycle population (same rule as the tab counts).
+            if (employeeCategory(u) !== onboardingView) return false
             if (departmentFilter !== 'all' && u.department_id !== departmentFilter) return false
-            // Status filter
-            if (statusFilter === 'active' && !u.is_active) return false
-            if (statusFilter === 'inactive' && u.is_active) return false
+            // Account status filter: current employees only (every former employee is inactive by definition).
+            if (onboardingView !== 'former') {
+                if (statusFilter === 'active' && !u.is_active) return false
+                if (statusFilter === 'inactive' && u.is_active) return false
+            }
             if (!query) return true
             return (
                 (u.full_name || '').toLowerCase().includes(query) ||
@@ -467,9 +486,24 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         })
     }, [users, searchQuery, departmentFilter, statusFilter, onboardingView])
 
-    const awaitingCount = useMemo(() => users.filter(u => u.account_status !== 'ARCHIVED' && u.onboarding_status !== 'completed').length, [users])
-    const onboardedUsers = useMemo(() => users.filter(u => u.account_status !== 'ARCHIVED' && u.onboarding_status === 'completed'), [users])
-    const formerCount = useMemo(() => users.filter(u => u.account_status === 'ARCHIVED').length, [users])
+    const categoryCounts = useMemo(() => {
+        const counts: Record<EmployeeCategory, number> = { completed: 0, awaiting: 0, former: 0 }
+        users.forEach(u => { counts[employeeCategory(u)] += 1 })
+        return counts
+    }, [users])
+    const awaitingCount = categoryCounts.awaiting
+    const formerCount = categoryCounts.former
+    const onboardedUsers = useMemo(() => users.filter(u => employeeCategory(u) === 'completed'), [users])
+    const tabTotal = categoryCounts[onboardingView]
+    // Current employees only: never offer a former employee as a manager.
+    const currentUsers = useMemo(() => users.filter(u => employeeCategory(u) !== 'former'), [users])
+    const switchView = (view: EmployeeCategory) => {
+        setOnboardingView(view)
+        setSelectedUsers(new Set())
+        // The status filter belongs to current employees; a new tab starts from its default (search/department kept).
+        setStatusFilter('active')
+        setEditingUserId(null)
+    }
 
     const departmentById = useMemo(() => {
         const map = new Map<string, { id: string; dept_name: string; dept_code: string | null }>()
@@ -489,7 +523,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
             setSelectedUsers(new Set())
             return
         }
-        setSelectedUsers(new Set(filteredUsers.map(u => u.id)))
+        setSelectedUsers(new Set(filteredUsers.filter(u => employeeCategory(u) !== 'former').map(u => u.id)))
     }
 
     const toggleSelectUser = (userId: string, checked: boolean) => {
@@ -718,7 +752,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     }
 
     const saveProfile = async () => {
-        if (!profileUser) return
+        if (!profileUser || !profileEditable) return
         setProfileSaving(true)
         try {
             const res = await fetch('/api/hr/employees/profile', {
@@ -740,7 +774,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
 
     const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
-        if (!file || !profileUser) return
+        if (!file || !profileUser || !profileEditable) return
         setAvatarUploading(true)
         try {
             const compressed = await compressAvatar(file)
@@ -789,7 +823,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                         <CardTitle className="text-base font-semibold">People</CardTitle>
-                        <CardDescription className="text-xs">Employees and reporting lines • {filteredUsers.length} of {users.length}</CardDescription>
+                        <CardDescription className="text-xs">Employees and reporting lines • {filteredUsers.length === tabTotal ? `${tabTotal} shown` : `${filteredUsers.length} of ${tabTotal} shown (filtered)`}</CardDescription>
                     </div>
                     {canEdit && (
                         <Button size="sm" className="w-full sm:w-auto shrink-0" onClick={() => { resetAddForm(); setAddDialogOpen(true) }}>
@@ -809,7 +843,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                             <button
                                 key={tab.id}
                                 type="button"
-                                onClick={() => { setOnboardingView(tab.id); setSelectedUsers(new Set()) }}
+                                onClick={() => switchView(tab.id)}
                                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${onboardingView === tab.id
                                     ? 'bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800'
                                     : 'text-muted-foreground hover:bg-accent hover:text-foreground'}`}
@@ -856,16 +890,18 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     ))}
                                 </SelectContent>
                             </Select>
-                            <Select value={statusFilter} onValueChange={setStatusFilter}>
-                                <SelectTrigger className="w-full sm:w-[160px]">
-                                    <SelectValue placeholder="Status" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Status</SelectItem>
-                                    <SelectItem value="active">Active</SelectItem>
-                                    <SelectItem value="inactive">Inactive / Left</SelectItem>
-                                </SelectContent>
-                            </Select>
+                            {onboardingView !== 'former' && (
+                                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                                    <SelectTrigger className="w-full sm:w-[160px]" aria-label="Account status">
+                                        <SelectValue placeholder="Status" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Status</SelectItem>
+                                        <SelectItem value="active">Active</SelectItem>
+                                        <SelectItem value="inactive">Suspended / Disabled</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            )}
                         </>
                     )}
                 </div>
@@ -919,7 +955,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <SelectContent>
                                         <SelectItem value="none">No change</SelectItem>
                                         <SelectItem value="clear">Set as top leader</SelectItem>
-                                        {users.map(user => (
+                                        {currentUsers.map(user => (
                                             <SelectItem key={user.id} value={user.id}>
                                                 {user.full_name || user.email}
                                             </SelectItem>
@@ -943,6 +979,8 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                 <Checkbox
                                     checked={selectedUsers.size > 0 && selectedUsers.size === filteredUsers.length}
                                     onCheckedChange={(checked) => toggleSelectAll(checked as boolean)}
+                                    disabled={onboardingView === 'former'}
+                                    aria-label="Select all"
                                 />
                             </div>
                             <div>Name</div>
@@ -956,9 +994,13 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                         </div>
                         {filteredUsers.length === 0 ? (
                             <div className="px-4 py-8 text-center text-sm text-gray-500">
-                                {onboardingView === 'awaiting'
-                                    ? 'Nobody is awaiting onboarding.'
-                                    : users.length === 0 || onboardedUsers.length === 0 ? 'No onboarded employees yet. Click "+ Add Employee" to register someone.' : 'No employees match your filters.'}
+                                {tabTotal > 0
+                                    ? (onboardingView === 'former' ? 'No former employees match the current filters.'
+                                        : onboardingView === 'awaiting' ? 'No employees awaiting onboarding match the current filters.'
+                                        : 'No onboarded employees match the current filters.')
+                                    : (onboardingView === 'former' ? 'No former employees found.'
+                                        : onboardingView === 'awaiting' ? 'No employees awaiting onboarding.'
+                                        : canEdit ? 'No onboarded employees found. Click "+ Add Employee" to register someone.' : 'No onboarded employees found.')}
                             </div>
                         ) : filteredUsers.map(user => {
                             const isEditing = editingUserId === user.id
@@ -968,6 +1010,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <Checkbox
                                         checked={selectedUsers.has(user.id)}
                                         onCheckedChange={(checked) => toggleSelectUser(user.id, checked as boolean)}
+                                        disabled={employeeCategory(user) === 'former'}
                                     />
                                 </div>
                                 <div className="flex items-center gap-3 cursor-pointer group" onClick={() => openProfile(user)}>
@@ -1034,7 +1077,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                             </SelectTrigger>
                                             <SelectContent>
                                                 <SelectItem value="none">Top leader</SelectItem>
-                                                {users.filter(u => u.id !== user.id && u.account_status !== 'ARCHIVED').map(u => (
+                                                {currentUsers.filter(u => u.id !== user.id).map(u => (
                                                     <SelectItem key={u.id} value={u.id}>{u.full_name || u.email}</SelectItem>
                                                 ))}
                                             </SelectContent>
@@ -1052,9 +1095,14 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                 <div className="text-xs text-gray-500">{user.role_name || user.role_code}</div>
                                 <div>
                                     {user.account_status === 'ARCHIVED' ? (
-                                        <Badge variant="secondary" className="text-[10px]" title={user.end_date ? `Employment ended ${user.end_date}` : undefined}>
-                                            Former{user.employment_status === 'terminated' ? ' · terminated' : user.employment_status === 'resigned' ? ' · resigned' : ''}
-                                        </Badge>
+                                        <div className="space-y-0.5">
+                                            <Badge variant="secondary" className="text-[10px]" title={user.end_date ? `Employment ended ${user.end_date}` : undefined}>
+                                                Former{user.employment_status === 'terminated' ? ' · terminated' : user.employment_status === 'resigned' ? ' · resigned' : ''}
+                                            </Badge>
+                                            {user.account_status_changed_at && (
+                                                <div className="text-[10px] text-muted-foreground">Archived {user.account_status_changed_at.slice(0, 10)}</div>
+                                            )}
+                                        </div>
                                     ) : user.onboarding_status && user.onboarding_status !== 'completed' ? (
                                         <Badge variant="outline" className="text-[10px] border-amber-200 text-amber-700">
                                             {user.onboarding_status === 'reset' ? 'Reset' : 'Pending'}
@@ -1498,7 +1546,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                             <AvatarImage src={profileUser.avatar_url || undefined} />
                                             <AvatarFallback>{(profileUser.full_name || 'U').slice(0, 2).toUpperCase()}</AvatarFallback>
                                         </Avatar>
-                                        {canEdit && (
+                                        {profileEditable && (
                                             <button
                                                 type="button"
                                                 onClick={() => avatarInputRef.current?.click()}
@@ -1531,7 +1579,9 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                             )}
                         </SheetTitle>
                         <SheetDescription>
-                            HR profile details. {canEdit ? 'Changes are saved when you click Save.' : 'View only.'}
+                            {profileUser?.account_status === 'ARCHIVED'
+                                ? 'Former employee — historical record, view only.'
+                                : <>HR profile details. {profileEditable ? 'Changes are saved when you click Save.' : 'View only.'}</>}
                         </SheetDescription>
                     </SheetHeader>
 
@@ -1553,7 +1603,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Gender</Label>
-                                            <Select value={profileData.gender || 'none'} onValueChange={v => updateProfileField('gender', v === 'none' ? null : v)} disabled={!canEdit}>
+                                            <Select value={profileData.gender || 'none'} onValueChange={v => updateProfileField('gender', v === 'none' ? null : v)} disabled={!profileEditable}>
                                                 <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                                                 <SelectContent>
                                                     <SelectItem value="none">Not set</SelectItem>
@@ -1565,13 +1615,13 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Date of Birth</Label>
-                                            <Input type="date" className="h-9" value={profileData.date_of_birth || ''} onChange={e => updateProfileField('date_of_birth', e.target.value || null)} disabled={!canEdit} />
+                                            <Input type="date" className="h-9" value={profileData.date_of_birth || ''} onChange={e => updateProfileField('date_of_birth', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Marital Status</Label>
-                                            <Select value={profileData.marital_status || 'none'} onValueChange={v => updateProfileField('marital_status', v === 'none' ? null : v)} disabled={!canEdit}>
+                                            <Select value={profileData.marital_status || 'none'} onValueChange={v => updateProfileField('marital_status', v === 'none' ? null : v)} disabled={!profileEditable}>
                                                 <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                                                 <SelectContent>
                                                     <SelectItem value="none">Not set</SelectItem>
@@ -1584,17 +1634,17 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Nationality</Label>
-                                            <Input className="h-9" value={profileData.nationality || ''} onChange={e => updateProfileField('nationality', e.target.value || null)} placeholder="e.g. Malaysian" disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.nationality || ''} onChange={e => updateProfileField('nationality', e.target.value || null)} placeholder="e.g. Malaysian" disabled={!profileEditable} />
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Religion</Label>
-                                            <Input className="h-9" value={profileData.religion || ''} onChange={e => updateProfileField('religion', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.religion || ''} onChange={e => updateProfileField('religion', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Blood Type</Label>
-                                            <Select value={profileData.blood_type || 'none'} onValueChange={v => updateProfileField('blood_type', v === 'none' ? null : v)} disabled={!canEdit}>
+                                            <Select value={profileData.blood_type || 'none'} onValueChange={v => updateProfileField('blood_type', v === 'none' ? null : v)} disabled={!profileEditable}>
                                                 <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                                                 <SelectContent>
                                                     <SelectItem value="none">Not set</SelectItem>
@@ -1608,16 +1658,16 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Personal Email</Label>
-                                            <Input className="h-9" type="email" value={profileData.personal_email || ''} onChange={e => updateProfileField('personal_email', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" type="email" value={profileData.personal_email || ''} onChange={e => updateProfileField('personal_email', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Personal Phone</Label>
-                                            <Input className="h-9" value={profileData.personal_phone || ''} onChange={e => updateProfileField('personal_phone', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.personal_phone || ''} onChange={e => updateProfileField('personal_phone', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                     </div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Highest Education</Label>
-                                        <Select value={profileData.highest_education || 'none'} onValueChange={v => updateProfileField('highest_education', v === 'none' ? null : v)} disabled={!canEdit}>
+                                        <Select value={profileData.highest_education || 'none'} onValueChange={v => updateProfileField('highest_education', v === 'none' ? null : v)} disabled={!profileEditable}>
                                             <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                                             <SelectContent>
                                                 <SelectItem value="none">Not set</SelectItem>
@@ -1634,30 +1684,30 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Institution</Label>
-                                            <Input className="h-9" value={profileData.education_institution || ''} onChange={e => updateProfileField('education_institution', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.education_institution || ''} onChange={e => updateProfileField('education_institution', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Field of Study</Label>
-                                            <Input className="h-9" value={profileData.education_field || ''} onChange={e => updateProfileField('education_field', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.education_field || ''} onChange={e => updateProfileField('education_field', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                     </div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Address</Label>
-                                        <Input className="h-9 mb-1" value={profileData.address_line1 || ''} onChange={e => updateProfileField('address_line1', e.target.value || null)} placeholder="Line 1" disabled={!canEdit} />
-                                        <Input className="h-9" value={profileData.address_line2 || ''} onChange={e => updateProfileField('address_line2', e.target.value || null)} placeholder="Line 2" disabled={!canEdit} />
+                                        <Input className="h-9 mb-1" value={profileData.address_line1 || ''} onChange={e => updateProfileField('address_line1', e.target.value || null)} placeholder="Line 1" disabled={!profileEditable} />
+                                        <Input className="h-9" value={profileData.address_line2 || ''} onChange={e => updateProfileField('address_line2', e.target.value || null)} placeholder="Line 2" disabled={!profileEditable} />
                                     </div>
                                     <div className="grid grid-cols-3 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">City</Label>
-                                            <Input className="h-9" value={profileData.city || ''} onChange={e => updateProfileField('city', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.city || ''} onChange={e => updateProfileField('city', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">State</Label>
-                                            <Input className="h-9" value={profileData.state || ''} onChange={e => updateProfileField('state', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.state || ''} onChange={e => updateProfileField('state', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Postcode</Label>
-                                            <Input className="h-9" value={profileData.postcode || ''} onChange={e => updateProfileField('postcode', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.postcode || ''} onChange={e => updateProfileField('postcode', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                     </div>
                                 </TabsContent>
@@ -1667,31 +1717,31 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">IC Number (NRIC)</Label>
-                                            <Input className="h-9" value={profileData.ic_number || ''} onChange={e => updateProfileField('ic_number', e.target.value || null)} placeholder="e.g. 900101-01-1234" disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.ic_number || ''} onChange={e => updateProfileField('ic_number', e.target.value || null)} placeholder="e.g. 900101-01-1234" disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Passport Number</Label>
-                                            <Input className="h-9" value={profileData.passport_number || ''} onChange={e => updateProfileField('passport_number', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.passport_number || ''} onChange={e => updateProfileField('passport_number', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Tax ID (LHDN)</Label>
-                                            <Input className="h-9" value={profileData.tax_id || ''} onChange={e => updateProfileField('tax_id', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.tax_id || ''} onChange={e => updateProfileField('tax_id', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">SOCSO (PERKESO)</Label>
-                                            <Input className="h-9" value={profileData.socso_number || ''} onChange={e => updateProfileField('socso_number', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.socso_number || ''} onChange={e => updateProfileField('socso_number', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">EPF (KWSP)</Label>
-                                            <Input className="h-9" value={profileData.epf_number || ''} onChange={e => updateProfileField('epf_number', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.epf_number || ''} onChange={e => updateProfileField('epf_number', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">EIS Number</Label>
-                                            <Input className="h-9" value={profileData.eis_number || ''} onChange={e => updateProfileField('eis_number', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.eis_number || ''} onChange={e => updateProfileField('eis_number', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                     </div>
                                 </TabsContent>
@@ -1701,20 +1751,20 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Contact Name</Label>
-                                            <Input className="h-9" value={profileData.emergency_name || ''} onChange={e => updateProfileField('emergency_name', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.emergency_name || ''} onChange={e => updateProfileField('emergency_name', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Relationship</Label>
-                                            <Input className="h-9" value={profileData.emergency_relationship || ''} onChange={e => updateProfileField('emergency_relationship', e.target.value || null)} placeholder="e.g. Spouse, Parent" disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.emergency_relationship || ''} onChange={e => updateProfileField('emergency_relationship', e.target.value || null)} placeholder="e.g. Spouse, Parent" disabled={!profileEditable} />
                                         </div>
                                     </div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Emergency Phone</Label>
-                                        <Input className="h-9" value={profileData.emergency_phone || ''} onChange={e => updateProfileField('emergency_phone', e.target.value || null)} disabled={!canEdit} />
+                                        <Input className="h-9" value={profileData.emergency_phone || ''} onChange={e => updateProfileField('emergency_phone', e.target.value || null)} disabled={!profileEditable} />
                                     </div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Emergency Address</Label>
-                                        <Textarea value={profileData.emergency_address || ''} onChange={e => updateProfileField('emergency_address', e.target.value || null)} rows={2} disabled={!canEdit} />
+                                        <Textarea value={profileData.emergency_address || ''} onChange={e => updateProfileField('emergency_address', e.target.value || null)} rows={2} disabled={!profileEditable} />
                                     </div>
                                 </TabsContent>
 
@@ -1723,15 +1773,15 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <div className="text-xs text-gray-500 mb-2">Used for payroll. Overrides the bank info from User Management if set.</div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Bank Name</Label>
-                                        <Input className="h-9" value={profileData.bank_name || ''} onChange={e => updateProfileField('bank_name', e.target.value || null)} placeholder="e.g. Maybank, CIMB" disabled={!canEdit} />
+                                        <Input className="h-9" value={profileData.bank_name || ''} onChange={e => updateProfileField('bank_name', e.target.value || null)} placeholder="e.g. Maybank, CIMB" disabled={!profileEditable} />
                                     </div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Account Number</Label>
-                                        <Input className="h-9" value={profileData.bank_account_no || ''} onChange={e => updateProfileField('bank_account_no', e.target.value || null)} disabled={!canEdit} />
+                                        <Input className="h-9" value={profileData.bank_account_no || ''} onChange={e => updateProfileField('bank_account_no', e.target.value || null)} disabled={!profileEditable} />
                                     </div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Account Holder Name</Label>
-                                        <Input className="h-9" value={profileData.bank_holder_name || ''} onChange={e => updateProfileField('bank_holder_name', e.target.value || null)} disabled={!canEdit} />
+                                        <Input className="h-9" value={profileData.bank_holder_name || ''} onChange={e => updateProfileField('bank_holder_name', e.target.value || null)} disabled={!profileEditable} />
                                     </div>
                                 </TabsContent>
 
@@ -1747,10 +1797,10 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                             {profileTab !== 'commission' && (<>
                             <div className="space-y-1 pt-2 border-t">
                                 <Label className="text-xs">HR Notes</Label>
-                                <Textarea value={profileData.notes || ''} onChange={e => updateProfileField('notes', e.target.value || null)} rows={2} placeholder="Internal notes..." disabled={!canEdit} />
+                                <Textarea value={profileData.notes || ''} onChange={e => updateProfileField('notes', e.target.value || null)} rows={2} placeholder="Internal notes..." disabled={!profileEditable} />
                             </div>
 
-                            {canEdit && (
+                            {profileEditable && (
                                 <div className="flex justify-end pt-2">
                                     <Button onClick={saveProfile} disabled={profileSaving}>
                                         {profileSaving ? <><Loader2 className="h-4 w-4 animate-spin mr-1" />Saving...</> : <><Save className="h-4 w-4 mr-1" />Save Profile</>}

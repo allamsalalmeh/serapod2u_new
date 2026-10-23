@@ -107,6 +107,9 @@ describe('HR People: Delete Employee Permanently (canonical identity deletion)',
     expect(JSON.parse(post[1].body)).toEqual({ user_id: EMP, entry: 'hr', request_id: '00000000-0000-0000-0000-00000000f001',
       preview_token: 'tok-1', reason: 'Duplicate test account before go-live', confirmation: 'TESS@example.test' })
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Actions for Tess Tester' })).toBeNull())
+    // Counts follow; nothing becomes a former employee after a permanent delete.
+    expect((screen.getByRole('button', { name: /^Onboarded/ })).textContent).toContain('0')
+    expect((screen.getByRole('button', { name: /Former employees/ })).textContent).toContain('0')
   })
 
   it('blocked: explains why and never enables deletion', async () => {

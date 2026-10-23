@@ -73,7 +73,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('HR People: former employees (Archive & Revoke Access)', () => {
   it('an archived person appears only under Former employees — never Onboarded or Awaiting onboarding, whatever the onboarding state', async () => {
-    rows.splice(0, rows.length, row('reset', { account_status: 'ARCHIVED' }))
+    rows.splice(0, rows.length, row('reset', { account_status: 'ARCHIVED', is_active: false }))
     mockFetch()
     render(<HrPeopleView organizationId="org-a" canEdit />)
     expect((await tab(/Former employees/)).textContent).toContain('1')
@@ -104,14 +104,18 @@ describe('HR People: former employees (Archive & Revoke Access)', () => {
     fireEvent.change(screen.getByLabelText(/to confirm/), { target: { value: 'tess@example.test' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /should lose all access/ }))
     await waitFor(() => expect(confirm.disabled).toBe(false))
-    rows.splice(0, rows.length, row('completed', { account_status: 'ARCHIVED' }))
+    rows.splice(0, rows.length, row('completed', { account_status: 'ARCHIVED', is_active: false }))
     fireEvent.click(confirm)
     await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Archived — access revoked' })))
     const post = fetchMock.mock.calls.find(([url, init]) => url === '/api/identity/archive' && init?.method === 'POST')!
     expect(JSON.parse(post[1].body)).toEqual({ action: 'archive', user_id: EMP, entry: 'hr', request_id: '00000000-0000-0000-0000-00000000f001',
       preview_token: 'tok-a', reason: 'Contract ended last Friday', confirmation: 'tess@example.test', release_identifiers: true, employment_end: 'terminated' })
-    // Reloaded: the person left the Onboarded list.
+    // Reloaded: the person left the Onboarded list and the counts moved to Former employees.
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Actions for Tess Tester' })).toBeNull())
+    await waitFor(() => expect((screen.getByRole('button', { name: /Former employees/ })).textContent).toContain('1'))
+    expect((screen.getByRole('button', { name: /^Onboarded/ })).textContent).toContain('0')
+    fireEvent.click(screen.getByRole('button', { name: /Former employees/ }))
+    expect(await screen.findByRole('button', { name: 'Actions for Tess Tester' })).toBeTruthy()
   })
 
   it('a blocked archive explains why and never enables the action', async () => {
