@@ -31,10 +31,11 @@ import {
 } from '@/lib/returns/constants'
 import { ReturnSourceCombobox } from './ReturnSourceCombobox'
 import { generateReturnPdf } from '@/lib/returns/pdf'
+import { itemLineValue } from '@/lib/returns/compute'
 import { variantAlternativeLabel, variantIdentityLabel } from '@/lib/inventory/variant-display-label'
 import {
     getVariantDisplayName, classifyProductLine, productLineLabel,
-    isCartridgeLine, getRowUnitsPerCase,
+    isCartridgeLine, getRowUnitsPerCase, getSavedRowUnitsPerCase,
     getUnitsPerCase, getUnitsPerBox, computePcsMode, computeBoxMode,
     pcsModeToStorage, boxModeToStorage, storageToPcsMode, storageToBoxMode,
     formatReturnAmount, caseUnitLabel, CASE_UNIT_LABEL,
@@ -260,6 +261,10 @@ interface WorksheetRow {
     image_url: string | null
     units_per_case: number
     unit_cost: number
+    distributor_price: number | null
+    retailer_price: number | null
+    /** Price saved on the line (snapshot); null until saved with prices. */
+    unit_price: number | null
     is_active: boolean
     isExtra: boolean
     // Pcs/Cases mode
@@ -296,6 +301,9 @@ function eligibleToRow(p: EligibleProduct): WorksheetRow {
         image_url: p.image_url,
         units_per_case: getRowUnitsPerCase(p.product_line, p.product_name, p.units_per_case),
         unit_cost: p.unit_cost,
+        distributor_price: p.distributor_price ?? null,
+        retailer_price: p.retailer_price ?? null,
+        unit_price: null,
         is_active: p.is_active,
         isExtra: false,
         entry_unit: 'pcs',
@@ -315,11 +323,7 @@ function savedItemToExtraRow(it: ReturnCaseItem): WorksheetRow {
     const upc = Number(it.units_per_case_snapshot)
     const productName = it.product_name || 'Product'
     const line = classifyProductLine(productName)
-    const upcVal = getRowUnitsPerCase(
-        line,
-        productName,
-        (Number.isFinite(upc) && upc > 0) ? Math.floor(upc) : getUnitsPerBox(productName),
-    )
+    const upcVal = getSavedRowUnitsPerCase(line, productName, upc, getUnitsPerBox(productName))
     const caseQty = Number(it.case_qty || 0)
     const looseQty = Number(it.loose_piece_qty || 0)
     const total = caseQty * upcVal + looseQty
@@ -342,6 +346,9 @@ function savedItemToExtraRow(it: ReturnCaseItem): WorksheetRow {
         image_url: null,
         units_per_case: upcVal,
         unit_cost: Number(it.unit_cost || 0),
+        distributor_price: null,
+        retailer_price: null,
+        unit_price: it.unit_price != null ? Number(it.unit_price) : null,
         is_active: false,
         isExtra: true,
         entry_unit: 'pcs',
@@ -513,12 +520,9 @@ function ReturnCaseEditor({
             if (s) {
                 usedKeys.add(k)
                 const upc = Number(s.units_per_case_snapshot)
-                const upcVal = getRowUnitsPerCase(
-                    row.product_line,
-                    row.product_name,
-                    (Number.isFinite(upc) && upc > 0) ? Math.floor(upc) : row.units_per_case,
-                )
+                const upcVal = getSavedRowUnitsPerCase(row.product_line, row.product_name, upc, row.units_per_case)
                 row.units_per_case = upcVal
+                row.unit_price = s.unit_price != null ? Number(s.unit_price) : null
                 const cq = Number(s.case_qty || 0)
                 const lq = Number(s.loose_piece_qty || 0)
                 const total = cq * upcVal + lq
@@ -752,7 +756,8 @@ function ReturnCaseEditor({
                 alternative_name: v.alternative_name ?? null,
                 product_line: vLine,
                 image_url: v.image_url, units_per_case: upc,
-                unit_cost: v.unit_cost, is_active: v.is_active, isExtra: true,
+                unit_cost: v.unit_cost, distributor_price: v.distributor_price, retailer_price: v.retailer_price,
+                unit_price: null, is_active: v.is_active, isExtra: true,
                 entry_unit: 'pcs' as EntryUnit,
                 entered_pcs: 0, entered_box_qty: 0, entered_extra_pcs: 0,
                 case_qty: 0, loose_piece_qty: 0, total_units: 0,
@@ -792,6 +797,14 @@ function ReturnCaseEditor({
     }
 
     // ── Summary ──
+    // A completed return keeps the price it was saved with; an editable one shows
+    // the current price for the selected source (the server sets it on save).
+    const rowPrice = useCallback((r: WorksheetRow): number | null => {
+        if (readOnly && r.unit_price != null) return r.unit_price
+        const sourcePrice = sourceType === 'distributor' ? r.distributor_price : r.retailer_price
+        return sourcePrice ?? r.unit_price
+    }, [readOnly, sourceType])
+
     const summary = useMemo(() => {
         let entered = 0, totalCase = 0, totalLoose = 0, totalPcs = 0, value = 0
         for (const r of rows) {
@@ -801,11 +814,14 @@ function ReturnCaseEditor({
                 totalCase += n.case_qty
                 totalLoose += n.loose_piece_qty
                 totalPcs += n.total_units
-                value += n.total_units * (r.unit_cost || 0)
+                value += itemLineValue({
+                    total_units: n.total_units, quantity: n.total_units,
+                    unit_cost: r.unit_cost, unit_price: rowPrice(r), units_per_case_snapshot: r.units_per_case,
+                })
             }
         }
         return { entered, totalRows: rows.length, totalCase, totalLoose, totalPcs, value }
-    }, [rows])
+    }, [rows, rowPrice])
 
     // ── Persist ──
     const collectItems = () => rows
@@ -817,6 +833,7 @@ function ReturnCaseEditor({
                 case_qty: n.case_qty, loose_piece_qty: n.loose_piece_qty,
                 units_per_case_snapshot: r.units_per_case,
                 unit_cost: r.unit_cost,
+                unit_price: rowPrice(r),
                 reason: r.reason, condition: r.condition, notes: r.notes,
                 _total: n.total_units,
             }
@@ -962,7 +979,7 @@ function ReturnCaseEditor({
             quantity: 0, case_qty: it.case_qty, loose_piece_qty: it.loose_piece_qty,
             units_per_case_snapshot: it.units_per_case_snapshot,
             total_units: it.case_qty * (it.units_per_case_snapshot || 1) + it.loose_piece_qty,
-            unit_cost: it.unit_cost, reason: it.reason, condition: it.condition, photo_url: null, notes: it.notes,
+            unit_cost: it.unit_cost, unit_price: it.unit_price, reason: it.reason, condition: it.condition, photo_url: null, notes: it.notes,
         })) as ReturnCaseItem[],
         created_at: rc?.created_at || new Date().toISOString(),
         created_by_name: rc?.created_by_name || userProfile.full_name || null,
@@ -1430,6 +1447,8 @@ interface ExtraProductOption {
     image_url: string | null
     units_per_case: number
     unit_cost: number
+    distributor_price: number | null
+    retailer_price: number | null
     is_active: boolean
 }
 
@@ -2001,7 +2020,7 @@ function AddOtherProduct({
         try {
             const { data, error } = await (supabase as any)
                 .from('product_variants')
-                .select('id, product_id, variant_name, product_code, alternative_name, barcode, manufacturer_sku, manual_sku, image_url, base_cost, is_active, products!inner(id, product_name, units_per_case), product_skus(sku_code, quantity_per_package, is_active)')
+                .select('id, product_id, variant_name, product_code, alternative_name, barcode, manufacturer_sku, manual_sku, image_url, base_cost, distributor_price, retailer_price, is_active, products!inner(id, product_name, units_per_case), product_skus(sku_code, quantity_per_package, is_active)')
                 .order('variant_name', { ascending: true })
                 .limit(500)
             if (error) throw error
@@ -2022,6 +2041,8 @@ function AddOtherProduct({
                     image_url: v.image_url || null,
                     units_per_case: Number.isFinite(upc) && upc > 0 ? Math.floor(upc) : 1,
                     unit_cost: v.base_cost != null ? Number(v.base_cost) : 0,
+                    distributor_price: v.distributor_price != null ? Number(v.distributor_price) : null,
+                    retailer_price: v.retailer_price != null ? Number(v.retailer_price) : null,
                     is_active: v.is_active !== false,
                 }
             })

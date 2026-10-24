@@ -257,7 +257,7 @@ export default function OutdoorProductDetailClient({ product }: { product: Store
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 pb-10 pt-4 sm:px-8">
-      <div className="grid items-start gap-8 lg:grid-cols-2 lg:gap-12">
+      <div className="grid grid-cols-1 items-start gap-8 lg:grid-cols-2 lg:gap-12">
         <div
           onPointerEnter={(event) => { galleryHovered.current = event.pointerType === 'mouse' }}
           onPointerLeave={() => { galleryHovered.current = false }}
@@ -417,9 +417,9 @@ export default function OutdoorProductDetailClient({ product }: { product: Store
             </div>
           ) : null}
 
-          <div className="mt-4 flex items-start justify-between gap-3">
-            <h1 className="font-display text-3xl tracking-tight text-[var(--out-bark)]">{product.product_name}</h1>
-            {spec ? <p className="pt-2 text-sm text-[var(--out-muted)]">{spec}</p> : null}
+          <div className="mt-4 flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+            <h1 className="min-w-min flex-1 font-display text-3xl tracking-tight text-[var(--out-bark)]">{product.product_name}</h1>
+            {spec ? <p className="max-w-full shrink-0 pt-2 text-sm text-[var(--out-muted)]">{spec}</p> : null}
           </div>
           <p key={productPrice ?? 'ask'} className="out-swap mt-1 text-lg font-semibold text-[var(--out-bark)]">
             {formatPrice(productPrice)}

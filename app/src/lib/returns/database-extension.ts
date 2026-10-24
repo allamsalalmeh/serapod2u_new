@@ -63,6 +63,7 @@ export interface ReturnCaseItemRow {
     units_per_case_snapshot: number | null
     total_units: number
     unit_cost: number
+    unit_price?: number | null
     reason: string | null
     condition: string | null
     photo_url: string | null

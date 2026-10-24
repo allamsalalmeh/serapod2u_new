@@ -5,11 +5,24 @@ export function itemsTotalQty(items?: ReturnCaseItem[] | null): number {
     return (items || []).reduce((sum, it) => sum + Number(it.total_units || it.quantity || 0), 0)
 }
 
+/**
+ * Value of one return line at the return source's price (unit_price); lines
+ * saved before prices were recorded fall back to unit_cost. Prices are per
+ * stock unit — a case for lines with a pack size — while quantities are in
+ * pieces, so the pieces are restated in cases first.
+ */
+export function itemLineValue(
+    it: Pick<ReturnCaseItem, 'total_units' | 'quantity' | 'unit_cost' | 'units_per_case_snapshot'> & { unit_price?: number | null },
+): number {
+    const qty = Number(it.total_units || it.quantity || 0)
+    const perCase = Number(it.units_per_case_snapshot)
+    const stockUnits = Number.isFinite(perCase) && perCase > 1 ? qty / perCase : qty
+    const price = it.unit_price != null ? Number(it.unit_price) : Number(it.unit_cost || 0)
+    return stockUnits * (Number.isFinite(price) ? price : 0)
+}
+
 export function itemsTotalValue(items?: ReturnCaseItem[] | null): number {
-    return (items || []).reduce((sum, it) => {
-        const qty = Number(it.total_units || it.quantity || 0)
-        return sum + qty * Number(it.unit_cost || 0)
-    }, 0)
+    return (items || []).reduce((sum, it) => sum + itemLineValue(it), 0)
 }
 
 /** Whole days between a start timestamp and now (or an end timestamp). */
