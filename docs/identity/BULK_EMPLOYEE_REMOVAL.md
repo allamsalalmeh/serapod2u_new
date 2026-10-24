@@ -42,7 +42,7 @@ typed phrase (no extra checkbox)
         ▼
 POST /api/hr/employees/bulk-removal             verify signature/actor/org/request id/
         │   phrase/fingerprint → re-preview every target (state must match) →
-        │   guardActor again → bounded concurrency 3 → canonical per-identity execute
+        │   guardActor again → strictly serial per-identity execute → bounded BUSY retry
         ▼
 per-employee results (deleted / archived / blocked / failed / stale) + summary
 ```
@@ -59,6 +59,8 @@ per-employee results (deleted / archived / blocked / failed / stale) + summary
   refused before the first mutation (`PREVIEW_STALE` / `PLAN_NOT_ALLOWED`) and must be reviewed again.
 - **Partial results.** Each target is its own transaction; one failure never rolls back or blocks another. The response
   carries `summary` + `results` and `success` is `true` only when every planned identity reached its confirmed outcome.
+- **Serial destructive execution (Issue 1F).** One canonical transaction at a time; see section H for the proven
+  same-batch lock conflict this removes.
 
 ## C. Security
 
@@ -122,22 +124,23 @@ Supabase instance with synthetic people, or stop after step 4 (read-only preview
 
 - `src/lib/identity/bulk-removal-plan.test.ts` — 21 tests: classification, phrase, signed token/tamper/expiry, plan
   fingerprint, per-target request ids, plan validation, summary.
-- `src/lib/identity/bulk-removal.test.ts` — 20 tests: mixed classification, unverified, cross-organization masked,
+- `src/lib/identity/bulk-removal.test.ts` — 26 tests: mixed classification, unverified, cross-organization masked,
   permission/org refusal, confirmation contract binding, delete-not-allowed refusal, phrase mismatch, plan change,
   stale state, optional archive reason, mixed execution, blocked identity, no archive fallback, idempotent retry,
-  re-authorization at execution, foreign actor/org token rejection.
+  re-authorization at execution, foreign actor/org token rejection, serial execution, transient conflict retry,
+  persistent conflict, unconfirmed auth cleanup, no retry for blockers/stale.
 - `src/app/api/hr/employees/bulk-removal/route.test.ts` — 9 tests: unauthenticated refusal, server-derived organization,
   status mapping, plan problems, execution, mixed results not reported as success, audit rows, unconfirmed 500.
-- `src/components/identity/BulkRemovalDialog.test.tsx` — 7 tests: per-target plan/blockers, constrained actions,
+- `src/components/identity/BulkRemovalDialog.test.tsx` — 8 tests: per-target plan/blockers, constrained actions,
   exact phrase, default/opt-out identifier release, optional archive reason, employment outcome, blocked-only,
-  mixed result rendering, stale re-review.
+  mixed result rendering, stale re-review, transient-conflict retry.
 - `src/components/hr/HrPeopleView.bulkRemoval.test.tsx` — 3 tests: toolbar/count/clear, select-all scope and former
   exclusion, end-to-end removal refresh (deleted row absent from Former, counts updated).
-- Regression: `npx vitest run src/components/hr src/components/identity src/lib/identity src/app/api/hr/employees src/app/api/identity src/app/api/admin/bulk-delete-users` → 37 files, 368 tests passed.
-- Full suite: 647 passed / 2 failed (649). The remaining failure is pre-existing and unrelated:
-  `orders/[orderId]/ship-metrics` (its staging schema snapshot lacks `v_stock_movements_display`). The first full run
-  also failed the authorization route-coverage gate for the three new routes; that registry was updated and the gate
-  now passes.
+- Regression: `npx vitest run src/components/hr src/components/identity src/lib/identity src/app/api/hr/employees src/app/api/identity src/app/api/admin/bulk-delete-users src/lib/security-access/route-coverage.test.ts` → 38 files, 379 tests passed.
+- Full suite: 648 passed / 1 failed (649 files); 6460 passed / 1 failed (6467 tests). The remaining failure is
+  pre-existing and unrelated: `orders/[orderId]/ship-metrics` (its staging schema snapshot lacks
+  `v_stock_movements_display`).
+- Isolated PostgreSQL 17 lock regression (`supabase/tests/identity/bulk_removal_locking/run.sh`) → 4/4 PASS.
 - TypeScript: `NODE_OPTIONS=--max-old-space-size=8192 npx tsc --noEmit` reports no error in the new/changed files; the
   repository's pre-existing `.next/dev/types` parse errors and unrelated route typing errors remain (unchanged).
 
@@ -157,4 +160,79 @@ Supabase instance with synthetic people, or stop after step 4 (read-only preview
 | `app/src/lib/security-access/route-coverage.ts` | Classified the three new routes (ENTERPRISE, canonical permissions) |
 | tests above | New |
 | `docs/identity/BULK_EMPLOYEE_REMOVAL.md` | This document |
+
+
+## H. Issue 1F — intermittent failures: root cause and fix
+
+### Proven root cause
+
+The canonical permanent deletion does two things in one transaction
+(`20261216100000_identity_permanent_deletion.sql`):
+
+1. `identity_deletion_plan` adds **every** `public` table with a person-shaped UUID column without a single-column FK to
+   `lock_tables`. `hr_employees` qualifies through `onboarded_by` / `onboarding_reset_by` (no FK), and
+   `identity_lifecycle_actions` through `actor_id` / `target_user_id` (no FK).
+2. `identity_deletion_execute` takes `LOCK TABLE … IN SHARE MODE` on those tables, then **deletes from
+   `hr_employees`** in the same transaction (row/table lock upgrade to `ROW EXCLUSIVE`), and inserts into
+   `identity_lifecycle_actions`-adjacent audit tables.
+
+`SHARE` conflicts with `ROW EXCLUSIVE`, and no two transactions can hold `SHARE` while both waiting to upgrade it.
+The previous bulk orchestrator executed up to **3** canonical removals in parallel. Therefore:
+
+| Same-batch combination | PostgreSQL outcome | Mapped by `permanent-deletion.ts` |
+|---|---|---|
+| Delete ‖ Delete | Both hold `SHARE` on `hr_employees`, both request `ROW EXCLUSIVE` for the cleanup `DELETE` → **deadlock**, SQLSTATE **40P01**; one transaction aborts | `BUSY` → “This person’s records are being changed right now.” |
+| Delete ‖ Archive | Archive `UPDATE hr_employees` / `INSERT identity_lifecycle_actions` holds `ROW EXCLUSIVE`; the delete’s `LOCK TABLE … SHARE` waits on the 5s `lock_timeout` → **55P03** | same `BUSY` message |
+| Archive ‖ Archive | Different rows, no table-level `SHARE` locks → succeeds | — |
+
+This is why the reported batch had 5 archives succeed while 2 permanent deletions failed, and why the failure was
+intermittent (it depends on whether two destructive transactions overlap). It is a conflict **created by the batch**, not
+a change to the target.
+
+### Evidence
+
+- Isolated disposable PostgreSQL 17 cluster, schema mirroring the canonical lock structure
+  (`supabase/tests/identity/bulk_removal_locking/`):
+  - two concurrent deletions → `ERROR: 40P01: deadlock detected` at `DELETE FROM hr_employees`; one committed,
+    the other fully rolled back (3 of 4 users remained, 1 deletion record);
+  - deletion next to an archive → `ERROR: 55P03: canceling statement due to lock timeout` at
+    `LOCK TABLE hr_employees IN SHARE MODE`; archive committed;
+  - serial deletions → both commit, no orphan rows;
+  - two overlapping requests for one identity → the advisory lock serializes them, the second finds the target gone
+    and writes no duplicate deletion record.
+  - runner: `./supabase/tests/identity/bulk_removal_locking/run.sh` → `RESULT: PASS` (4/4).
+- Read-only staging audit (`destructive_ops_audit_log`): the reported batch is recorded as
+  `9 planned, 2 deleted, 5 archived, 2 failed`; an earlier batch shows `3 planned, 1 failed`.
+- Read-only staging check of the two failed accounts: both still `account_status = ACTIVE`, `is_active = true` with
+  unchanged `updated_at`; no deletion record. Their transactions rolled back completely; they are unchanged and safe to
+  retry. Nothing was retried, archived or deleted during this investigation.
+
+### Fix (application-only; no migration)
+
+1. **Serial destructive execution** — `EXECUTION_CONCURRENCY = 1`; previews remain parallel (4) because they are
+   read-only. This removes same-batch deadlocks/timeouts without touching canonical locks or checks.
+2. **Narrow retry for proven transaction aborts** — only `BUSY` (lock timeout/deadlock) is retried, at most twice with
+   300 ms / 900 ms backoff, with the **same** per-target request id and preview token. The canonical function re-checks
+   authorization, dependencies and the preview token on every attempt. Authorization denials, blockers, stale previews,
+   invalid confirmations, `AUTH_CLEANUP_REQUIRED` and unknown failures are never retried.
+3. **Accurate outcomes** — new `conflict` (transient, unchanged, `retryable: true`) and `unconfirmed`
+   (`AUTH_CLEANUP_REQUIRED`; records may be deleted but login removal was not verified; never auto-retried). `complete`
+   is false unless every planned identity was deleted/archived.
+4. **Safe retry in the UI** — “Retry unchanged employees (n)” only appears for backend-marked retryable results, keeps
+   that employee’s reviewed operation/outcome/release choice, re-runs the authoritative preview and requires a new
+   server phrase and confirmation token. Unconfirmed results are never retried automatically.
+5. No archive substitution and no weakening of preview tokens, permissions, Root/Super Admin/last-admin/HR-live
+   protections or audit records.
+
+### Issue 1F test results
+
+- `src/lib/identity/bulk-removal.test.ts` — 26 tests, including serialization (max in-flight = 1), BUSY→success retry
+  with identical request id, persistent BUSY → `conflict` + `retryable` + no archive fallback, `AUTH_CLEANUP_REQUIRED`
+  → `unconfirmed` and no retry, blocked/stale never retried.
+- `src/lib/identity/bulk-removal-plan.test.ts` — 21 tests (summary now separates conflict/unconfirmed).
+- `src/app/api/hr/employees/bulk-removal/route.test.ts` — 9 tests.
+- `src/components/identity/BulkRemovalDialog.test.tsx` — 8 tests, including conflict rendering and a retry that
+  re-previews only the unchanged employee while preserving its operation.
+- `src/components/hr/HrPeopleView.bulkRemoval.test.tsx` — 3 tests.
+- Isolated PostgreSQL lock regression — 4/4 PASS (see above).
 

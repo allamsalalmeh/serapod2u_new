@@ -188,9 +188,12 @@ describe('execution summary', () => {
     const results = [
       { outcome: 'deleted' as const }, { outcome: 'archived' as const },
       { outcome: 'blocked' as const }, { outcome: 'failed' as const }, { outcome: 'stale' as const },
+      { outcome: 'conflict' as const }, { outcome: 'unconfirmed' as const },
     ]
     const summary = summarizeBulkResults(results)
-    expect(summary).toEqual({ total: 5, deleted: 1, archived: 1, blocked: 1, failed: 1, stale: 1 })
+    expect(summary).toEqual({
+      total: 7, deleted: 1, archived: 1, blocked: 1, failed: 1, stale: 1, conflict: 1, unconfirmed: 1,
+    })
     expect(bulkExecutionComplete(summary)).toBe(false)
     expect(bulkExecutionComplete(summarizeBulkResults([{ outcome: 'deleted' }, { outcome: 'archived' }]))).toBe(true)
   })

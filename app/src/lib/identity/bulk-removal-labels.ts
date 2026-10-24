@@ -18,6 +18,8 @@ export const BULK_OUTCOME_LABELS: Record<string, string> = {
   deleted: 'Deleted permanently',
   archived: 'Archived — access revoked',
   blocked: 'Blocked — unchanged',
-  failed: 'Failed — unchanged or unconfirmed',
+  conflict: 'Temporary conflict — unchanged',
+  failed: 'Failed — not completed',
   stale: 'Changed since preview — unchanged',
+  unconfirmed: 'Unconfirmed — check this employee',
 }

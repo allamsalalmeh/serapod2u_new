@@ -57,6 +57,8 @@ interface ExecutionSummary {
   blocked: number
   failed: number
   stale: number
+  conflict: number
+  unconfirmed: number
 }
 
 interface ExecutionResult {
@@ -67,10 +69,11 @@ interface ExecutionResult {
     user_id: string
     name: string
     action: 'delete' | 'archive'
-    outcome: 'deleted' | 'archived' | 'blocked' | 'failed' | 'stale'
+    outcome: 'deleted' | 'archived' | 'blocked' | 'failed' | 'stale' | 'conflict' | 'unconfirmed'
     detail: string | null
     released?: boolean
     replayed?: boolean
+    retryable?: boolean
   }>
 }
 
@@ -110,8 +113,10 @@ export default function BulkRemovalDialog({ targets, onClose, onCompleted, notif
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The selection being reviewed. On a safe retry this becomes the unchanged subset only.
+  const [activeTargets, setActiveTargets] = useState(targets)
 
-  const userIds = useMemo(() => targets.map(target => target.id), [targets])
+  const userIds = useMemo(() => activeTargets.map(target => target.id), [activeTargets])
 
   /** Refresh authoritative rows without leaving a now-invalid operation selected. */
   const applyEligibility = (rows: BulkRemovalEligibility[], nextSummary: BulkRemovalSummary | null) => {
@@ -128,7 +133,7 @@ export default function BulkRemovalDialog({ targets, onClose, onCompleted, notif
     setRelease(previous => Object.fromEntries(rows.map(row => [row.user_id, previous[row.user_id] ?? row.releasable])))
   }
 
-  const loadPreview = async () => {
+  const loadPreview = async (ids: string[] = userIds, prefill: BulkRemovalPlanEntry[] = []) => {
     setLoading(true)
     setError(null)
     setPlan(null)
@@ -136,7 +141,7 @@ export default function BulkRemovalDialog({ targets, onClose, onCompleted, notif
     try {
       const res = await fetch('/api/hr/employees/bulk-removal/preview', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_ids: userIds }),
+        body: JSON.stringify({ user_ids: ids }),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) {
@@ -147,9 +152,21 @@ export default function BulkRemovalDialog({ targets, onClose, onCompleted, notif
         const rows = (json.data?.targets ?? []) as BulkRemovalEligibility[]
         setEligibility(rows)
         setSummary(json.data?.summary ?? null)
-        setChoices(Object.fromEntries(rows.map(row => [row.user_id, defaultChoice(row)])))
-        setEmployment(Object.fromEntries(rows.map(row => [row.user_id, 'resigned' as BulkEmploymentEnd])))
-        setRelease(Object.fromEntries(rows.map(row => [row.user_id, row.releasable])))
+        setChoices(Object.fromEntries(rows.map(row => {
+          const previous = prefill.find(entry => entry.user_id === row.user_id)
+          if (!previous) return [row.user_id, defaultChoice(row)]
+          const stillAllowed = previous.action === 'delete' ? row.delete_allowed : row.archive_allowed
+          return [row.user_id, stillAllowed ? previous.action : defaultChoice(row)]
+        })) as Record<string, Choice>)
+        setEmployment(Object.fromEntries(rows.map(row => [
+          row.user_id, prefill.find(entry => entry.user_id === row.user_id)?.employment_end ?? 'resigned',
+        ])))
+        setRelease(Object.fromEntries(rows.map(row => [
+          row.user_id,
+          prefill.find(entry => entry.user_id === row.user_id)
+            ? prefill.find(entry => entry.user_id === row.user_id)!.release_identifiers && row.releasable
+            : row.releasable,
+        ])))
       }
     } catch {
       setEligibility([])
@@ -267,6 +284,7 @@ export default function BulkRemovalDialog({ targets, onClose, onCompleted, notif
         notify?.({
           title: execution.complete ? 'Employees removed' : 'Bulk removal finished with exceptions',
           description: `${execution.summary.deleted} deleted · ${execution.summary.archived} archived · `
+            + `${execution.summary.conflict} temporary conflict · ${execution.summary.unconfirmed} unconfirmed · `
             + `${execution.summary.blocked + execution.summary.stale} unchanged · ${execution.summary.failed} failed.`,
           variant: execution.complete ? undefined : 'destructive',
         })
@@ -285,6 +303,26 @@ export default function BulkRemovalDialog({ targets, onClose, onCompleted, notif
     } finally {
       setSubmitting(false)
     }
+  }
+
+  const retryableResults = results?.results.filter(result => result.retryable) ?? []
+
+  /**
+   * Safe retry: only employees the server marked retryable (proven unchanged),
+   * only their previously reviewed operation, and always through a fresh
+   * authoritative preview + new confirmation phrase. Never an automatic repeat
+   * of a destructive call from the browser.
+   */
+  const retryUnchanged = async () => {
+    if (!results || !plan || retryableResults.length === 0) return
+    const entries = plan.entries.filter(entry => retryableResults.some(result => result.user_id === entry.user_id))
+    if (entries.length === 0) return
+    setActiveTargets(retryableResults.map(result => ({ id: result.user_id, name: result.name })))
+    setResults(null)
+    setReason('')
+    setTyped('')
+    setError(null)
+    await loadPreview(entries.map(entry => entry.user_id), entries)
   }
 
   const close = () => { if (!submitting) onClose() }
@@ -374,7 +412,7 @@ export default function BulkRemovalDialog({ targets, onClose, onCompleted, notif
                   <div key={row.user_id} className="rounded-lg border px-3 py-3">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
-                        <div className="text-sm font-medium">{employeeLabel(row, targets.find(t => t.id === row.user_id)?.name)}</div>
+                        <div className="text-sm font-medium">{employeeLabel(row, activeTargets.find(t => t.id === row.user_id)?.name)}</div>
                         <div className="text-xs text-muted-foreground">
                           {formatEmployeeNo(row.employee_no)} · {row.organization_name || 'No organization'}
                         </div>
@@ -475,7 +513,7 @@ export default function BulkRemovalDialog({ targets, onClose, onCompleted, notif
                 return (
                   <div key={entry.user_id} className="flex flex-col gap-1 px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <div className="text-sm font-medium">{row ? employeeLabel(row, targets.find(t => t.id === entry.user_id)?.name) : entry.user_id}</div>
+                      <div className="text-sm font-medium">{row ? employeeLabel(row, activeTargets.find(t => t.id === entry.user_id)?.name) : entry.user_id}</div>
                       <div className="text-muted-foreground">
                         {formatEmployeeNo(row?.employee_no)} · {row?.organization_name || 'No organization'}
                         {entry.action === 'archive' && ` · ${entry.employment_end === 'terminated' ? 'Terminated' : 'Resigned'} · identifiers ${entry.release_identifiers ? 'released' : 'kept'}`}
@@ -525,13 +563,15 @@ export default function BulkRemovalDialog({ targets, onClose, onCompleted, notif
           </div>
         ) : step === 'done' && results ? (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
+            <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
               {([
                 ['Deleted', results.summary.deleted],
                 ['Archived', results.summary.archived],
+                ['Conflict', results.summary.conflict],
+                ['Unconfirmed', results.summary.unconfirmed],
                 ['Blocked', results.summary.blocked],
-                ['Failed', results.summary.failed],
                 ['Changed', results.summary.stale],
+                ['Failed', results.summary.failed],
               ] as const).map(([label, count]) => (
                 <div key={label} className="rounded-lg border px-3 py-2">
                   <div className="text-muted-foreground">{label}</div>
@@ -562,6 +602,7 @@ export default function BulkRemovalDialog({ targets, onClose, onCompleted, notif
 
             <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <ShieldCheck className="h-3.5 w-3.5" /> Every result above is recorded per employee in the audit history.
+              {retryableResults.length > 0 && ' Employees marked as a temporary conflict were not changed; retrying them is safe.'}
             </div>
           </div>
         ) : null}
@@ -584,7 +625,14 @@ export default function BulkRemovalDialog({ targets, onClose, onCompleted, notif
               </Button>
             </>
           ) : step === 'done' ? (
-            <Button onClick={close} disabled={submitting}>Close</Button>
+            <>
+              {retryableResults.length > 0 && (
+                <Button variant="outline" onClick={retryUnchanged} disabled={submitting || loading}>
+                  Retry unchanged employees ({retryableResults.length})
+                </Button>
+              )}
+              <Button onClick={close} disabled={submitting}>Close</Button>
+            </>
           ) : (
             <Button variant="outline" onClick={close} disabled={submitting}>Cancel</Button>
           )}

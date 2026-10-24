@@ -60,6 +60,46 @@ export interface BulkEligibility {
  */
 const BULK_REMOVAL_PERMISSIONS = ['platform.identity.delete', 'hr.employee.delete'] as const
 
+/**
+ * Destructive execution is strictly serial (one identity at a time).
+ *
+ * The canonical deletion acquires table-level SHARE locks from
+ * identity_deletion_plan.lock_tables (hr_employees is in that list because its
+ * onboarded_by / onboarding_reset_by columns have no foreign key) and then
+ * writes some of those same tables in the same transaction. Running two
+ * deletions concurrently produces a PostgreSQL deadlock (40P01); running a
+ * deletion next to an archive (which UPDATEs hr_employees and INSERTs
+ * identity_lifecycle_actions) produces a 5s lock timeout (55P03). Both are
+ * same-batch conflicts, not genuine changes to the target. Serial execution
+ * removes them without weakening any safeguard.
+ */
+const EXECUTION_CONCURRENCY = 1
+/** Only these canonical errors are proven transaction aborts (nothing was written). */
+const RETRYABLE_LOCK_DELAYS_MS = [300, 900]
+const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+
+/**
+ * Bounded retry for lock-timeout/deadlock only. The whole per-identity
+ * transaction is rolled back by PostgreSQL on either error, the request id is
+ * unchanged (canonical idempotency) and the canonical function re-checks the
+ * preview token, authorization and dependencies on every attempt. Nothing else
+ * is retried: authorization denials, blockers, stale previews, invalid
+ * confirmations, auth-cleanup uncertainty and unknown failures are returned as
+ * they are.
+ */
+async function runWithTransientLockRetry<T extends { ok: boolean }>(
+  run: () => Promise<T>,
+  codeOf: (result: T) => string | undefined,
+): Promise<T> {
+  let result = await run()
+  for (const wait of RETRYABLE_LOCK_DELAYS_MS) {
+    if (result.ok || codeOf(result) !== 'BUSY') return result
+    await delay(wait)
+    result = await run()
+  }
+  return result
+}
+
 /** Signing secret for the reviewed batch plan. Fails closed when unset. */
 export function bulkRemovalSecret(): string {
   const secret = process.env.IDENTITY_BULK_REMOVAL_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -458,63 +498,87 @@ export async function bulkRemovalExecute(input: {
 
 
 
-  const outcomes = await mapLimit(plan, 3, async (entry): Promise<BulkTargetResult> => {
+  const outcomes = await mapLimit(plan, EXECUTION_CONCURRENCY, async (entry): Promise<BulkTargetResult> => {
     const fresh = eligibility.internal.get(entry.user_id)!
     const name = eligibilityById.get(entry.user_id)?.full_name || entry.user_id
     const requestId = perTargetRequestId(secret, payload.request_id, entry.user_id, entry.action)
 
     try {
-    if (entry.action === 'delete') {
-      if (!fresh.deletionToken || !fresh.deletionPhrase) {
-        return { user_id: entry.user_id, name, action: entry.action, outcome: 'failed', detail: 'Permanent deletion was not previewed for this person.' }
+      if (entry.action === 'delete') {
+        if (!fresh.deletionToken || !fresh.deletionPhrase) {
+          return { user_id: entry.user_id, name, action: entry.action, outcome: 'failed', detail: 'Permanent deletion was not previewed for this person.' }
+        }
+        const executed = await runWithTransientLockRetry(
+          () => deletionExecute({
+            actorId: input.actorId, userId: entry.user_id, entry: 'hr', requestId,
+            previewToken: fresh.deletionToken!, reason, confirmation: fresh.deletionPhrase!,
+          }),
+          result => (result.ok ? undefined : result.code),
+        )
+        if (!executed.ok) {
+          if (executed.code === 'BUSY') {
+            return { user_id: entry.user_id, name, action: entry.action, outcome: 'conflict', retryable: true,
+              detail: 'Another operation briefly held this person\'s records. Nothing was changed for this person; a fresh review and retry is safe.' }
+          }
+          if (executed.code === 'AUTH_CLEANUP_REQUIRED') {
+            return { user_id: entry.user_id, name, action: entry.action, outcome: 'unconfirmed', retryable: false,
+              detail: executed.message }
+          }
+          return { user_id: entry.user_id, name, action: entry.action, outcome: 'failed', detail: executed.message }
+        }
+        const outcome = executed.outcome
+        if (outcome.status === 'completed') {
+          return { user_id: entry.user_id, name, action: entry.action, outcome: 'deleted', detail: null, replayed: outcome.replayed }
+        }
+        if (outcome.status === 'blocked') {
+          return { user_id: entry.user_id, name, action: entry.action, outcome: 'blocked',
+            detail: outcome.blockers.map(blocker => blocker.message || blocker.code).join(' ') || 'Not allowed for this person.' }
+        }
+        return { user_id: entry.user_id, name, action: entry.action, outcome: 'stale',
+          detail: 'Changed since the preview; nothing was deleted.' }
       }
-      const executed = await deletionExecute({
-        actorId: input.actorId, userId: entry.user_id, entry: 'hr', requestId,
-        previewToken: fresh.deletionToken, reason, confirmation: fresh.deletionPhrase,
-      })
+  
+      if (!fresh.archiveToken || !fresh.archivePhrase) {
+        return { user_id: entry.user_id, name, action: entry.action, outcome: 'failed', detail: 'Archive was not previewed for this person.' }
+      }
+      // Releasing identifiers happens only where the database says it is possible.
+      const releaseIdentifiers = entry.release_identifiers === true && fresh.eligibility.releasable
+      const executed = await runWithTransientLockRetry(
+        () => archiveExecute({
+          actorId: input.actorId, userId: entry.user_id, entry: 'hr', requestId,
+          previewToken: fresh.archiveToken!, reason, confirmation: fresh.archivePhrase!,
+          releaseIdentifiers, employmentEnd: entry.employment_end,
+        }),
+        result => (result.ok ? undefined : result.code),
+      )
       if (!executed.ok) {
+        if (executed.code === 'BUSY') {
+          return { user_id: entry.user_id, name, action: entry.action, outcome: 'conflict', retryable: true,
+            detail: 'Another operation briefly held this person\'s records. Nothing was changed for this person; a fresh review and retry is safe.' }
+        }
+        if (executed.code === 'AUTH_CLEANUP_REQUIRED') {
+          return { user_id: entry.user_id, name, action: entry.action, outcome: 'unconfirmed', retryable: false,
+            detail: executed.message }
+        }
         return { user_id: entry.user_id, name, action: entry.action, outcome: 'failed', detail: executed.message }
       }
       const outcome = executed.outcome
       if (outcome.status === 'completed') {
-        return { user_id: entry.user_id, name, action: entry.action, outcome: 'deleted', detail: null, replayed: outcome.replayed }
+        return { user_id: entry.user_id, name, action: entry.action, outcome: 'archived', detail: null,
+          released: outcome.released, replayed: outcome.replayed }
       }
       if (outcome.status === 'blocked') {
         return { user_id: entry.user_id, name, action: entry.action, outcome: 'blocked',
           detail: outcome.blockers.map(blocker => blocker.message || blocker.code).join(' ') || 'Not allowed for this person.' }
       }
       return { user_id: entry.user_id, name, action: entry.action, outcome: 'stale',
-        detail: 'Changed since the preview; nothing was deleted.' }
-    }
-
-    if (!fresh.archiveToken || !fresh.archivePhrase) {
-      return { user_id: entry.user_id, name, action: entry.action, outcome: 'failed', detail: 'Archive was not previewed for this person.' }
-    }
-    // Releasing identifiers happens only where the database says it is possible.
-    const releaseIdentifiers = entry.release_identifiers === true && fresh.eligibility.releasable
-    const executed = await archiveExecute({
-      actorId: input.actorId, userId: entry.user_id, entry: 'hr', requestId,
-      previewToken: fresh.archiveToken, reason, confirmation: fresh.archivePhrase,
-      releaseIdentifiers, employmentEnd: entry.employment_end,
-    })
-    if (!executed.ok) {
-      return { user_id: entry.user_id, name, action: entry.action, outcome: 'failed', detail: executed.message }
-    }
-    const outcome = executed.outcome
-    if (outcome.status === 'completed') {
-      return { user_id: entry.user_id, name, action: entry.action, outcome: 'archived', detail: null,
-        released: outcome.released, replayed: outcome.replayed }
-    }
-    if (outcome.status === 'blocked') {
-      return { user_id: entry.user_id, name, action: entry.action, outcome: 'blocked',
-        detail: outcome.blockers.map(blocker => blocker.message || blocker.code).join(' ') || 'Not allowed for this person.' }
-    }
-    return { user_id: entry.user_id, name, action: entry.action, outcome: 'stale',
-      detail: 'Changed since the preview; nothing was changed.' }
+        detail: 'Changed since the preview; nothing was changed.' }
     } catch {
       // One unexpected per-identity failure never discards the other results and never reports success.
-      return { user_id: entry.user_id, name, action: entry.action, outcome: 'failed',
-        detail: 'The result could not be confirmed for this person. Repeating the same request is safe.' }
+      // The outcome is unknown, not "nothing happened": the canonical request id makes a repeat safe,
+      // but it is never retried automatically here.
+      return { user_id: entry.user_id, name, action: entry.action, outcome: 'unconfirmed', retryable: false,
+        detail: 'The result could not be confirmed for this person. Repeating the same request is safe; check the employee before acting again.' }
     }
   })
 

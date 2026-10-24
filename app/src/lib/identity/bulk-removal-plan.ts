@@ -283,7 +283,7 @@ export function perTargetRequestId(secret: string, batchRequestId: string, userI
   ].join('-')
 }
 
-export type BulkOutcomeKind = 'deleted' | 'archived' | 'blocked' | 'failed' | 'stale'
+export type BulkOutcomeKind = 'deleted' | 'archived' | 'blocked' | 'failed' | 'stale' | 'conflict' | 'unconfirmed'
 
 export interface BulkTargetResult {
   user_id: string
@@ -293,6 +293,8 @@ export interface BulkTargetResult {
   detail: string | null
   released?: boolean
   replayed?: boolean
+  /** True only when the backend proved no destructive change happened and a fresh retry is safe. */
+  retryable?: boolean
 }
 
 export interface BulkExecutionSummary {
@@ -302,10 +304,14 @@ export interface BulkExecutionSummary {
   blocked: number
   failed: number
   stale: number
+  conflict: number
+  unconfirmed: number
 }
 
 export function summarizeBulkResults(results: ReadonlyArray<Pick<BulkTargetResult, 'outcome'>>): BulkExecutionSummary {
-  const summary: BulkExecutionSummary = { total: results.length, deleted: 0, archived: 0, blocked: 0, failed: 0, stale: 0 }
+  const summary: BulkExecutionSummary = {
+    total: results.length, deleted: 0, archived: 0, blocked: 0, failed: 0, stale: 0, conflict: 0, unconfirmed: 0,
+  }
   for (const result of results) summary[result.outcome] += 1
   return summary
 }

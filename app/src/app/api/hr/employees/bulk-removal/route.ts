@@ -3,6 +3,12 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { bulkRemovalExecute } from '@/lib/identity/bulk-removal'
 
+// Destructive work is serial by design (safe first-attempt execution); allow a
+// large batch the same time budget as the other guarded bulk operation.
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+export const maxDuration = 600
+
 // ─── POST /api/hr/employees/bulk-removal ─────────────────────────────────────
 //
 // Executes exactly the reviewed batch plan. This is an explicitly authorized
@@ -75,7 +81,8 @@ export async function POST(request: NextRequest) {
     const summary = result.summary
     await auditAttempt(actor.id, result.complete,
       `request ${result.request_id}: ${summary.deleted} deleted, ${summary.archived} archived, `
-      + `${summary.blocked} blocked, ${summary.failed} failed, ${summary.stale} stale (${summary.total} planned)`)
+      + `${summary.blocked} blocked, ${summary.conflict} conflict, ${summary.failed} failed, `
+      + `${summary.unconfirmed} unconfirmed, ${summary.stale} stale (${summary.total} planned)`)
     return NextResponse.json({ success: result.complete, complete: result.complete, data: result })
   } catch {
     if (actorId) {

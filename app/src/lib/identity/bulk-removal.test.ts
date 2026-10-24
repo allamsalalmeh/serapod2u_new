@@ -322,7 +322,7 @@ describe('bulkRemovalExecute', () => {
     })
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.summary).toEqual({ total: 2, deleted: 1, archived: 1, blocked: 0, failed: 0, stale: 0 })
+    expect(result.summary).toEqual({ total: 2, deleted: 1, archived: 1, blocked: 0, failed: 0, stale: 0, conflict: 0, unconfirmed: 0 })
     expect(result.complete).toBe(true)
     expect(result.results.map(item => item.outcome)).toEqual(['deleted', 'archived'])
     expect(mocks.deletionExecute).toHaveBeenCalledWith(expect.objectContaining({
@@ -382,5 +382,107 @@ describe('bulkRemovalExecute', () => {
     expect(ids[0]).toBe(ids[1])
     expect(mocks.deletionExecute.mock.calls[1][0]).toMatchObject({ previewToken: `del-${U1}` })
   })
-})
 
+  it('serializes destructive execution: a batch never runs two canonical transactions at once', async () => {
+    const review = await reviewed([
+      { user_id: U1, action: 'delete' },
+      { user_id: U2, action: 'delete' },
+    ])
+    let inFlight = 0
+    let maxInFlight = 0
+    mocks.deletionExecute.mockImplementation(async () => {
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise(resolve => setTimeout(resolve, 15))
+      inFlight -= 1
+      return { ok: true, outcome: { status: 'completed', deletionId: 'd', replayed: false, removed: [], authVerified: true } }
+    })
+    const result = await bulkRemovalExecute({
+      actorId: ACTOR, organizationId: ORG, requestId: review.request_id, token: review.token,
+      confirmation: review.phrase, plan: planFor([
+        { user_id: U1, action: 'delete' },
+        { user_id: U2, action: 'delete' },
+      ]), reason: 'Batch clean-up of test accounts',
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.summary.deleted).toBe(2)
+    expect(result.complete).toBe(true)
+    expect(maxInFlight).toBe(1)
+  })
+
+  it('retries a proven transient lock conflict with the same idempotency identity', async () => {
+    mocks.deletionExecute
+      .mockResolvedValueOnce({ ok: false, code: 'BUSY', status: 409, message: 'This person\'s records are being changed right now.' })
+      .mockResolvedValueOnce({ ok: true, outcome: { status: 'completed', deletionId: 'd-1', replayed: false, removed: [], authVerified: true } })
+    const review = await reviewed([{ user_id: U1, action: 'delete' }])
+    const result = await execute(review)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.results[0].outcome).toBe('deleted')
+    expect(result.complete).toBe(true)
+    expect(mocks.deletionExecute).toHaveBeenCalledTimes(2)
+    const ids = mocks.deletionExecute.mock.calls.map(call => (call[0] as { requestId: string }).requestId)
+    expect(ids[0]).toBe(ids[1])
+  })
+
+  it('reports a persistent conflict as unchanged/retryable and never substitutes an archive', async () => {
+    mocks.deletionExecute.mockResolvedValue({ ok: false, code: 'BUSY', status: 409, message: 'lock timeout' })
+    const review = await reviewed([{ user_id: U1, action: 'delete' }])
+    const result = await execute(review)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.results[0]).toMatchObject({ outcome: 'conflict', retryable: true, action: 'delete' })
+    expect(result.complete).toBe(false)
+    expect(mocks.deletionExecute).toHaveBeenCalledTimes(3)
+    expect(mocks.archiveExecute).not.toHaveBeenCalled()
+  })
+
+  it('never retries an uncertain authentication outcome and labels it unconfirmed', async () => {
+    mocks.deletionExecute.mockResolvedValue({
+      ok: false, code: 'AUTH_CLEANUP_REQUIRED', status: 502,
+      message: 'The person\'s records were deleted, but the login could not be confirmed as removed. Retry the deletion to finish; it is recorded and safe to repeat.',
+    })
+    const review = await reviewed([{ user_id: U1, action: 'delete' }])
+    const result = await execute(review)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.results[0]).toMatchObject({ outcome: 'unconfirmed', retryable: false })
+    expect(result.complete).toBe(false)
+    expect(mocks.deletionExecute).toHaveBeenCalledTimes(1)
+    expect(mocks.archiveExecute).not.toHaveBeenCalled()
+  })
+
+  it('never retries a dependency blocker or a stale preview', async () => {
+    mocks.deletionExecute.mockResolvedValue({
+      ok: true, outcome: { status: 'blocked', replayed: false, blockers: [{ code: 'PROTECTED_RECORDS', message: 'Protected history' }] },
+    })
+    const blockedReview = await reviewed([{ user_id: U1, action: 'delete' }])
+    const blocked = await execute(blockedReview)
+    expect(blocked.ok).toBe(true)
+    if (blocked.ok) expect(blocked.results[0].outcome).toBe('blocked')
+    expect(mocks.deletionExecute).toHaveBeenCalledTimes(1)
+
+    mocks.deletionExecute.mockClear()
+    const staleReview = await reviewed([{ user_id: U1, action: 'delete' }])
+    mocks.deletionExecute.mockResolvedValue({ ok: true, outcome: { status: 'stale' } })
+    const stale = await execute(staleReview)
+    expect(stale.ok).toBe(true)
+    if (stale.ok) expect(stale.results[0].outcome).toBe('stale')
+    expect(mocks.deletionExecute).toHaveBeenCalledTimes(1)
+  })
+
+
+  it('labels an unexpected execution exception as unconfirmed and never retries it automatically', async () => {
+    mocks.deletionExecute.mockRejectedValue(new Error('socket closed'))
+    const review = await reviewed([{ user_id: U1, action: 'delete' }])
+    const result = await execute(review)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.results[0]).toMatchObject({ outcome: 'unconfirmed', retryable: false })
+    expect(result.summary.unconfirmed).toBe(1)
+    expect(result.complete).toBe(false)
+    expect(mocks.deletionExecute).toHaveBeenCalledTimes(1)
+  })
+
+})

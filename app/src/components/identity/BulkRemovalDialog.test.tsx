@@ -50,8 +50,19 @@ type Handler = {
 function mockFetch(handler: Handler = {}) {
   fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url === '/api/hr/employees/bulk-removal/preview') {
+      const requestBody = JSON.parse(String(init?.body ?? '{}'))
+      const requested: string[] = Array.isArray(requestBody.user_ids) ? requestBody.user_ids : []
       const preview = (handler.preview?.() as { targets?: unknown[]; summary?: unknown } | undefined)
-        ?? { targets: rows(), summary: summary() }
+        ?? {
+          targets: rows().filter(row => requested.includes(row.user_id)),
+          summary: {
+            total: requested.length,
+            deleteEligible: rows().filter(row => requested.includes(row.user_id) && row.classification === 'DELETE_ELIGIBLE').length,
+            archiveEligible: rows().filter(row => requested.includes(row.user_id) && row.classification === 'ARCHIVE_ELIGIBLE').length,
+            blocked: rows().filter(row => requested.includes(row.user_id) && row.classification === 'BLOCKED').length,
+            unverified: 0,
+          },
+        }
       return json({ success: true, data: preview })
     }
     if (url === '/api/hr/employees/bulk-removal/plan') {
@@ -72,7 +83,7 @@ function mockFetch(handler: Handler = {}) {
         success: true, complete: true,
         data: {
           request_id: '00000000-0000-0000-0000-0000000000f1', complete: true,
-          summary: { total: 2, deleted: 1, archived: 1, blocked: 0, failed: 0, stale: 0 },
+          summary: { total: 2, deleted: 1, archived: 1, blocked: 0, failed: 0, stale: 0, conflict: 0, unconfirmed: 0 },
           results: [
             { user_id: A, name: 'Alice Able', action: 'delete', outcome: 'deleted', detail: null },
             { user_id: B, name: 'Bob Baker', action: 'archive', outcome: 'archived', detail: null, released: true },
@@ -229,7 +240,7 @@ describe('BulkRemovalDialog', () => {
         success: false, complete: false,
         data: {
           request_id: '00000000-0000-0000-0000-0000000000f1', complete: false,
-          summary: { total: 3, deleted: 1, archived: 1, blocked: 0, failed: 1, stale: 0 },
+          summary: { total: 3, deleted: 1, archived: 1, blocked: 0, failed: 1, stale: 0, conflict: 0, unconfirmed: 0 },
           results: [
             { user_id: A, name: 'Alice Able', action: 'delete', outcome: 'deleted', detail: null },
             { user_id: B, name: 'Bob Baker', action: 'archive', outcome: 'archived', detail: null, released: true },
@@ -246,7 +257,7 @@ describe('BulkRemovalDialog', () => {
     fireEvent.change(screen.getByLabelText(/Reason/), { target: { value: 'Batch clean-up of test accounts' } })
     fireEvent.click(screen.getByRole('button', { name: 'Remove employees' }))
 
-    expect(await screen.findByText('Failed — unchanged or unconfirmed')).toBeTruthy()
+    expect(await screen.findByText('Failed — not completed')).toBeTruthy()
     expect(screen.getByText('Deleted permanently')).toBeTruthy()
     expect(screen.getByText('Archived — access revoked')).toBeTruthy()
     expect(screen.getByText(/The archive did not complete/)).toBeTruthy()
@@ -280,4 +291,44 @@ describe('BulkRemovalDialog', () => {
     expect(screen.queryByLabelText(/to confirm/)).toBeNull()
   })
 })
+
+  it('reports a transient conflict as unchanged and retries only that employee with its reviewed operation', async () => {
+    mockFetch({
+      execute: () => ([{
+        success: false, complete: false,
+        data: {
+          request_id: '00000000-0000-0000-0000-0000000000f1', complete: false,
+          summary: { total: 1, deleted: 0, archived: 0, blocked: 0, failed: 0, stale: 0, conflict: 1, unconfirmed: 0 },
+          results: [{
+            user_id: A, name: 'Alice Able', action: 'delete', outcome: 'conflict', retryable: true,
+            detail: 'Another operation briefly held this person\'s records. Nothing was changed for this person; a fresh review and retry is safe.',
+          }],
+        },
+      }, 200]),
+    })
+    // Review only Alice so the retry subset is unambiguous.
+    renderDialog({ targets: [targets[0]] })
+    await screen.findByText('Alice Able')
+    fireEvent.click(screen.getByRole('button', { name: /Review confirmation/ }))
+    await screen.findByText(/REMOVE 1 EMPLOYEE/)
+    fireEvent.change(screen.getByLabelText(/to confirm/), { target: { value: 'REMOVE 1 EMPLOYEE' } })
+    fireEvent.change(screen.getByLabelText(/Reason/), { target: { value: 'Bulk clean-up of test accounts' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Remove employees' }))
+
+    expect(await screen.findByText('Temporary conflict — unchanged')).toBeTruthy()
+    expect(screen.getByText(/Nothing was changed for this person/)).toBeTruthy()
+    expect(screen.getByText('Conflict')).toBeTruthy()
+    const retry = screen.getByRole('button', { name: 'Retry unchanged employees (1)' })
+    fireEvent.click(retry)
+
+    // A fresh authoritative preview for just the unchanged employee, with the operation preserved.
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === '/api/hr/employees/bulk-removal/preview')).toHaveLength(2))
+    const lastPreview = fetchMock.mock.calls.filter(([url]) => url === '/api/hr/employees/bulk-removal/preview').at(-1)!
+    expect(JSON.parse(String(lastPreview[1].body)).user_ids).toEqual([A])
+    const operation = (await screen.findByLabelText('Operation for Alice Able')) as HTMLSelectElement
+    expect(operation.value).toBe('delete')
+    expect(screen.queryByLabelText(/to confirm/)).toBeNull()
+    expect(screen.getByRole('button', { name: /Review confirmation/ })).toBeTruthy()
+  })
+
 
