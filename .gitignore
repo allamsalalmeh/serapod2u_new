@@ -206,6 +206,9 @@ z_*
 !/docs/event-management/
 !/docs/event-management/**
 
+# HR programme master documentation and frozen assessments (docs/hr/HR_MASTER_INDEX.md)
+!/docs/hr/**/*.md
+
 
 # Local reporting audit exports stay private
 /exports/reporting-audit/
