@@ -62,7 +62,7 @@ Legend: **Yes** · **Partial** · **No** · **NV** (NOT VERIFIED) · **n/a**.
 | S-18.9 | Payroll fail-closed; second GL route disabled | No (P-R03) | No | n/a | n/a | n/a | n/a | n/a | n/a | n/a | BL-4 | B2 |
 | F-PAY | Payroll | No | Partial (runs/approval/locking; calc broken) | n/a | — | NV | NV | NV | NV | NV | Phase B | — |
 | F-FIN | Shared Finance Integration | Direction only (D-009) | No | n/a | No | n/a | n/a | n/a | n/a | n/a | Phase C | — |
-| GOV-01 | Master documentation in `docs/hr/` | Yes (OWN-DOC) | Yes (2026-10-24) | n/a | n/a | n/a | n/a | n/a | n/a | n/a | Git tracking fix prepared (D-020; `.gitignore` `!/docs/hr/**/*.md`, check-ignore verified). Staged: No · Committed: No · Pushed: No | Owner approval to stage & commit |
+| GOV-01 | Master documentation in `docs/hr/` | Yes (OWN-DOC) | Yes (2026-10-24) | n/a | n/a | n/a | n/a | n/a | n/a | n/a | Version-controlled: committed `8add030c` (D-020). Pushed: No (no upstream) | Owner decision on pushing `Enhancement03` |
 
 ## 2. Batch status
 
@@ -77,5 +77,6 @@ Legend: **Yes** · **Partial** · **No** · **NV** (NOT VERIFIED) · **n/a**.
 
 | Date | HEAD | Change |
 |---|---|---|
+| 2026-10-24 | `8add030c` | GOV-01: committed; not pushed. |
 | 2026-10-24 | `5d6c9bcb` | GOV-01 updated: tracking fix prepared, not committed. |
 | 2026-10-24 | `5d6c9bcb` | Baseline created (assessed at `82da8cd0`; `5d6c9bcb` bulk-removal fix recorded). No status was inferred from commits; environment fields from PMS 2026-10-16 only. |

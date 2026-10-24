@@ -32,7 +32,7 @@ Payroll and Finance integration are **separate, later phases** with their own go
 
 | # | Blocker | Effect | Owner action |
 |---|---|---|---|
-| BL-1 | **[Fix prepared 2026-10-24 — not yet committed]** `.gitignore` ignores all `*.md` (line 156, "Markdown files (Keep local only)"). Only four HR docs are tracked (force-added). The master docs and the `assessments/` / `architecture/` copies created on 2026-10-24 are **on disk but not version-controlled**. | `docs/hr/` cannot yet be the version-controlled source of truth | Exception `!/docs/hr/**/*.md` added to `.gitignore` (D-020); `git check-ignore` verified. Remaining: owner-approved staging and commit of `.gitignore` hunk + `docs/hr` files. Commit status: **No** · Push status: **No** |
+| BL-1 | **[RESOLVED 2026-10-24 — committed `8add030c`]** `.gitignore` ignores all `*.md` (line 156, "Markdown files (Keep local only)"). Only four HR docs are tracked (force-added). The master docs and the `assessments/` / `architecture/` copies created on 2026-10-24 are **on disk but not version-controlled**. | `docs/hr/` cannot yet be the version-controlled source of truth | Exception `!/docs/hr/**/*.md` added to `.gitignore` (D-020); `git check-ignore` verified. Committed `8add030c` (owner-approved). Push status: **No** — `Enhancement03` has no upstream; pushing is a separate decision. |
 | BL-2 | Pending lifecycle migrations `20261214100000`, `20261216100000_identity_permanent_deletion`, `20261217100000`, `20261218100000` are not recorded as applied in any environment, while the HR People UI already calls their functions | Delete/Reset/Archive/Bulk Removal fail on databases without them | Batch B0 verification, then owner-applied Batch B1 |
 | BL-3 | Leave RLS allows impersonated inserts and self-approval; organization-wide read of leave reasons/balances | Live data-integrity and privacy exposure wherever leave is used | Approve Batch B2 |
 | BL-4 | Payroll calculation writes non-existent columns and reports success | False "calculated" runs | Approve Batch B2 (fail-closed) |
@@ -50,7 +50,7 @@ Full list with IDs: [HR_DECISION_REGISTER.md](HR_DECISION_REGISTER.md) §3.
 - PD-LC-01…03 — Offboarding (separation vs archive), manager reassignment, former-employee documents.
 - PD-SA-01…02 — New HR permission keys; production SHADOW→enforced waves and compatibility-policy retirement.
 - PD-FIN-01…10 — Finance architecture proposals (legal entity, cost centre, canonical payroll GL path, outbox transport, etc.).
-- ~~PD-GOV-01~~ — decided as D-020; fix prepared, awaiting commit approval.
+- ~~PD-GOV-01~~ — decided as D-020; committed `8add030c`, not pushed.
 
 ## 5. Documentation navigation
 
@@ -142,5 +142,6 @@ Additional conventions (from existing practice):
 
 | Date | HEAD | Change |
 |---|---|---|
+| 2026-10-24 | `8add030c` | docs/hr committed (`.gitignore` exception + 19 docs); push not performed. |
 | 2026-10-24 | `5d6c9bcb` | PD-GOV-01: `.gitignore` exception `!/docs/hr/**/*.md` prepared (uncommitted); BL-1 updated. |
 | 2026-10-24 | `82da8cd0` → `5d6c9bcb` | Master documentation structure created (6 master docs + 12 frozen assessment copies). No application, database or S&A change. |

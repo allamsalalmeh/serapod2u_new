@@ -39,7 +39,7 @@ Source abbreviations
 | D-017 | Applied migrations | Applied migration files are never renamed (duplicate-version hazard handled operationally) | PMS "Executive result" | APPROVED (established practice) | Re-stamp only never-applied files | Ops |
 | D-018 | Migration application | Migrations are applied by hand per environment, staging first, each file in one transaction, and recorded in PMS | PMS header | APPROVED (established practice) | All DB batches | Ops |
 | D-019 | Working mode | Implement only explicitly approved batches; documentation is the source of truth | 2026-10-24 · OWN-DOC | APPROVED | Governance rules in index §6 | All |
-| D-020 | Docs version control (resolves PD-GOV-01) | `docs/hr/**/*.md` is exempt from the global `*.md` ignore via one `.gitignore` exception `!/docs/hr/**/*.md`; Markdown elsewhere stays ignored | 2026-10-24 · owner instruction "HR Documentation Git Tracking Fix" | APPROVED — **fix prepared** in working tree; staged: No · committed: No · pushed: No | All `docs/hr` Markdown becomes trackable once staged and committed | Governance |
+| D-020 | Docs version control (resolves PD-GOV-01) | `docs/hr/**/*.md` is exempt from the global `*.md` ignore via one `.gitignore` exception `!/docs/hr/**/*.md`; Markdown elsewhere stays ignored | 2026-10-24 · owner instruction "HR Documentation Git Tracking Fix" | APPROVED — **implemented**; committed `8add030c` (2026-10-24) · pushed: **No** (branch has no upstream) | All `docs/hr` Markdown becomes trackable once staged and committed | Governance |
 
 ## 2. Proposed decisions (from assessments — not approved)
 
@@ -105,5 +105,6 @@ Source abbreviations
 
 | Date | Change |
 |---|---|
+| 2026-10-24 | D-020 committed in `8add030c` (owner approval 2026-10-24 11:02); not pushed. |
 | 2026-10-24 | PD-GOV-01 decided (D-020); P-G01 superseded; `.gitignore` exception prepared, not committed. |
 | 2026-10-24 | Register created from OWN-FIN, OWN-DOC, OWN-REM, migration headers, PMS and the frozen 2026-10-24 assessments. |
