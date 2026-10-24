@@ -23,6 +23,8 @@ export interface AuthorizationResource {
 }
 
 export interface AuthorizationContext {
+  diagnosticOrigin?: 'page_navigation' | 'api_operation'
+  operationId?: string
   correlationId?: string | null
   requestId?: string | null
   now?: Date
@@ -75,6 +77,8 @@ export interface AuthorizationDecision {
   reasonCode: AuthorizationReasonCode
   policyVersion: string
   decisionId: string
+  /** Present only after System Logs confirms a persisted occurrence. */
+  referenceId?: string
   migrationMode: MigrationMode
   legacyDecision: AuthorizationDecisionValue | null
   newDecision: AuthorizationDecisionValue

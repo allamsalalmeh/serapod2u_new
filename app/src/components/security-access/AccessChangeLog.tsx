@@ -8,7 +8,7 @@ import { useReadModel } from './useSecurityAccessData'
 
 const ACTION_LABELS: Record<string, string> = {
   'assignment.granted': 'Access granted', 'assignment.revoked': 'Access revoked', 'assignment.derived': 'Lifecycle access derived',
-  'assignment.restored': 'Automatic access restored', 'policy_restore': 'Revoked grant restored', 'assignment.removed': 'Access removed with its role', 'role.deleted': 'Role deleted',
+  'assignment.restored': 'System-assigned access restored', 'policy_restore': 'Revoked grant restored', 'assignment.removed': 'Access removed with its role', 'role.deleted': 'Role deleted',
   'legacy_authorization.locked': 'Legacy authorization locked',
   'access_request.submitted': 'Access requested', 'access_request.approved': 'Request approved', 'access_request.denied': 'Request denied',
   'access_request.cancelled': 'Request cancelled', 'access_request.expired': 'Request expired',

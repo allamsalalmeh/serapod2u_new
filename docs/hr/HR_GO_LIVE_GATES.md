@@ -1,12 +1,14 @@
 # Serapod2U HR — Go-Live Gates (HR Core)
 
-Last verified: 2026-10-24 · HEAD `5d6c9bcb` · back to [HR_MASTER_INDEX.md](HR_MASTER_INDEX.md)
+Last verified: 2026-10-24 · HEAD `1e0830c6` (B0 evidence reconciliation) · back to [HR_MASTER_INDEX.md](HR_MASTER_INDEX.md)
 
 HR Core goes live per organization only when **all seven gates PASS**, each with recorded evidence. A gate is **FAIL** if any criterion fails or lacks evidence. Payroll and Finance posting have their **own later gates** (D-003); Gate 7 checks only contract/data readiness.
 
 Evidence rules: evidence is stored or referenced in [HR_PROGRESS_TRACKER.md](HR_PROGRESS_TRACKER.md) with date, environment, HEAD and who ran it. Automated test results alone never pass a gate that requires UAT.
 
 Current state of every gate: **NOT ASSESSED** (2026-10-24).
+
+Status note (2026-10-24 handover sync): still **NOT ASSESSED**. B0 live verification is **PENDING** for staging and production (B0 deliverables restored and verified; BL-8 resolved), so no live evidence exists yet for 1.1–1.3, 2.1–2.2 or 3.x. Criteria 1.6, 2.3, 4.6 and 7.7 depend on B2A/B2B, which are **NOT IMPLEMENTED**.
 
 ---
 
@@ -23,6 +25,7 @@ Current state of every gate: **NOT ASSESSED** (2026-10-24).
 | 1.7 | Cross-organization isolation: other-org employee/leave/attendance records return not-found for HR, MSS and ESS | Route tests + UAT |
 | 1.8 | Role walkthrough (HR admin, HR manager, line manager, employee, payroll preparer, payroll approver, Finance user) shows only permitted destinations and APIs | UAT record per role |
 | 1.9 | Break-glass `hr.employee.delete` assigned to nobody at go-live (or explicitly time-boxed) | Assignment query |
+| 1.10 | No `hr.*` permission is held solely through a legacy compatibility policy in staging **and** production; HR leave authority never via compat (P-R12). Baseline: 25 staging users compat-only (2026-10-23) | v2 diagnostic §D per environment *(proposed by B0 report §9; criterion added 2026-10-24, not owner-approved)* |
 
 ## Gate 2 — Database & Migration Integrity
 
@@ -34,6 +37,7 @@ Current state of every gate: **NOT ASSESSED** (2026-10-24).
 | 2.4 | No new duplicate migration version introduced; CI duplicate check active | CI output |
 | 2.5 | Replica suites for all HR migrations pass (onboarding/reset, delete, permanent delete, archive, leave, attendance, lifecycle) | Suite outputs |
 | 2.6 | Backups taken before production application; rollback SQL reviewed | Owner record |
+| 2.7 | Never-applied duplicate versions (`20261216100000_sa_legacy_preview_scope_coverage`, `20261022100000_core_system_preferences`) re-stamped before first application | Migration listing *(proposed, B0 report §9)* |
 
 ## Gate 3 — Employee Lifecycle
 
@@ -61,6 +65,7 @@ Current state of every gate: **NOT ASSESSED** (2026-10-24).
 | 4.8 | Entitlements meet Employment Act minima for every leave type marked statutory | Query + HR sign-off |
 | 4.9 | Public holidays loaded for the go-live year for each relevant state, reviewed by HR | HR sign-off |
 | 4.10 | Leave cancel, half day, holiday exclusion, year-end carry-forward scenarios pass | UAT records |
+| 4.11 | Correction review and timesheet generation succeed end-to-end; correction self-review refused | Route tests + UAT *(proposed, B0 report §9)* |
 
 ## Gate 5 — UAT & Data Validation
 
@@ -71,6 +76,7 @@ Current state of every gate: **NOT ASSESSED** (2026-10-24).
 | 5.3 | Master-data reconciliation signed by HR (headcount per department, managers, hire dates) | HR sign-off |
 | 5.4 | No mock screen reachable from navigation; every HR URL renders its feature or explicit unavailable state | Page-coverage test + walkthrough |
 | 5.5 | Performance & KPI, Commission and ESS/MSS regression UAT passed | UAT log |
+| 5.6 | UAT on shared staging uses dedicated test accounts; other workstreams notified (BL-12) | UAT log *(proposed, B0 report §9)* |
 
 ## Gate 6 — Controlled Activation
 

@@ -131,7 +131,18 @@ export const SUPPLY_CHAIN_ACCESS_PERMISSIONS: readonly string[] = [
   'qr.batch.manage',
   'product.catalog.manage',
 ]
-const ECOMMERCE = ['ecommerce.module.view']
+/**
+ * E-Commerce. The module entry opens for the module view permission or any E-Commerce operation, so an operational
+ * policy (E-Commerce Administrator: store + order management, no module.view) reaches its own screens. Each section then
+ * needs the permission its APIs decide with (module.view keeps the existing read-only visibility).
+ */
+const ECOMMERCE_VIEW = 'ecommerce.module.view'
+/** Payment Gateway administration: the RLS gate of payment_gateway_settings. Never implied by other E-Commerce access. */
+export const PAYMENT_GATEWAY_PERMISSION = 'ecommerce.channel.manage'
+const ECOMMERCE = [ECOMMERCE_VIEW, 'ecommerce.store.manage', 'ecommerce.order.manage', PAYMENT_GATEWAY_PERMISSION]
+const ECOMMERCE_STORE = [ECOMMERCE_VIEW, 'ecommerce.store.manage']
+const ECOMMERCE_ORDERS = [ECOMMERCE_VIEW, 'ecommerce.order.manage']
+const PAYMENT_GATEWAY = [PAYMENT_GATEWAY_PERMISSION]
 
 /** The CRM / Marketing module entries (their pages' own guards) are required together with the child's own permission. */
 const crmChild = (...org: string[]): NavRequirement => ({ module: 'customer.crm.view', org })
@@ -160,12 +171,14 @@ export const CUSTOMER_GROWTH_DESTINATIONS: Record<string, NavRequirement> = {
   catalog: { org: CATALOG },
   'product-catalog': { org: CATALOG },
   ecommerce: { org: ECOMMERCE },
-  'hero-banners': { org: ECOMMERCE },
-  'store-banner-manager': { org: ECOMMERCE },
-  'login-hero-banner': { org: ECOMMERCE },
-  'store-orders': { org: ECOMMERCE },
-  'ecommerce/tiktok-shop': { org: ECOMMERCE },
-  'ecommerce/payment-gateway': { org: ECOMMERCE },
+  'hero-banners': { org: ECOMMERCE_STORE },
+  'store-banner-manager': { org: ECOMMERCE_STORE },
+  'login-hero-banner': { org: ECOMMERCE_STORE },
+  'store-orders': { org: ECOMMERCE_ORDERS },
+  'ecommerce/tiktok-shop': { org: ECOMMERCE_ORDERS },
+  'ecommerce/payment-gateway': { org: PAYMENT_GATEWAY },
+  // Same screen under Settings: same privileged permission (not the general Settings entry).
+  'settings/payment-gateway': { org: PAYMENT_GATEWAY },
 }
 
 /**

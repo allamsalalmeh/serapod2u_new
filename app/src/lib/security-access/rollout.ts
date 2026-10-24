@@ -109,6 +109,27 @@ export function buildRollout(permissions: RolloutPermission[]): Rollout {
   return { groups, columns: [...PRIMARY_ROLLOUT_MODES, ...extra], totals, total: unique.length }
 }
 
+/** One `sa_permissions` catalogue row as the Overview read model returns it. */
+export interface CataloguePermission {
+  permission_key: string
+  description?: string | null
+  status?: string | null
+  audit_sensitivity?: string | null
+}
+
+/**
+ * Roles & Policies → Policies tree: every catalogue row, grouped by the shared module taxonomy. `modeOf` supplies the
+ * row's migration mode (display only). Shared with the Root Access breakdown so both always group identically.
+ */
+export function catalogueRollout(permissions: CataloguePermission[], modeOf: (key: string) => string = () => 'UNREGISTERED'): Rollout {
+  return buildRollout(permissions.map(p => ({
+    key: p.permission_key, label: permissionLabel(p.permission_key).label, mode: modeOf(p.permission_key), enforcementReady: false,
+  })))
+}
+
+/** Same rule as the Root card's server count (`sa_permissions.status = 'active'`). */
+export const isActiveCataloguePermission = (p: CataloguePermission) => p.status === 'active'
+
 export function aggregateRollout(modes: ModeRow[]): Rollout {
   return buildRollout(modes.map(m => ({
     key: m.permission_key,

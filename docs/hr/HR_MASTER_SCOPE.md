@@ -95,7 +95,7 @@ Conventions
 | S-06.1 | Hybrid attendance: multiple capture channels feed one attendance record | Owner 2026-10-24 (D-011) | Partial: web/mobile clock exists (`source: 'web'`); no channel model |
 | S-06.2 | **Normal attendance is auto-validated — no daily approval** | Owner 2026-10-24 (D-012) | Policy fields exist (`late_after_minutes`, `early_leave_before_minutes`, `attendance_flag`); no auto-validation rule engine |
 | S-06.3 | Attendance remains operational data: never posts to Finance; only feeds payroll after approval | D-015, Finance readiness §2.3 | Consistent today |
-| S-06.4 | Timesheets (existing) continue as period summaries | baseline | Implemented |
+| S-06.4 | Timesheets (existing) continue as period summaries | baseline | Partial — timesheet **generation broken** (non-existent columns; B0 2026-10-24, BL-10 → B2B); approve/submit/reject aligned |
 
 ## WS-07 Mobile Clock In/Out  *(details pending — PD-ATT-02)*
 
@@ -108,7 +108,7 @@ Conventions
 
 | ID | Requirement | Source | Code status |
 |---|---|---|---|
-| S-08.1 | Employee correction requests with **controlled approval** | Owner 2026-10-24 (D-013) | Partial: `hr_attendance_corrections` + `/attendance/corrections` + review route (schema-aligned); approver model to confirm (PD-ATT-04) |
+| S-08.1 | Employee correction requests with **controlled approval** | Owner 2026-10-24 (D-013) | Partial: `hr_attendance_corrections` + `/attendance/corrections` (requests aligned); **review route broken** (`review_note`, audit columns) and no self-review block — B0 2026-10-24, BL-10 → B2B; approver model to confirm (PD-ATT-04) |
 | S-08.2 | HR manual attendance entry (on behalf of employee) with reason and audit trail | Owner 2026-10-24 | **Missing** |
 | S-08.3 | Corrections never self-approved; original values preserved | Governance principle | Original values stored; self-approval check to verify in B4b |
 

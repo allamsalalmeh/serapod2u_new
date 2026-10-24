@@ -263,3 +263,16 @@ z_*
 # Next.js artifacts created when dev is started from the repo root instead of app/
 /tsconfig.json
 /next-env.d.ts
+
+# S&A finalization V2 regression fixtures
+!app/src/lib/security-access/denial-log.test.ts
+!app/src/lib/security-access/denial-notifications.test.ts
+!app/src/lib/security-access/denial-diagnostics.test.ts
+!app/src/app/api/security-access/governance/legacy-preview/route.test.ts
+!supabase/tests/
+!supabase/tests/security/
+!supabase/tests/security/sa_legacy_preview_scope_coverage.sql
+!app/src/app/api/system-logs/[[]id[]]/route.test.ts
+# Focused localhost denial UAT follow-up tests
+!app/src/app/api/payment-gateway/access/route.test.ts
+!app/src/modules/settings/components/PaymentGatewaySettingsView.test.tsx

@@ -16,7 +16,7 @@ import { COVERED_MODULES_NOTE, type CoverageRole, coveredPermissions, fullyCover
 import { CATEGORY_LABELS, GRANT_BLOCK_TEXT, type GrantBlock, ORG_TYPE_OPTIONS, categoryLabel, grantBlock, isPartnerOrgType, orgTypeLabel } from '@/lib/security-access/directory-labels'
 import type { RootAccessCapability } from '@/lib/security-access/root-access-shared'
 import { AccessLevelSelector, RootAccessCard, RootBadge, RootGrantForm, holdsRootAccess, type AccessLevel } from './RootAccess'
-import RestoreGrantDialog, { type RestoreTarget } from './RestoreGrantDialog'
+import AssignmentReasonDialog, { type ReasonTarget } from './AssignmentReasonDialog'
 
 /** A profile chosen in Group Policies: preselects the role in the grant form; never grants anything by itself. */
 export interface GrantIntent { roleId: string; roleName: string; orgTypes: string[]; nonce: number }
@@ -58,11 +58,29 @@ const isCurrent = (a: any, now: Date = new Date()) =>
   a.status === 'active' && !isExpired(a, now) && !isFutureStart(a, now)
 /** Temporary = currently active but with a planned end. */
 const isTemporary = (a: any) => isCurrent(a) && !!a.effective_until
-/** Current (in-window active) assignments across every membership. */
-const activeAssignments = (p: any) => (p.membership || []).flatMap((m: any) => (m.assignments || []).filter((a: any) => isCurrent(a)))
-const isLegacyRole = (a: any) => one(a.role)?.source === 'legacy'
+/** Assignments in effect across every membership: current AND every other evaluator condition holds (summary counts). */
+const activeAssignments = (p: any) => (p.membership || []).flatMap((m: any) => (m.assignments || []).filter((a: any) => isCurrent(a) && !notInEffectReason(a, m)))
+/** Compatibility policy created from the legacy role code (same rule as Edit User → Group Policies). */
+const isLegacyRole = (a: any) => one(a.role)?.source === 'legacy' || String(one(a.role)?.role_key ?? '').startsWith('legacy-')
+/** A legacy compatibility policy the owner retired (status no longer active): it stays as metadata and grants nothing. */
+const isRetiredLegacy = (a: any) => isLegacyRole(a) && !!one(a.role)?.status && one(a.role)?.status !== 'active'
 const accessKind = (a: any): AccessKind => (isLegacyRole(a) ? 'legacy' : AUTOMATIC_SOURCES.has(a.source) ? 'automatic' : 'granted')
 const isGranted = (a: any) => accessKind(a) === 'granted'
+/**
+ * Why a current entry grants nothing right now, mirroring the evaluator's other conditions (active membership, active
+ * policy, at least one scope); null when it is in effect. Display only — the database decides every request.
+ */
+export function notInEffectReason(a: any, membership: any): string | null {
+  if (!isCurrent(a)) return null
+  if (membership && membership.status !== 'active') return 'Membership not active — grants nothing'
+  const roleStatus = one(a.role)?.status
+  if (roleStatus && roleStatus !== 'active') return isLegacyRole(a) ? 'Legacy policy retired — grants nothing' : 'Policy not active — grants nothing'
+  const scopes = (a.scopes || []).map((s: any) => one(s?.scope)).filter(Boolean)
+  if (!scopes.length) return 'No data scope — grants nothing'
+  // Scope status is known once the read model returns it; an inactive scope never matches in the evaluator.
+  if (scopes.every((s: any) => s.status && s.status !== 'active')) return 'Data scope not active — grants nothing'
+  return null
+}
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 /** A membership can receive a grant here when active and (when the server told us) grantable. */
 const canGrantOn = (m: any) => m.status === 'active' && m.grantable !== false
@@ -93,8 +111,9 @@ function localDirectory(people: any[], q: string, filter: string, orgId: string)
  * People & Access: person → organization membership → access. The directory is
  * searched and paged ON THE SERVER across the organizations this administrator
  * is authorized for (never a client-side filter over a truncated list). Each
- * membership separates explicitly Granted access, Automatic (lifecycle)
- * access and Legacy compatibility access; roles are grouped by the shared S&A
+ * membership separates the S&A access model (Assigned policies, System-assigned
+ * lifecycle access) from Legacy Access (legacy role code + legacy-based
+ * compatibility policies). Only current access is listed: revoked/expired grants live in Audit → Access changes; roles are grouped by the shared S&A
  * module taxonomy (display only). Viewing a person never implies the right to
  * grant: grant eligibility is computed per membership by the server and again
  * by the database when the grant is submitted.
@@ -138,8 +157,8 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
   const [accessLevel, setAccessLevel] = useState<AccessLevel>('standard')
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
-  // One-click restore of a revoked administrator grant (Access history → Restore → Confirm Restore).
-  const [restoreTarget, setRestoreTarget] = useState<RestoreTarget | null>(null)
+  // Revoke one assignment, or restore revoked automatic access (Revoke / Restore → reason → Confirm).
+  const [reasonTarget, setReasonTarget] = useState<ReasonTarget | null>(null)
   const request = useRef(0)
   const grantLock = useRef(false)
   const headingRef = useRef<HTMLHeadingElement>(null)
@@ -254,7 +273,7 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
       coversWarehouses: defs.some((d: any) => d.scope_type === 'organization' && d.scope_value === form.organizationId),
     })
   }
-  const HELD_TEXT: Record<AccessKind, string> = { granted: 'Already held — granted by an administrator', automatic: 'Already held — automatic access (managed by HR / User Management)', legacy: 'Already held — compatibility access' }
+  const HELD_TEXT: Record<AccessKind, string> = { granted: 'Already held — assigned by an administrator', automatic: 'Already held — system-assigned access (managed by HR / User Management)', legacy: 'Already held — legacy-based access' }
   // An identical active grant is never added again (the database upserts and would replace its scopes), so the policy is listed as held with where it reaches.
   const heldDescription = (roleId: string, kind: AccessKind) => {
     const info = heldScopes.get(roleId)
@@ -424,46 +443,30 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
     afterChange()
   }
 
-  async function revoke(assignment: any) {
-    const name = one(assignment.role)?.name || 'this role'
-    const automatic = accessKind(assignment) !== 'granted'
-    const reason = window.prompt(automatic
-      ? `${name} is automatic access (${AUTOMATIC_SOURCE[assignment.source] ?? 'lifecycle'}). Revoking overrides the automatic rule for this person; it will not be re-added automatically (an administrator can restore it later). Reason for revoking?`
-      : `Revoke ${name}? Only this entry is revoked; other granted, automatic or legacy access stays in place. Reason for revoking?`)
-    if (!reason || reason.trim().length < 5) return
-    const result = await callApi('/api/security-access/assignments', { body: { action: 'revoke', assignmentId: assignment.id, reason } })
-    setMessage(result.ok ? { tone: 'ok', text: 'Access revoked. Any other access this person holds is unchanged.' } : { tone: 'error', text: result.error || 'Unable to revoke' })
-    if (result.ok) afterChange()
-  }
-
-  async function restore(assignment: any) {
-    const name = one(assignment.role)?.name || 'this role'
-    const reason = window.prompt(`Restore ${name}? It returns to automatic access managed by HR / User Management. Reason for restoring?`)
-    if (!reason || reason.trim().length < 5) return
-    const result = await callApi('/api/security-access/assignments', { body: { action: 'restore', assignmentId: assignment.id, reason } })
-    setMessage(result.ok ? { tone: 'ok', text: 'Access restored to automatic management.' } : { tone: 'error', text: result.error || 'Unable to restore' })
-    if (result.ok) afterChange()
-  }
-
-  /** Opens the confirmation for a revoked grant the server reported as restorable; the server decides again on Confirm. */
-  function openRestoreGrant(assignment: any, person: any, organizationName: string) {
+  /** Opens the confirmation for exactly this assignment; the reason is required there and the server decides on Confirm. */
+  function openReason(action: ReasonTarget['action'], assignment: any, person: any, organizationName: string) {
     setMessage(null)
-    setRestoreTarget({
+    setReasonTarget({
+      action,
       assignmentId: assignment.id,
       personName: person.full_name || person.email || 'This person',
       personEmail: person.email ?? null,
       policyName: one(assignment.role)?.name || 'Group Policy',
       organizationName,
       scopeText: assignmentScopeText(assignment, scopeNames),
-      effectiveFrom: assignment.restore?.effectiveFrom ?? null,
-      effectiveUntil: assignment.restore?.effectiveUntil ?? null,
+      // Restore hands the entry back to the lifecycle (HR / User Management); revoke names the automatic rule it overrides.
+      automaticSource: action === 'restore' ? AUTOMATIC_SOURCE.derived
+        : accessKind(assignment) !== 'granted' ? AUTOMATIC_SOURCE[assignment.source] ?? 'lifecycle' : null,
     })
   }
 
-  function restoredGrant() {
-    const t = restoreTarget
-    setRestoreTarget(null)
-    setMessage({ tone: 'ok', text: `${t?.policyName ?? 'Access'} restored for ${t?.personName ?? 'the person'} as a new grant. The revoked entry stays in Access history.` })
+  function reasonDone() {
+    const t = reasonTarget
+    setReasonTarget(null)
+    const who = t?.personName ?? 'the person'
+    setMessage({ tone: 'ok', text: t?.action === 'restore'
+      ? `${t.policyName} restored to automatic management for ${who}.`
+      : `${t?.policyName ?? 'Access'} revoked for ${who}. Any other access this person holds is unchanged.` })
     afterChange()
   }
 
@@ -494,7 +497,7 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2"><h2 className="text-base font-semibold text-gray-950">People &amp; Access</h2>
-            <InfoPopover label="About People & Access"><p>Granted access is given by an administrator or an approved request. Automatic access follows HR and User Management; leavers lose business access automatically.</p><p>Search and filters cover everyone in your authorized scope.</p></InfoPopover></div>
+            <InfoPopover label="About People & Access"><p>Assigned policies are given by an administrator or an approved request. System-assigned access follows HR and User Management; leavers lose business access automatically. Legacy-based access mirrors the person's legacy role code and still grants its permissions while active.</p><p>Root Access is global and separate from organization membership.</p><p>Search and filters cover everyone in your authorized scope.</p></InfoPopover></div>
           <p className="text-sm text-gray-500">Find people and manage their access.</p>
         </div>
         <button type="button" onClick={() => (formOpen ? closeForm() : startGrant())} aria-expanded={formOpen}
@@ -619,7 +622,7 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
       <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 px-4 py-2">
         <FilterChips label="Access" value={filter} onChange={setFilter} items={[
           { id: 'all', label: 'Everyone', count: counts.all },
-          { id: 'granted', label: 'With granted policies', count: counts.granted },
+          { id: 'granted', label: 'With assigned policies', count: counts.granted },
           { id: 'temporary', label: 'Temporary access', count: counts.temporary },
         ]} />
         <InfoPopover label="About these counts"><p>Counts cover {scopeLabel} with the category, type, organization, status and membership filters applied; search and the access filter narrow the list, not the counts.</p></InfoPopover>
@@ -678,14 +681,14 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
               <div className="min-w-0 space-y-0.5 pl-6 text-xs md:pl-0">
                 <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400 md:sr-only">Access summary</span>
                 <div className="flex flex-wrap items-center gap-x-1.5">
-                  <span className={count('granted') ? 'font-medium text-blue-700' : 'text-gray-400'}>{count('granted')} granted</span>
+                  <span className={count('granted') ? 'font-medium text-blue-700' : 'text-gray-400'}>{count('granted')} assigned</span>
                   <span aria-hidden className="text-gray-300">·</span>
-                  <span className="text-gray-600">{count('automatic')} automatic</span>
+                  <span className="text-gray-600">{count('automatic')} system-assigned</span>
                 </div>
                 {(legacy > 0 || temporary > 0) && <div className="flex flex-wrap items-center gap-x-1.5">
-                  {legacy > 0 && <span className="text-gray-500">{legacy} legacy</span>}
+                  {legacy > 0 && <span className="text-gray-500">{legacy} legacy-based</span>}
                   {legacy > 0 && temporary > 0 && <span aria-hidden className="text-gray-300">·</span>}
-                  {temporary > 0 && <span className="inline-flex items-center gap-1 text-amber-700" title="Temporary entries may also be counted as granted, automatic or legacy"><Clock className="h-3 w-3" aria-hidden />{temporary} temporary</span>}
+                  {temporary > 0 && <span className="inline-flex items-center gap-1 text-amber-700" title="Temporary entries may also be counted as assigned, system-assigned or legacy-based"><Clock className="h-3 w-3" aria-hidden />{temporary} temporary</span>}
                 </div>}
               </div>
               <div className="pl-6 md:pl-0 md:text-right">
@@ -696,9 +699,8 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
                   : <GrantUnavailable person={p} block={block} partner={isPartnerOrgType(orgTypeCode) || ['MANUFACTURER_USER', 'DISTRIBUTOR_USER', 'SHOP_STAFF'].includes(p.principal_type)} userManagementLink={Boolean(dir?.capabilities?.userManagement)} />}</div>
               </div>
             </div>
-            {isOpen && <PersonDetail person={p} orgName={orgName} scopeNames={scopeNames} roleModules={roleModules} canRevoke={p.id !== data.viewerId} onRevoke={revoke} restorable={restorable} onRestore={restore}
-              onRestoreGrant={(a, orgLabel) => openRestoreGrant(a, p, orgLabel)}
-              rootCard={<RootAccessCard person={p} viewerIsRoot={!!rootCapability?.viewerIsRoot} isViewer={p.id === data.viewerId} onChanged={m => { setMessage(m); if (m.tone === 'ok') afterChange() }} />} />}
+            {isOpen && <PersonDetail person={p} orgName={orgName} scopeNames={scopeNames} roleModules={roleModules} canRevoke={p.id !== data.viewerId} onRevoke={(a, orgLabel) => openReason('revoke', a, p, orgLabel)} restorable={restorable} onRestore={(a, orgLabel) => openReason('restore', a, p, orgLabel)}
+              rootCard={<RootAccessCard person={p} viewerIsRoot={!!rootCapability?.viewerIsRoot} isViewer={p.id === data.viewerId} activePermissionCount={rootCapability?.activePermissionCount ?? null} permissions={data.permissions} onChanged={m => { setMessage(m); if (m.tone === 'ok') afterChange() }} />} />}
           </li>
         })}
       </ul>
@@ -706,19 +708,22 @@ export default function PeopleAccessPanel({ data, onChanged, grantIntent = null 
         <button type="button" onClick={loadMore} disabled={loadingMore} className={`rounded text-sm font-medium text-orange-600 hover:text-orange-700 disabled:opacity-50 ${FOCUS}`}>
           {loadingMore ? 'Loading…' : 'Show more'} <span className="text-gray-400">({people.length} of {dir.total})</span></button></div>}
     </section>
-    {restoreTarget && <RestoreGrantDialog target={restoreTarget} onClose={() => setRestoreTarget(null)} onRestored={restoredGrant} />}
+    {reasonTarget && <AssignmentReasonDialog target={reasonTarget} onClose={() => setReasonTarget(null)} onDone={reasonDone} />}
   </div>
 }
 
-/** Disambiguated scope names of one assignment, as Access history shows them. */
+/** Disambiguated scope names of one assignment. */
 const assignmentScopeText = (a: any, scopeNames: Map<string, string>) =>
   (a.scopes || []).map((s: any) => { const sc = one(s.scope); return (sc?.id && scopeNames.get(sc.id)) || sc?.display_name }).filter(Boolean).join(', ') || '—'
 
 const SECTIONS: Array<{ kind: AccessKind; title: string; help: string }> = [
-  { kind: 'granted', title: 'Granted access', help: 'Given by a Security & Access administrator or an approved request.' },
-  { kind: 'automatic', title: 'Automatic access', help: 'Follows HR / User Management facts; added and removed by the lifecycle.' },
-  { kind: 'legacy', title: 'Legacy access', help: 'Compatibility roles mirroring the legacy role code.' },
+  { kind: 'granted', title: 'Assigned policies', help: 'Explicitly given by a Security & Access administrator or an approved request. Revoked or expired assignments leave this list and grant nothing; their records stay in Audit → Access changes.' },
+  { kind: 'automatic', title: 'System-assigned access', help: 'Added and removed automatically from HR / User Management facts, or set up during the migration. Nobody chose it here, but it grants its permissions while active.' },
+  { kind: 'legacy', title: 'Legacy-based access', help: 'A compatibility policy set up from the person\'s legacy role code during the migration. While the policy is active it is a real Security & Access assignment and grants its permissions, including permissions whose mode is Legacy Retired (that mode stops the old role-code checks, not this policy). Once the owner retires the compatibility policy it stays here for reference and grants nothing.' },
 ]
+
+/** The legacy role code shown on the primary membership: still stored and used, so never described as historical. */
+export const ROLE_CODE_HELP = 'The role code on the person\'s user profile (User Management), kept as compatibility metadata. It is not itself a Security & Access grant. The legacy-based compatibility policy below (if any) was set up from it during the migration; the role code still feeds the old role-code checks only for permissions in Legacy enforced or Monitoring / Shadow.'
 
 /** Shared column template for the person list (desktop); on mobile each cell stacks under a visible label. */
 const PEOPLE_GRID = 'md:grid-cols-[minmax(0,2.2fr)_minmax(0,1.6fr)_minmax(0,1.1fr)_minmax(0,1.5fr)_minmax(8rem,auto)]'
@@ -728,6 +733,7 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
 type EntryState = { label: string; tone: string; dateLabel: string | null }
 function entryState(a: any): EntryState {
+  if (isCurrent(a) && isRetiredLegacy(a)) return { label: 'Retired', tone: 'bg-gray-100 text-gray-600', dateLabel: null }
   if (a.status === 'revoked') return { label: 'Revoked', tone: 'bg-gray-100 text-gray-600', dateLabel: 'Ended' }
   if (isExpired(a)) return { label: 'Expired', tone: 'bg-gray-100 text-gray-600', dateLabel: 'Expired' }
   if (isFutureStart(a)) return { label: 'Scheduled', tone: 'bg-sky-50 text-sky-700', dateLabel: 'Starts' }
@@ -735,11 +741,12 @@ function entryState(a: any): EntryState {
   return { label: cap(String(a.status || 'inactive')), tone: 'bg-gray-100 text-gray-600', dateLabel: a.effective_until ? 'Ended' : null }
 }
 
-function PersonDetail({ person: p, orgName, scopeNames, roleModules, canRevoke, onRevoke, restorable, onRestore, onRestoreGrant, rootCard }: {
-  person: any; orgName: Map<any, any>; scopeNames: Map<string, string>; roleModules: Map<string, RoleModules>; canRevoke: boolean; onRevoke: (a: any) => void
-  restorable: Set<string>; onRestore: (a: any) => void
-  /** Restore a revoked administrator grant of this person (membership organization name for the confirmation). */
-  onRestoreGrant?: (a: any, organizationName: string) => void
+function PersonDetail({ person: p, orgName, scopeNames, roleModules, canRevoke, onRevoke, restorable, onRestore, rootCard }: {
+  person: any; orgName: Map<any, any>; scopeNames: Map<string, string>; roleModules: Map<string, RoleModules>; canRevoke: boolean
+  /** Revoke one assignment of this person (membership organization name for the confirmation). */
+  onRevoke: (a: any, organizationName: string) => void
+  /** Restore revoked automatic access of this person (membership organization name for the confirmation). */
+  restorable: Set<string>; onRestore: (a: any, organizationName: string) => void
   /** Root Access status (renders nothing unless the person holds active Root Access). */
   rootCard?: React.ReactNode
 }) {
@@ -749,14 +756,15 @@ function PersonDetail({ person: p, orgName, scopeNames, roleModules, canRevoke, 
   if (!(p.membership || []).length) {
     return <div className="space-y-3 bg-gray-50/60 px-4 py-3 pl-10 text-sm text-gray-600">
       {rootCard}
-      <div><p>No active business membership</p>
+      <div>{holdsRootAccess(p) && <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Organization membership</p>}<p>No active business membership</p>
       <p className="text-xs text-gray-400">Category: {categoryLabel(p.principal_type)}. Business access is shown here only when an active membership exists; this says nothing about other kinds of access.</p></div></div>
   }
   const legacyHost = (p.membership || []).find((m: any) => m.is_primary) || (p.membership || [])[0]
   return <div className="space-y-3 bg-gray-50/60 px-4 py-3 md:pl-10">
     {rootCard}
+    {holdsRootAccess(p) && <div className="flex items-center gap-2"><h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Organization membership</h3>
+      <InfoPopover label="About organization membership"><p>Membership-based access, separate from Root Access. Root Access does not depend on it, and everything here stays in force if Root Access ends.</p></InfoPopover></div>}
     {(p.membership || []).map((m: any) => {
-      const list: any[] = m.assignments || []
       const org = one(m.organization)
       const name = String(org?.org_name || orgName.get(m.organization_id) || one(p.organization)?.org_name || 'Organization')
       return <section key={m.id} aria-label={`Membership: ${name}`} className="rounded-lg border border-gray-200 bg-white">
@@ -767,105 +775,130 @@ function PersonDetail({ person: p, orgName, scopeNames, roleModules, canRevoke, 
             <span className={`rounded-md px-1.5 py-0.5 text-xs font-medium ${m.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>{cap(String(m.status || ''))}</span>
             {m.is_primary && <span className="rounded-md border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-xs text-gray-600">Primary</span>}
           </div>
-          {m === legacyHost && <p className="mt-0.5 text-xs text-gray-500" title="Legacy role code (compatibility input only)">Legacy role: {p.role_code || '—'}</p>}
         </div>
-        {list.length === 0 && <p className="px-3 py-2 text-sm text-gray-500">No role assignments.</p>}
-        {SECTIONS.map(section => {
-          const items = list.filter(a => accessKind(a) === section.kind)
-          if (!items.length) return null
-          const sectionId = `${m.id}/${section.kind}`
-          const startsOpen = section.kind === 'granted'
-          const sectionOpen = startsOpen !== toggled.has(sectionId)
+        {(() => {
           const groupOf = (a: any) => roleModules.get(one(a.role)?.id)?.groupId ?? OTHER_MODULE.id
-          const renderGroups = (groups: Array<{ id: string; name: string; items: any[] }>) => <ul className="pb-1">{groups.map(g => {
-            const gid = `${sectionId}/${g.id}`
-            const gOpen = startsOpen !== toggled.has(gid)
-            return <li key={g.id}>
-              <div className="flex items-center gap-2 bg-gray-50/70 py-1.5 pl-8 pr-3">
-                <ToggleButton open={gOpen} onClick={() => flip(gid)} label={`${section.title}: ${g.name}, ${plural(g.items.length, 'role')}`}>
-                  <span className="whitespace-nowrap text-sm font-medium text-gray-800">{g.name}</span>
-                  <span className="text-xs text-gray-400">{g.items.length}</span>
-                </ToggleButton>
-                {!gOpen && <span className="hidden min-w-0 truncate text-xs text-gray-400 md:inline">{g.items.map(a => one(a.role)?.name).filter(Boolean).join(', ')}</span>}
-              </div>
-              {gOpen && <AssignmentList list={g.items} kind={section.kind} scopeNames={scopeNames} roleModules={roleModules} canRevoke={canRevoke} onRevoke={onRevoke} restorable={restorable} onRestore={onRestore} />}
-            </li>
-          })}</ul>
+          const list: any[] = m.assignments || []
+          const ofKind = (k: AccessKind) => list.filter(a => accessKind(a) === k)
+          const assignmentList = (items: any[], kind: AccessKind) => <AssignmentList membership={m} list={items} kind={kind} scopeNames={scopeNames} roleModules={roleModules} canRevoke={canRevoke}
+            onRevoke={(a: any) => onRevoke(a, name)} restorable={restorable} onRestore={(a: any) => onRestore(a, name)} />
+          const sectionHeader = (section: typeof SECTIONS[number], open: boolean, count: number, summary: string) => <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
+            <ToggleButton open={open} onClick={() => flip(`${m.id}/${section.kind}`)} label={`${section.title}, ${count}`}>
+              <span className="text-sm font-semibold text-gray-800">{section.title}</span>
+            </ToggleButton>
+            <InfoPopover label={`About ${section.title.toLowerCase()}`}><p>{section.help}</p></InfoPopover>
+            <span className="text-xs text-gray-500">{summary}</span>
+          </div>
+          const renderGroups = (section: typeof SECTIONS[number], groups: Array<{ id: string; name: string; items: any[] }>) => {
+            const startsOpen = section.kind === 'granted'
+            return <ul className="pb-1">{groups.map(g => {
+              const gid = `${m.id}/${section.kind}/${g.id}`
+              const gOpen = startsOpen !== toggled.has(gid)
+              return <li key={g.id}>
+                <div className="flex items-center gap-2 bg-gray-50/70 py-1.5 pl-8 pr-3">
+                  <ToggleButton open={gOpen} onClick={() => flip(gid)} label={`${section.title}: ${g.name}, ${plural(g.items.length, 'role')}`}>
+                    <span className="whitespace-nowrap text-sm font-medium text-gray-800">{g.name}</span>
+                    <span className="text-xs text-gray-400">{g.items.length}</span>
+                  </ToggleButton>
+                  {!gOpen && <span className="hidden min-w-0 truncate text-xs text-gray-400 md:inline">{g.items.map(a => one(a.role)?.name).filter(Boolean).join(', ')}</span>}
+                </div>
+                {gOpen && assignmentList(g.items, section.kind)}
+              </li>
+            })}</ul>
+          }
 
-          // Granted access defaults to current (in-window active) grants only;
-          // scheduled (future-start) and revoked/expired entries stay discoverable
-          // in their own folded lists, never mixed into the active list.
-          if (section.kind === 'granted') {
-            const current: any[] = []
-            const scheduled: any[] = []
-            const history: any[] = []
-            for (const a of items) {
-              if (isCurrent(a)) current.push(a)
-              else if (a.status === 'active' && isFutureStart(a) && !isExpired(a)) scheduled.push(a)
-              else history.push(a)
-            }
+          // Assigned policies show current (in-window active) grants only; scheduled (future-start) entries stay in their
+          // own folded list. Revoked/expired grants are not shown here at all: their records (reason, actor, scope, dates)
+          // stay in the database and in Audit → Access changes (security.audit.view).
+          const grantedItems = ofKind('granted')
+          const current: any[] = []
+          const scheduled: any[] = []
+          for (const a of grantedItems) {
+            if (isCurrent(a)) current.push(a)
+            else if (a.status === 'active' && isFutureStart(a) && !isExpired(a)) scheduled.push(a)
+          }
+          const grantedSection = () => {
+            const section = SECTIONS[0]
+            const open = !toggled.has(`${m.id}/granted`)
             const groups = groupByModule(current, groupOf)
+            const idle = current.filter(a => notInEffectReason(a, m)).length
             const scheduledId = `${m.id}/scheduled`
-            const historyId = `${m.id}/history`
-            const scheduledOpen = toggled.has(scheduledId)
-            const historyOpen = toggled.has(historyId)
-            return <div key={section.kind} className="border-t border-gray-100 first:border-t-0">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
-                <ToggleButton open={sectionOpen} onClick={() => flip(sectionId)} label={`${section.title}, ${current.length}`}>
-                  <span className="text-sm font-semibold text-gray-800">{section.title}</span>
-                </ToggleButton>
-                <InfoPopover label={`About ${section.title.toLowerCase()}`}><p>{section.help}</p></InfoPopover>
-                <span className="text-xs text-gray-500">{current.length} active · {plural(groups.length, 'module')}</span>
-              </div>
-              {sectionOpen && (current.length
-                ? renderGroups(groups)
-                : <p className="px-3 pb-2 pl-9 text-sm text-gray-500">No active granted policies. {history.length > 0 ? 'Revoked or expired grants are kept in Access history below.' : 'Nothing is granted here.'}</p>)}
+            return <div className="border-t border-gray-100 first:border-t-0">
+              {sectionHeader(section, open, current.length, `${current.length - idle} active${idle > 0 ? ` · ${idle} not in effect` : ''} · ${plural(groups.length, 'module')}`)}
+              {open && (current.length
+                ? renderGroups(section, groups)
+                : <p className="px-3 pb-2 pl-9 text-sm text-gray-500">No active assigned policies. Use Grant policy to give access.</p>)}
               {scheduled.length > 0 && <div className="border-t border-gray-100">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
-                  <ToggleButton open={scheduledOpen} onClick={() => flip(scheduledId)} label={`Scheduled access, ${scheduled.length}`}>
+                  <ToggleButton open={toggled.has(scheduledId)} onClick={() => flip(scheduledId)} label={`Scheduled access, ${scheduled.length}`}>
                     <span className="text-sm font-medium text-gray-700">Scheduled access</span>
                   </ToggleButton>
                   <span className="text-xs text-gray-500">Starts later — grants nothing until then</span>
                 </div>
-                {scheduledOpen && <AssignmentList list={scheduled} kind={section.kind} scopeNames={scopeNames} roleModules={roleModules} canRevoke={canRevoke} onRevoke={onRevoke} restorable={restorable} onRestore={onRestore} />}
-              </div>}
-              {history.length > 0 && <div className="border-t border-gray-100">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
-                  <ToggleButton open={historyOpen} onClick={() => flip(historyId)} label={`Access history, ${history.length}`}>
-                    <span className="text-sm font-medium text-gray-700">Access history</span>
-                  </ToggleButton>
-                  <span className="text-xs text-gray-500">Revoked or expired — no longer grants access</span>
-                </div>
-                {historyOpen && <AssignmentList list={history} kind={section.kind} scopeNames={scopeNames} roleModules={roleModules} canRevoke={canRevoke} onRevoke={onRevoke} restorable={restorable} onRestore={onRestore}
-                  onRestoreGrant={canRevoke && canGrantOn(m) && onRestoreGrant ? (a: any) => onRestoreGrant(a, name) : undefined} />}
+                {toggled.has(scheduledId) && assignmentList(scheduled, 'granted')}
               </div>}
             </div>
           }
-
-          const groups = groupByModule(items, groupOf)
-          const current = items.filter((a: any) => isCurrent(a)).length
-          const history = items.length - current
-          return <div key={section.kind} className="border-t border-gray-100 first:border-t-0">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
-              <ToggleButton open={sectionOpen} onClick={() => flip(sectionId)} label={`${section.title}, ${items.length}`}>
-                <span className="text-sm font-semibold text-gray-800">{section.title}</span>
-              </ToggleButton>
-              <InfoPopover label={`About ${section.title.toLowerCase()}`}><p>{section.help}</p></InfoPopover>
-              <span className="text-xs text-gray-500">{current} active{history > 0 ? ` · ${history} historical` : ''} · {plural(groups.length, 'module')}</span>
+          // System-assigned and legacy-based access: current entries only. Automatic access an administrator overrode
+          // (revoked) is not history but a standing override of the lifecycle rule, so it stays listed with its Restore.
+          const foldedSection = (section: typeof SECTIONS[number], items: any[]) => {
+            const open = toggled.has(`${m.id}/${section.kind}`)
+            const shown = items.filter((a: any) => isCurrent(a) || restorable.has(a.id))
+            const groups = groupByModule(shown, groupOf)
+            const currentItems = shown.filter((a: any) => isCurrent(a))
+            const active = currentItems.filter((a: any) => !notInEffectReason(a, m)).length
+            const idle = currentItems.length - active
+            const overridden = shown.length - currentItems.length
+            const idleLabel = section.kind === 'legacy' && idle > 0 && currentItems.every(isRetiredLegacy) ? 'retired, grants nothing' : 'not in effect'
+            return <div className="border-t border-gray-100 first:border-t-0">
+              {sectionHeader(section, open, shown.length, `${active} active${idle > 0 ? ` · ${idle} ${idleLabel}` : ''}${overridden > 0 ? ` · ${overridden} overridden by an administrator` : ''} · ${plural(groups.length, 'module')}`)}
+              {open && renderGroups(section, groups)}
             </div>
-            {sectionOpen && renderGroups(groups)}
-          </div>
-        })}
+          }
+          const shownIn = (items: any[]) => items.filter((a: any) => isCurrent(a) || restorable.has(a.id))
+          const automaticItems = shownIn(ofKind('automatic'))
+          const legacyItems = shownIn(ofKind('legacy'))
+          const legacyGrants = legacyItems.some((a: any) => isCurrent(a) && !notInEffectReason(a, m))
+          const showLegacy = legacyItems.some((a: any) => !isRetiredLegacy(a))
+          const ended = list.filter((a: any) => !isCurrent(a) && !(a.status === 'active' && isFutureStart(a) && !isExpired(a)) && !restorable.has(a.id)).length
+          return <>
+            <AccessGroup title="S&A Access" note="Access managed through the Security & Access policy system.">
+              {grantedItems.length > 0 && grantedSection()}
+              {automaticItems.length > 0 && foldedSection(SECTIONS[1], automaticItems)}
+              {!grantedItems.length && !automaticItems.length && <p className="px-3 py-2 text-sm text-gray-500">No Security &amp; Access policies in this membership.</p>}
+            </AccessGroup>
+            {showLegacy && <AccessGroup title="Legacy Access" note={legacyGrants
+              ? 'Legacy role information retained for compatibility. The legacy-based policy below still grants its permissions.'
+              : 'Legacy role information retained for compatibility. Nothing here grants access.'}>
+              {m === legacyHost && <div className="flex items-center gap-1 px-3 py-2 text-sm text-gray-700"><span>Legacy role code: {p.role_code || '—'}</span>
+                <InfoPopover label="About the legacy role code"><p>{ROLE_CODE_HELP}</p></InfoPopover></div>}
+              {legacyItems.length > 0 ? foldedSection(SECTIONS[2], legacyItems) : <p className="border-t border-gray-100 px-3 py-2 text-sm text-gray-500">No legacy-based access.</p>}
+            </AccessGroup>}
+            {ended > 0 && <p className="border-t border-gray-100 px-3 py-2 text-xs text-gray-500">
+              {ended} revoked or expired {ended === 1 ? 'entry' : 'entries'} not shown — no longer grants access. The records are kept in Audit → Access changes.</p>}
+          </>
+        })()}
       </section>
     })}
   </div>
 }
 
-function AssignmentList({ list, kind, scopeNames, roleModules, canRevoke, onRevoke, restorable, onRestore, onRestoreGrant }: {
+/** One access model inside a membership (S&A Access or Legacy Access): a compact labelled band, no nested card. */
+function AccessGroup({ title, note, children }: { title: string; note: string; children: React.ReactNode }) {
+  return <div role="group" aria-label={title} className="border-t border-gray-200 first:border-t-0">
+    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 bg-gray-50 px-3 py-1.5">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-700">{title}</h4>
+      <p className="text-xs text-gray-500">{note}</p>
+    </div>
+    {children}
+  </div>
+}
+
+function AssignmentList({ membership, list, kind, scopeNames, roleModules, canRevoke, onRevoke, restorable, onRestore }: {
+  /** The membership these entries belong to (an inactive membership makes them grant nothing). */
+  membership?: any
   list: any[]; kind: AccessKind; scopeNames: Map<string, string>; roleModules: Map<string, RoleModules>; canRevoke: boolean; onRevoke: (a: any) => void
   restorable: Set<string>; onRestore: (a: any) => void
-  /** Present only in Access history where this administrator may grant on the membership; absent = no Restore offered. */
-  onRestoreGrant?: (a: any) => void
 }) {
   const label = 'text-[11px] font-medium uppercase tracking-wide text-gray-400 md:sr-only'
   return <div>
@@ -881,8 +914,10 @@ function AssignmentList({ list, kind, scopeNames, roleModules, canRevoke, onRevo
       const tags = cls?.crossModule ? cls.modules : cls?.related || []
       const roleName = role?.name || 'Role'
       const source = a.source === 'access_request' ? <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] text-violet-700">Approved request</span>
-        : kind !== 'granted' ? <span className="text-xs text-gray-500">{AUTOMATIC_SOURCE[a.source] ?? (kind === 'legacy' ? 'Legacy compatibility role' : '—')}</span>
-        : <span className="text-xs text-gray-600">Administrator grant</span>
+        : kind === 'legacy' ? <span className="text-xs text-gray-500">From legacy role code (migration)</span>
+        : kind !== 'granted' ? <span className="text-xs text-gray-500">{AUTOMATIC_SOURCE[a.source] ?? '—'}</span>
+        : <span className="text-xs text-gray-600">Administrator assignment</span>
+      const idleReason = notInEffectReason(a, membership)
       return <li key={a.id} className={`grid grid-cols-1 gap-x-3 gap-y-1.5 py-2 pl-14 pr-3 text-sm md:items-start ${ENTRY_GRID} ${current ? '' : 'bg-gray-50/50'}`}>
         <div className="min-w-0">
           <span className={label}>Policy</span>
@@ -891,10 +926,11 @@ function AssignmentList({ list, kind, scopeNames, roleModules, canRevoke, onRevo
         </div>
         <div className="min-w-0"><span className={label}>Data scope</span><div className="break-words text-xs text-gray-700">{scopeText}</div></div>
         <div className="min-w-0"><span className={label}>Source</span><div>{source}</div>
-          {restorable.has(a.id) && <div className="text-[11px] text-gray-400">Automatic access revoked by an administrator</div>}</div>
+          {restorable.has(a.id) && <div className="text-[11px] text-gray-400">System-assigned access revoked by an administrator</div>}</div>
         <div className="min-w-0"><span className={label}>Status / validity</span>
           <div><span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium ${state.tone}`}>
             {state.label === 'Temporary' && <Clock className="h-3 w-3" aria-hidden />}{state.label}</span></div>
+          {idleReason && <div className="mt-0.5 text-xs text-amber-700">{idleReason}</div>}
           {state.dateLabel && (state.dateLabel === 'Starts' ? a.effective_from : a.effective_until) && <div className="mt-0.5 text-xs text-gray-500">{state.dateLabel} {formatDate(state.dateLabel === 'Starts' ? a.effective_from : a.effective_until)}</div>}</div>
         <div className="flex flex-wrap items-center gap-1 md:justify-end"><span className={label}>Actions</span>
           {(a.status === 'active' && !isExpired(a)) && canRevoke && <button type="button" onClick={() => onRevoke(a)}
@@ -905,13 +941,6 @@ function AssignmentList({ list, kind, scopeNames, roleModules, canRevoke, onRevo
             title="Returns this role to automatic management"
             className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-gray-600 hover:bg-emerald-50 hover:text-emerald-700 ${FOCUS}`}>
             <RotateCcw className="h-3 w-3" aria-hidden />Restore<span className="sr-only"> {roleName}</span></button>}
-          {!restorable.has(a.id) && a.restore && onRestoreGrant && (a.restore.eligible
-            ? <button type="button" onClick={() => onRestoreGrant(a)}
-              title="Grants this policy again with the same organization, scope and validity"
-              className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-gray-600 hover:bg-emerald-50 hover:text-emerald-700 ${FOCUS}`}>
-              <RotateCcw className="h-3 w-3" aria-hidden />Restore<span className="sr-only"> {roleName}</span></button>
-            : <span className="inline-flex items-center gap-1 text-xs text-gray-400">Restore unavailable
-              <InfoPopover label={`Why ${roleName} cannot be restored`} align="right"><p>{a.restore.message}</p></InfoPopover></span>)}
         </div>
       </li>
     })}</ul>

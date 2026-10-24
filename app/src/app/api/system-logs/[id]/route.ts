@@ -1,3 +1,6 @@
+import { denialDiagnostics } from '@/lib/security-access/denial-diagnostics'
+import { authorizeOperation, organizationResource } from '@/lib/security-access/operation'
+import { legacyOrDelegatedSecurityAccess } from '@/lib/security-access/delegation'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -36,5 +39,18 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     const { data: org } = await admin.from('organizations').select('org_name').eq('id', orgId).maybeSingle()
     organizationName = org?.org_name ?? null
   }
-  return NextResponse.json({ state: 'ok', detail: data, organizationName })
+  let authorizationDiagnostics = null
+  // Log viewing does not imply policy/grant administration. Check the event's
+  // organization, independently of the viewer's primary organization.
+  if (data.event?.source === 'server' && data.event?.details?.event === 'security.authorization.denied' && orgId && user) {
+    const authority = await authorizeOperation({ actorId: user.id, permission: 'security.role.assign',
+      resource: organizationResource('security_access', orgId), explainOnly: true,
+      legacy: () => legacyOrDelegatedSecurityAccess(user.id, orgId, 'security.role.assign'),
+    }).catch(() => null)
+    if (authority?.decision === 'ALLOW' && !authority.unavailable) {
+      try { authorizationDiagnostics = await denialDiagnostics(admin, data.event) }
+      catch { authorizationDiagnostics = { unavailable: true } }
+    }
+  }
+  return NextResponse.json({ state: 'ok', detail: data, organizationName, authorizationDiagnostics })
 }

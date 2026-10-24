@@ -169,12 +169,12 @@ describe('Edit User — Group Policy access', () => {
     open()
     await toAccess()
     const region = screen.getByRole('region', { name: 'Current access' })
-    expect(within(region).getByText('Receiver').closest('li')!.textContent).toMatch(/Granted/)
+    expect(within(region).getByText('Receiver').closest('li')!.textContent).toMatch(/Assigned/)
     expect(within(region).getByText('Receiver').closest('li')!.textContent).toMatch(/Serapod HQ/)
     expect(within(region).getByText('Shipper').closest('li')!.textContent).toMatch(/Until/)
     const ess = within(region).getByText('Employee Self Service').closest('li')!
-    expect(ess.textContent).toMatch(/Managed/); expect(ess.textContent).toMatch(/not removed by this form/)
-    expect(within(region).getByText('legacy-HQ_ADMIN').closest('li')!.textContent).toMatch(/Legacy migration/)
+    expect(ess.textContent).toMatch(/System-assigned/); expect(ess.textContent).toMatch(/not removed by this form/)
+    expect(within(region).getByText('legacy-HQ_ADMIN').closest('li')!.textContent).toMatch(/Legacy-based/)
   })
 
   it('removing a granted policy is the only revocation: managed ESS, legacy and temporary access are untouched; reason required; nothing runs before Save', async () => {

@@ -26,8 +26,9 @@ interface AttendanceEntry {
   clock_out_at: string | null
   attendance_flag: string | null
   shift_id: string | null
-  total_hours: number | null
-  notes: string | null
+  /** Canonical stored duration in minutes (see hr_attendance_entries.worked_minutes). */
+  worked_minutes: number | null
+  note: string | null
 }
 
 interface AttendanceShift {
@@ -121,7 +122,7 @@ export default function HrMobileAttendance() {
 
   const todayTotalHours = useMemo(() => {
     return todayEntries.reduce((sum, e) => {
-      if (e.total_hours) return sum + e.total_hours
+      if (e.worked_minutes) return sum + e.worked_minutes / 60
       const end = e.clock_out_at
         ? new Date(e.clock_out_at).getTime()
         : Date.now()
@@ -184,6 +185,17 @@ export default function HrMobileAttendance() {
       })
       return
     }
+    if (!openEntry) {
+      // hr_attendance_corrections.entry_id is NOT NULL, so a correction can only be
+      // raised against an existing attendance entry.
+      toast({
+        title: 'No open entry',
+        description:
+          'Corrections can only be requested for a recorded attendance entry. Please contact HR directly for a missed clock-in.',
+        variant: 'destructive',
+      })
+      return
+    }
     try {
       // Attempt to insert into correction table — may not exist yet
       const { error } = await supabase
@@ -191,7 +203,7 @@ export default function HrMobileAttendance() {
         .insert({
           requested_by: userProfile.id,
           organization_id: organizationId,
-          entry_id: openEntry?.id || null,
+          entry_id: openEntry.id,
           reason: correctionReason,
           status: 'pending',
         })

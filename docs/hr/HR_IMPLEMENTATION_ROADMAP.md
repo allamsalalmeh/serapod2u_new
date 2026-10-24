@@ -1,6 +1,6 @@
 # Serapod2U HR — Implementation Roadmap
 
-Last verified: 2026-10-24 · HEAD `5d6c9bcb` · back to [HR_MASTER_INDEX.md](HR_MASTER_INDEX.md)
+Last verified: 2026-10-24 · HEAD `1e0830c6` (B0 evidence reconciliation) · back to [HR_MASTER_INDEX.md](HR_MASTER_INDEX.md)
 
 This roadmap is **authoritative** for sequencing. It consolidates the remediation phases P0–P7 ([HR_IMPLEMENTATION_SEQUENCE.md](assessments/remediation-2026-10-24/HR_IMPLEMENTATION_SEQUENCE.md)), the operational HR Core enhancements ([HR_MASTER_SCOPE.md](HR_MASTER_SCOPE.md)), and Finance-readiness Phases A–D ([HR_CORE_FINANCE_READY_IMPLEMENTATION_ROADMAP.md](architecture/finance-integration-2026-10-24/HR_CORE_FINANCE_READY_IMPLEMENTATION_ROADMAP.md)).
 
@@ -14,9 +14,11 @@ Common delivery rules for every batch with database impact: migration stamped af
 
 | Batch | Name | Maps to | Depends on | Approval |
 |---|---|---|---|---|
-| **B0** | Environment & migration verification (read-only) | P0 | — | Not approved |
+| **B0** | Environment & migration verification (read-only) | P0 | — | Code/schema assessment **completed** at `1e0830c6` ([B0 report](assessments/HR_B0_ENVIRONMENT_VERIFICATION.md)); staging & production live diagnostics **PENDING** (owner-run v2) |
 | **B1** | Apply pending lifecycle & S&A migrations (owner) | P1 | B0 | Not approved |
-| **B2** | Critical containment: leave security, ESS leave fix, payroll fail-closed, disable second payroll GL route, hide mock screen, OT API repair | P2, A8 | B0 | Not approved |
+| **B2** | Critical containment: leave security, ESS leave fix, payroll fail-closed, disable second payroll GL route, hide mock screen, OT API repair | P2, A8 | B0 | Not approved — proposed split into B2A + B2B (P-R11), see §2a |
+| ↳ **B2A** | Leave Security Containment (migration `20261219100000`) | P2 (leave) | OD-B2A-1…7, PD-B2-10; staging apply after explicit grants + v2 on staging; **not** B1 | **Planned · Not approved · NOT IMPLEMENTED** |
+| ↳ **B2B** | Operational Repairs (no migration) | P2 (payroll/attendance/OT/nav), A8 | OD-B2B-1…3; BL-9 | **Planned · Not approved · NOT IMPLEMENTED** |
 | **B3** | Canonical S&A consolidation for HR | P3 | B1, B2 | Not approved |
 | **B4a** | Hybrid Attendance foundation: auto-validation, exception detection & review, mobile clock hardening | Owner WS-06/07/10 | B2, B3, PD-ATT-01/02/03/06/07/08 | Not approved |
 | **B4b** | HR manual attendance & controlled corrections | Owner WS-08 | B4a, PD-ATT-04 | Not approved |
@@ -57,13 +59,14 @@ Recommended first approval: **B0 + B2** (small, reversible, closes live exposure
 | Scope | Read-only checks on staging and production: application state of `20261211…20261218` and untracked S&A files; `sa_migration_modes` for `hr.%`; `legacy_authorization.read_only`; S&A shadow parity for `hr.%`; HR row counts (leave, payroll, OT, holidays, attendance); column-contract diff of `from('hr_*')` usage vs schema; correct stale PMS row for `20261003100000` |
 | Current code status | Not started. Evidence today: PMS 2026-10-16 + schema dumps |
 | Dependencies | — |
-| Database impact | None (read-only script `supabase/diagnostics/hr_remediation_readonly.sql`, run by owner inside `SET TRANSACTION READ ONLY`) |
+| Database impact | None. Read-only diagnostic run by the owner inside a read-only transaction. Canonical diagnostic: [`hr_b0_environment_readonly_v2.sql`](assessments/hr_b0_environment_readonly_v2.sql) (supersedes v1; the old name `hr_remediation_readonly.sql` was never created) |
 | S&A impact | None |
 | Required tests | n/a (diagnostic) |
 | UAT scenarios | n/a |
 | Acceptance criteria | Signed table of applied/not-applied per migration per environment; HR keys by mode; row counts; column-contract diff reviewed; PMS updated |
 | Rollback | n/a |
 | Owner approval | **Not approved** |
+| Status (2026-10-24) | Code/schema assessment: **completed** (B0 report, snapshot/replica evidence). Staging live diagnostic: **PENDING**. Production live diagnostic: **PENDING**. Owner-run instructions: [HR_PROGRESS_TRACKER.md](HR_PROGRESS_TRACKER.md) §5 |
 
 ### B1 — Apply pending lifecycle & S&A migrations (owner-run)
 
@@ -93,6 +96,37 @@ Recommended first approval: **B0 + B2** (small, reversible, closes live exposure
 | UAT scenarios | Employee applies leave on mobile; manager approves direct report; employee cannot approve own leave; HR calculates a payroll run (lines created or explicit failure); approval refused with "provisional" message; OT request submit/approve |
 | Acceptance criteria | All tests pass; UAT scenarios pass on staging; no change to identity, S&A catalogue or Finance tables |
 | Rollback | Drop trigger, restore previous policies (verbatim in migration header); revert app commit |
+| Owner approval | **Not approved** |
+
+### 2a. Proposed B2 split (P-R11 — not approved)
+
+**Design reference (authoritative for B2A/B2B detail): [HR_B0_REVIEW_AND_B2_PLAN.md](assessments/HR_B0_REVIEW_AND_B2_PLAN.md) Tasks 2–4** (file scopes §4.1/§4.2, sequencing §4.3, coordination §4.4, UAT/rollback §4.5). The tables below summarise it; where they differ, the plan wins unless a later owner decision says otherwise. Code re-checked at `1e0830c6` (tracker §4).
+
+**Sequencing (B0-PLAN §4.3):** (1) owner runs v2 on staging + production → (2) OD decisions → (3) owner grants explicit `hr-leave-attendance-administrator`/`hr-payroll-full-access` to real HR approvers and `manager-self-service` to line managers (S&A action, not HR code) → (4) B2A + B2B coding with replica/Vitest tests (can start after (2)) → (5) B2B deploy (no DB) → (6) B2A staging apply + UAT (after 3, 4) → (7) production, separately approved. **B2A does not depend on B1** (corrects B0 report §4).
+
+#### B2A — Leave Security Containment
+
+| Field | Content |
+|---|---|
+| Scope | Refuse inserts on behalf of another employee (unless explicit HR authority per PD-B2-02) and inserts in non-`pending` status; refuse employee self-approval; direct-manager approval rule (PD-B2-01); explicit HR approval authority (PD-B2-02); org scope (PD-B2-03); remove role-level / compatibility exposure from leave policies without changing S&A grants (PD-B2-04); narrow SELECT on `hr_leave_requests` and `hr_leave_balances` to self, direct reports and explicit HR; approved-leave cancellation rule (PD-B2-05); MSS team scope (PD-B2-06); append-only audit event per transition |
+| Design | P-R13 (B0-PLAN Task 2): SELF / MANAGER (`hr.mss.leave_*` + direct report) / explicit non-legacy HR / SERVICE bypass; guard trigger stamps `approved_by`/`approved_at`; self-approval refused unconditionally; on-behalf insert refused for everyone; RLS on requests/approvals/balances; append-only `hr_leave_request_events` without reason text; status CHECK `NOT VALID`; historical rows reported not altered (OD-B2A-5) |
+| Files | `supabase/migrations/20261219100000_hr_leave_containment_guard.sql`; `supabase/tests/security/hr_leave_containment/*`; `components/hr/mobile/HrMobileLeave.tsx` (**BL-9 overlap**); `modules/hr/leave/supabaseRepository.ts`; `modules/hr/hrNav.ts` + test; `components/hr/modules/HrLeaveApprovalFlowView.tsx`; new `HrMobileLeave.test.tsx` |
+| Rollback | B0-PLAN: header rollback restores previous policies verbatim (events table kept) — **re-opens SEC-1…3**; posture to be decided (PD-B2-10) |
+| Verified current state | Production schema 2026-10-16: `hr_leave_requests_insert` checks only same-org membership; `hr_leave_requests_update` legacy branch admits `u.id = employee_id` or `role_level <= 20`; SELECT on requests and balances is organization-wide. No later migration touches these tables. Mobile manager tab queries all same-org pending requests |
+| Dependencies | Explicit grants (step 3) before staging apply; v2 on staging. Identity/HR Data Management: service-role bypass keeps reset/restore working; events table added to the reset allowlist; registration in `identity_deletion_category` guarded with `to_regprocedure(...)` because `20261216100000_identity_permanent_deletion` application is unverified (BL-2). Not dependent on B1 |
+| Database impact | One migration (stamped after `20261218100000`): transition-guard trigger + replacement policies, previous policies verbatim in rollback header |
+| S&A impact | **None** — no catalogue, grant or policy-membership change |
+| Required tests | Replica suite `hr_leave_containment/`: impersonated insert refused; approved-status insert refused; self-approval refused; non-report manager refused; direct report approved; HR holder approved; cross-org refused; cancellation matrix; delete/reset/archive functions still succeed |
+| Owner approval | **Not approved** |
+
+#### B2B — Operational Repairs
+
+| Field | Content |
+|---|---|
+| Scope | Payroll calculate fail-closed (column contract `employee_user_id`, `total_minutes`/`overtime_minutes`; any line error fails the run) and approval lock (PD-B2-08); attendance correction review (`review_note` → `review_comment`); timesheet generation column contract (`total_work_minutes`/`total_days` do not exist); OT request API (`ot_minutes_claimed`, `approved_by`, `approver_remarks`, `planned_*_time` do not exist; self-approval PD-B2-07); mobile leave type filter `is_active` → `status`; public-holiday template (`category` column does not exist; Thaipusam state-scoped); disable broken HR configuration seed actions; `/api/hr/finance/post-payroll-run` → 410 (DB function untouched); hide mock Leave Approval Flow (`MockLeaveRepository`); HR schema-contract tests (PD-B2-09) |
+| Dependencies | BL-9 (`HrMobileLeave.tsx` only — `HrMobileAttendance.tsx` is not a B2B file); v2 payroll volumes (OD-B2B-1). Files per B0-PLAN Task 3; all clean in the working tree at reconciliation |
+| Database impact | None expected (app routes only) |
+| S&A impact | None |
 | Owner approval | **Not approved** |
 
 ### B3 — Canonical S&A consolidation for HR
@@ -303,4 +337,6 @@ Recommended first approval: **B0 + B2** (small, reversible, closes live exposure
 
 | Date | Change |
 |---|---|
+| 2026-10-24 | B0 evidence reconciliation: B0 status from the restored report; §2a now references B0-PLAN as design reference with sequencing; B2A independent of B1 (B0 report §4 corrected); rollback posture PD-B2-10; dependencies use OD-B2A/B IDs. |
+| 2026-10-24 | Handover sync at `1e0830c6`: B0 status recorded (repo assessment reported completed; live verification PENDING); B0 diagnostic reference corrected; §2a B2A/B2B split added as PROPOSED (P-R11); both NOT IMPLEMENTED, not approved. |
 | 2026-10-24 | Roadmap created; all batches "Not approved". |

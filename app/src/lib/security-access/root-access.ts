@@ -46,8 +46,14 @@ export async function rootAccessCapability(admin: any, viewerId: string): Promis
     admin.rpc('sa_actor_is_root', { p_actor: viewerId }),
     admin.rpc('sa_active_root_count', { p_excluding: null }),
   ])
-  if (mine.error || count.error) return { available: false, viewerIsRoot: false, activeCount: null }
-  return { available: true, viewerIsRoot: mine.data === true, activeCount: typeof count.data === 'number' ? count.data : null }
+  if (mine.error || count.error) return { available: false, viewerIsRoot: false, activeCount: null, activePermissionCount: null }
+  // Best-effort catalogue count for the Root card's effective-access summary. A failure only omits the number.
+  let activePermissionCount: number | null = null
+  try {
+    const { count: permCount, error: permError } = await admin.from('sa_permissions').select('id', { count: 'exact', head: true }).eq('status', 'active')
+    if (!permError && typeof permCount === 'number') activePermissionCount = permCount
+  } catch { /* omit the number */ }
+  return { available: true, viewerIsRoot: mine.data === true, activeCount: typeof count.data === 'number' ? count.data : null, activePermissionCount }
 }
 
 /** Attaches `root_access` (active grant or null) to each person row. */

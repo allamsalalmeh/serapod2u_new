@@ -627,7 +627,8 @@ export default function HrSettingsPermissionsView() {
                                 <div key={module} className="space-y-2">
                                     <div className="flex items-center gap-2">
                                         <Checkbox
-                                            checked={allSelected ? true : someSelected ? 'indeterminate' : false}
+                                            checked={allSelected}
+                                            indeterminate={!allSelected && someSelected}
                                             onCheckedChange={() => toggleModule(module)}
                                         />
                                         <Badge className={`text-xs ${MODULE_COLORS[module] || ''}`}>

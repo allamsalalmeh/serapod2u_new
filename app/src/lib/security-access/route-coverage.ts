@@ -17,6 +17,7 @@ export type RouteCoverage =
   | { kind: 'ENTERPRISE'; permissions: string[]; via?: string[] }
 
 export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
+  "payment-gateway/access": { kind: 'ENTERPRISE', permissions: ["ecommerce.channel.manage"] },
   "security-access/governance/legacy-preview": { kind: 'ENTERPRISE', permissions: ["security.audit.view"] },
   "accounting/accounts": { kind: 'ENTERPRISE', permissions: ["finance.account.manage", "finance.ledger.view"] },
   "accounting/accounts/[id]": { kind: 'ENTERPRISE', permissions: ["finance.account.manage", "finance.ledger.view"] },

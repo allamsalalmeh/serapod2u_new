@@ -61,7 +61,6 @@ describe('child module entries use the same canonical decision', () => {
     ['./crm/page', 'crm'],
     ['./marketing/page', 'mktg'],
     ['./catalog/page', 'catalog'],
-    ['./ecommerce/page', 'ecommerce'],
     ['./loyalty/page', 'loyalty'],
   ])('%s decides destination %s', async (modulePath, destination) => {
     person([])
@@ -70,6 +69,24 @@ describe('child module entries use the same canonical decision', () => {
     expect(resolveDestinationAccess.mock.calls.map(c => c[1])).toContain(destination)
     person([destination])
     expect(props(await Page()).initialView).toBeTruthy()
+  })
+
+  it('./ecommerce/page decides destination ecommerce, then opens the first section the person may use', async () => {
+    person([])
+    const { default: Page } = await import('./ecommerce/page')
+    expect((await Page() as any).props.kind).toBe('denied')
+    expect(resolveDestinationAccess.mock.calls.map(c => c[1])).toContain('ecommerce')
+    person(['ecommerce', 'store-banner-manager', 'store-orders'])
+    expect(props(await Page()).initialView).toBe('store-banner-manager')
+    // An order-only administrator (E-Commerce Administrator without store management) lands on Store Orders.
+    person(['ecommerce', 'store-orders'])
+    expect(props(await Page()).initialView).toBe('store-orders')
+    // Payment Gateway only: lands on the gateway screen, nothing else.
+    person(['ecommerce', 'ecommerce/payment-gateway'])
+    expect(props(await Page()).initialView).toBe('ecommerce/payment-gateway')
+    // Module entry without any section (cannot happen with the destination table) fails closed.
+    person(['ecommerce'])
+    expect((await Page() as any).props.kind).toBe('denied')
   })
 })
 
@@ -123,4 +140,13 @@ describe('deep links need the child permission, not only the module entry', () =
     expect((await RoadtourAdminView({ view: 'roadtour-kpi-settings' }) as any).props.kind).toBe('denied')
     expect((await RoadtourAdminView({ view: 'roadtour-campaigns' }) as any).props.kind).toBe('denied')
   })
+})
+
+
+it('passes the actual gateway denial reference to the full-page state', async () => {
+  resolveDestinationAccess.mockImplementation(async (_a: unknown, id: string) => id === 'ecommerce' ? { state: 'allowed', destination: id } : { state: 'denied', referenceId: 'SA-realpage123' })
+  const { default: Page } = await import('./ecommerce/[...slug]/page')
+  const result = await Page({ params: Promise.resolve({ slug: ['payment-gateway'] }) })
+  expect(props(result)).toMatchObject({ kind: 'denied', referenceId: 'SA-realpage123' })
+  expect(props(result).permission).toBeUndefined()
 })

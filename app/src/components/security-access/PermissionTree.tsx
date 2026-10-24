@@ -27,6 +27,10 @@ interface Props {
   initialQuery?: string
   searchPlaceholder?: string
   emptyText?: string
+  /** Heading level of the title (nested trees use a lower level). */
+  headingLevel?: 'h2' | 'h3' | 'h4'
+  /** Drop the table's minimum width so a single-column tree fits a phone without horizontal scrolling. */
+  fitWidth?: boolean
 }
 
 /**
@@ -38,6 +42,7 @@ interface Props {
 export default function PermissionTree({
   rollout, title, description, info, showModes = true, renderDetails, renderSubtitle, renderGroupActions, initialQuery = '',
   searchPlaceholder = 'Search modules', emptyText = 'No permissions are registered in this environment yet.',
+  headingLevel: Heading = 'h2', fitWidth = false,
 }: Props) {
   const [query, setQuery] = useState(initialQuery)
   const [open, setOpen] = useState<Set<string>>(new Set())
@@ -72,7 +77,7 @@ export default function PermissionTree({
           <div className="min-w-0">
             <div className="text-sm text-gray-900">{p.label}</div>
             {renderSubtitle?.(p)}
-            <code className="text-[11px] text-gray-400">{p.key}</code>
+            <code className="break-all text-[11px] text-gray-400">{p.key}</code>
           </div>
           {renderDetails && <div className="text-xs">{renderDetails(p)}</div>}
         </div>
@@ -89,7 +94,7 @@ export default function PermissionTree({
     <section className="rounded-xl border border-gray-200 bg-white shadow-sm" aria-label={title}>
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 p-4">
         <div className="min-w-0">
-          <div className="flex items-center gap-2"><h2 className="font-semibold text-gray-950">{title}</h2>
+          <div className="flex items-center gap-2"><Heading className="font-semibold text-gray-950">{title}</Heading>
             {info && <InfoPopover label={`About ${title}`}>{info}</InfoPopover>}</div>
           {description && <p className="text-sm text-gray-500">{description}</p>}
         </div>
@@ -126,7 +131,7 @@ export default function PermissionTree({
         <p className="p-6 text-center text-sm text-gray-500">{emptyText}</p>
       ) : (
         <div className="relative overflow-x-auto">
-          <table className={`w-full text-sm ${showModes ? 'min-w-[640px]' : 'min-w-[480px]'}`}>
+          <table className={`w-full text-sm ${fitWidth ? '' : showModes ? 'min-w-[640px]' : 'min-w-[480px]'}`}>
             <caption className="sr-only">{title}</caption>
             <thead>
               <tr className="border-b border-gray-100 text-left text-xs font-medium text-gray-500">

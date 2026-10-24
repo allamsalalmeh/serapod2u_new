@@ -103,6 +103,14 @@ async function mountPanel(d: any, onChanged: () => void = vi.fn(), other?: Handl
   return fetchMock
 }
 
+/** Revoke → reason → Confirm Revoke in the revoke dialog. */
+const revokeWith = async (roleName: string, reason: string) => {
+  await userEvent.click(screen.getByRole('button', { name: new RegExp(`Revoke ${roleName}`) }))
+  const dialog = within(screen.getByRole('dialog', { name: 'Revoke access' }))
+  await userEvent.type(dialog.getByRole('textbox', { name: /Reason for revoking/ }), reason)
+  await userEvent.click(dialog.getByRole('button', { name: 'Confirm Revoke' }))
+}
+
 const openGrantFor = async (name: string) => {
   const row = screen.getByRole('button', { name: new RegExp(`^${name}`) }).closest('li')!
   await userEvent.click(within(row).getByRole('button', { name: new RegExp(`Grant policy to ${name}`) }))
@@ -114,19 +122,19 @@ describe('People & Access', () => {
     const jafar = screen.getByRole('button', { name: /^Jafar Admin, 4 active roles, expand/ })
     expect(jafar.getAttribute('aria-expanded')).toBe('false')
     const row = jafar.closest('li')!
-    expect(within(row).getByText('1 granted')).toBeTruthy()
-    expect(within(row).getByText('2 automatic')).toBeTruthy()
-    expect(within(row).getByText('1 legacy')).toBeTruthy()
+    expect(within(row).getByText('1 assigned')).toBeTruthy()
+    expect(within(row).getByText('2 system-assigned')).toBeTruthy()
+    expect(within(row).getByText('1 legacy-based')).toBeTruthy()
     expect(screen.queryByText('CRM User')).toBeNull()
     expect(screen.getByRole('button', { name: /^Everyone\s*6$/ }).getAttribute('aria-pressed')).toBe('true')
-    expect(screen.getByRole('button', { name: /^With granted policies\s*1$/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^With assigned policies\s*1$/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: /^Temporary access\s*1$/ })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /^Inactive/ })).toBeNull()      // account status lives in More filters now
   })
 
   it('filters, searches and shows an empty state', async () => {
     await mountPanel(data)
-    await userEvent.click(screen.getByRole('button', { name: /^With granted policies\s*1$/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^With assigned policies\s*1$/ }))
     expect(screen.getByRole('button', { name: /^Jafar Admin/ })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /^Siti Staff/ })).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: /^Everyone\s*6$/ }))
@@ -140,49 +148,49 @@ describe('People & Access', () => {
   it('separates granted, automatic and legacy access, grouped by module', async () => {
     await mountPanel(data)
     await userEvent.click(screen.getByRole('button', { name: /^Jafar Admin/ }))
-    // Granted access is open, grouped by module.
-    expect(screen.getByRole('button', { name: /^Granted access, 1, collapse/ })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /^Granted access: Supply Chain, 1 role, collapse/ })).toBeTruthy()
+    // Assigned policies is open, grouped by module.
+    expect(screen.getByRole('button', { name: /^Assigned policies, 1, collapse/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^Assigned policies: Supply Chain, 1 role, collapse/ })).toBeTruthy()
     expect(screen.getAllByText('Order Approver').length).toBeGreaterThan(0)
     // Automatic and legacy access start folded.
-    const automatic = screen.getByRole('button', { name: /^Automatic access, 2, expand/ })
+    const automatic = screen.getByRole('button', { name: /^System-assigned access, 2, expand/ })
     expect(screen.queryByText('Employee Self-Service')).toBeNull()
     await userEvent.click(automatic)
-    await userEvent.click(screen.getByRole('button', { name: /^Automatic access: HR & Payroll, 1 role, expand/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^System-assigned access: HR & Payroll, 1 role, expand/ }))
     expect(screen.getAllByText('Employee Self-Service').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Managed by HR / User Management').length).toBeGreaterThan(0)
-    await userEvent.click(screen.getByRole('button', { name: /^Automatic access: Customer & Growth, 1 role/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^System-assigned access: Customer & Growth, 1 role/ }))
     expect(screen.getByText('Set up from the legacy role during migration')).toBeTruthy()
     // The legacy compatibility role is in its own section, not mixed with automatic access.
     expect(screen.queryByText('Legacy HQ')).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: /^Legacy access, 1, expand/ }))
-    await userEvent.click(screen.getByRole('button', { name: /^Legacy access: Shared \/ Cross-module, 1 role/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^Legacy-based access, 1, expand/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^Legacy-based access: Shared \/ Cross-module, 1 role/ }))
     expect(screen.getAllByText('Legacy HQ').length).toBeGreaterThan(0)
   })
 
   it('revoke keeps its audited call; automatic access explains the override first', async () => {
-    const prompt = vi.fn(() => 'No longer approves orders')
-    vi.stubGlobal('prompt', prompt)
     const onChanged = vi.fn()
     const fetchMock = await mountPanel(data, onChanged)
     await userEvent.click(screen.getByRole('button', { name: /^Jafar Admin/ }))
-    await userEvent.click(screen.getByRole('button', { name: /Revoke Order Approver/ }))
-    expect(fetchMock).toHaveBeenCalledWith('/api/security-access/assignments', expect.objectContaining({
+    await revokeWith('Order Approver', 'No longer approves orders')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/security-access/assignments', expect.objectContaining({
       method: 'POST', body: JSON.stringify({ action: 'revoke', assignmentId: 'a3', reason: 'No longer approves orders' }),
-    }))
-    expect(onChanged).toHaveBeenCalled()
+    })))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
 
-    await userEvent.click(screen.getByRole('button', { name: /^Automatic access, 2/ }))
-    await userEvent.click(screen.getByRole('button', { name: /^Automatic access: HR & Payroll/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^System-assigned access, 2/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^System-assigned access: HR & Payroll/ }))
     await userEvent.click(screen.getByRole('button', { name: /Revoke Employee Self-Service/ }))
-    expect(prompt).toHaveBeenLastCalledWith(expect.stringMatching(/automatic access \(Managed by HR \/ User Management\).*will not be re-added/))
-    expect(fetchMock).toHaveBeenCalledWith('/api/security-access/assignments', expect.objectContaining({
+    expect(screen.getByRole('dialog', { name: 'Revoke access' }).textContent).toMatch(/automatic access \(Managed by HR \/ User Management\).*will not be re-added/)
+    const dialog = within(screen.getByRole('dialog', { name: 'Revoke access' }))
+    await userEvent.type(dialog.getByRole('textbox', { name: /Reason for revoking/ }), 'No longer approves orders')
+    await userEvent.click(dialog.getByRole('button', { name: 'Confirm Revoke' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/security-access/assignments', expect.objectContaining({
       body: JSON.stringify({ action: 'revoke', assignmentId: 'a5', reason: 'No longer approves orders' }),
-    }))
+    })))
   })
 
   it('offers restore only for automatic access an administrator revoked', async () => {
-    vi.stubGlobal('prompt', vi.fn(() => 'Revoked by mistake'))
     const onChanged = vi.fn()
     const restorable = {
       ...data,
@@ -197,15 +205,52 @@ describe('People & Access', () => {
     await userEvent.click(screen.getByRole('button', { name: /^Jafar Admin/ }))
     // The revoked manual grant is not restorable (grant it again instead).
     expect(screen.queryByRole('button', { name: /Restore GL Clerk/ })).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: /^Legacy access, 2, expand/ }))
-    for (const group of screen.getAllByRole('button', { name: /^Legacy access: .*expand/ })) await userEvent.click(group)
-    expect(screen.getByText('Automatic access revoked by an administrator')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: /^Legacy-based access, 2, expand/ }))
+    for (const group of screen.getAllByRole('button', { name: /^Legacy-based access: .*expand/ })) await userEvent.click(group)
+    expect(screen.getByText('System-assigned access revoked by an administrator')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Revoke Legacy Manager/ })).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: /Restore Legacy Manager/ }))
-    expect(fetchMock).toHaveBeenCalledWith('/api/security-access/assignments', expect.objectContaining({
+    const dialog = within(screen.getByRole('dialog', { name: 'Restore automatic access' }))
+    expect(screen.getByRole('dialog', { name: 'Restore automatic access' }).textContent).toMatch(/Legacy Manager.*Serapod HQ/)
+    await userEvent.type(dialog.getByRole('textbox', { name: /Reason for restoring/ }), 'Revoked by mistake')
+    await userEvent.click(dialog.getByRole('button', { name: 'Confirm Restore' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/security-access/assignments', expect.objectContaining({
       method: 'POST', body: JSON.stringify({ action: 'restore', assignmentId: 'a9', reason: 'Revoked by mistake' }),
-    }))
+    })))
+    await screen.findByText('Legacy Manager restored to automatic management for Jafar Admin.')
     expect(onChanged).toHaveBeenCalled()
+  })
+
+  it('restore: a too-short reason ("test") is explained and nothing is sent; a refusal stays in the dialog, never success', async () => {
+    const onChanged = vi.fn()
+    const restorable = {
+      ...data,
+      restorableAssignmentIds: ['a9'],
+      people: data.people.map((p: any) => p.id !== 'u1' ? p : { ...p, membership: p.membership.map((m: any) => ({
+        ...m, assignments: [...m.assignments, assignment('a9', 'r-legacy', 'manual', { status: 'revoked', role: { ...role('r-legacy'), id: 'r-legacy-2', name: 'Legacy Manager' } })],
+      })) }),
+    }
+    const refuse: Handler = async () => ({ ok: false, status: 409, json: async () => ({ error: 'The person\'s legacy role has changed since this access was revoked.' }) })
+    const fetchMock = await mountPanel(restorable, onChanged, refuse)
+    const restorePosts = () => fetchMock.mock.calls.filter((c: any) => c[1]?.method === 'POST' && JSON.parse(c[1].body).action === 'restore')
+    await userEvent.click(screen.getByRole('button', { name: /^Jafar Admin/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^Legacy-based access, 2, expand/ }))
+    for (const group of screen.getAllByRole('button', { name: /^Legacy-based access: .*expand/ })) await userEvent.click(group)
+    await userEvent.click(screen.getByRole('button', { name: /Restore Legacy Manager/ }))
+    const dialog = within(screen.getByRole('dialog', { name: 'Restore automatic access' }))
+    await userEvent.type(dialog.getByRole('textbox', { name: /Reason for restoring/ }), 'test')
+    await userEvent.click(dialog.getByRole('button', { name: 'Confirm Restore' }))
+    expect(dialog.getByText('Enter a reason of at least 5 characters.')).toBeTruthy()
+    expect((dialog.getByRole('button', { name: 'Confirm Restore' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(restorePosts()).toEqual([])
+    await userEvent.type(dialog.getByRole('textbox', { name: /Reason for restoring/ }), ' — returning')
+    await userEvent.click(dialog.getByRole('button', { name: 'Confirm Restore' }))
+    expect((await dialog.findByRole('alert')).textContent).toBe('The person\'s legacy role has changed since this access was revoked. Nothing was changed.')
+    expect(restorePosts()).toHaveLength(1)
+    expect(screen.queryByText(/restored to automatic management/)).toBeNull()
+    expect(onChanged).not.toHaveBeenCalled()
+    await userEvent.click(dialog.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog', { name: 'Restore automatic access' })).toBeNull()
   })
 
   it('"Grant policy" keeps the person selected, scrolls the form heading into view and focuses it; searching does not scroll', async () => {
@@ -248,10 +293,10 @@ describe('People & Access', () => {
     // CRM User is held automatically (backfill) and Order Approver is granted: both explained, neither selectable.
     const crm = screen.getByRole('option', { name: /CRM User/ })
     expect(crm.getAttribute('aria-disabled')).toBe('true')
-    expect(crm.textContent).toMatch(/Already held — automatic access/)
+    expect(crm.textContent).toMatch(/Already held — system-assigned access/)
     const order = screen.getByRole('option', { name: /Order Approver/ })
     expect(order.getAttribute('aria-disabled')).toBe('true')
-    expect(order.textContent).toMatch(/Already held — granted by an administrator/)
+    expect(order.textContent).toMatch(/Already held — assigned by an administrator/)
     expect(screen.getByRole('option', { name: /GL Clerk/ }).getAttribute('aria-disabled')).not.toBe('true')
   })
 
@@ -575,7 +620,7 @@ describe('People & Access redesign: presentation of memberships, status and hist
     }],
   }
 
-  it('shows each membership with its own organization, type, status and Primary; legacy role sits in the primary membership panel', async () => {
+  it('shows each membership with organization, type, status and Primary; raw role codes without active legacy policies stay out of daily access', async () => {
     await mountPanel(fixture)
     await userEvent.click(screen.getByRole('button', { name: /^Averyvery/ }))
     const headerOf = (org: string) => within(within(screen.getByRole('region', { name: `Membership: ${org}` })).getByRole('heading', { name: org }).parentElement!.parentElement!)
@@ -583,19 +628,21 @@ describe('People & Access redesign: presentation of memberships, status and hist
     expect(primary.getByText('Headquarters')).toBeTruthy()
     expect(primary.getByText('Active')).toBeTruthy()
     expect(primary.getByText('Primary')).toBeTruthy()
-    expect(primary.getByText('Legacy role: HQ')).toBeTruthy()
+    expect(primary.queryByText(/Legacy role code/)).toBeNull()
+    const primaryRegion = within(screen.getByRole('region', { name: 'Membership: Serapod HQ' }))
+    expect(primaryRegion.queryByRole('group', { name: 'Legacy Access' })).toBeNull()
     const second = headerOf(longOrg)
     expect(second.getByText('Distributor')).toBeTruthy()
     expect(second.getByText('Suspended')).toBeTruthy()
     expect(second.queryByText('Primary')).toBeNull()
-    expect(second.queryByText(/Legacy role/)).toBeNull()
-    expect(screen.getAllByText(/Legacy role:/)).toHaveLength(1)
+    expect(second.queryByText(/Legacy role code/)).toBeNull()
+    expect(screen.queryAllByText(/Legacy role code:/)).toHaveLength(0)
   })
 
-  it('shows only current grants by default and keeps revoked/expired grants in a folded Access history', async () => {
+  it('shows only current grants; revoked/expired grants are not listed (their records stay in Audit → Access changes)', async () => {
     await mountPanel(fixture)
     await userEvent.click(screen.getByRole('button', { name: /^Averyvery/ }))
-    // The default Granted access list is current (in-window active) grants only.
+    // The default Assigned policies list is current (in-window active) grants only.
     expect(screen.getByText(/2 active · \d+ modules?/)).toBeTruthy()
     const rowOf = (name: string) => within(screen.getAllByText(name)[0].closest('li')!)
     expect(rowOf('Order Approver').getByText('Active')).toBeTruthy()
@@ -605,14 +652,10 @@ describe('People & Access redesign: presentation of memberships, status and hist
     // Revoked and expired grants are not mixed into the active list.
     expect(screen.queryByText('GL Clerk')).toBeNull()
     expect(screen.queryByText('CRM User')).toBeNull()
-    // History loads its details only when opened.
-    await userEvent.click(screen.getByRole('button', { name: /^Access history, 2, expand/ }))
-    const hRow = (name: string) => within(screen.getAllByText(name)[0].closest('li')!)
-    expect(hRow('GL Clerk').getByText('Revoked')).toBeTruthy()
-    expect(hRow('GL Clerk').getByText(/^Ended /)).toBeTruthy()
-    expect(hRow('CRM User').getByText('Expired')).toBeTruthy()   // status still "active" but its end date has passed
-    expect(hRow('CRM User').getByText('Approved request')).toBeTruthy()
-    for (const name of ['GL Clerk', 'CRM User']) expect(hRow(name).queryByRole('button', { name: /Revoke/ })).toBeNull()
+    // No Access history in the daily view: a short pointer to the protected audit viewer, no list and no Restore.
+    expect(screen.queryByRole('button', { name: /Access history/ })).toBeNull()
+    expect(screen.getByText(/2 revoked or expired entries not shown — no longer grants access\. The records are kept in Audit → Access changes\./)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Restore/ })).toBeNull()
   })
 
   it('uses the shared scope labels so repeated "Own record" scopes are told apart', async () => {
@@ -622,14 +665,13 @@ describe('People & Access redesign: presentation of memberships, status and hist
   })
 
   it('Revoke does not toggle the surrounding accordion and keeps the explicit single-entry wording', async () => {
-    const prompt = vi.fn(() => '')
-    vi.stubGlobal('prompt', prompt)
     await mountPanel(fixture)
     await userEvent.click(screen.getByRole('button', { name: /^Averyvery/ }))
     await userEvent.click(screen.getByRole('button', { name: /Revoke Order Approver/ }))
-    expect(prompt).toHaveBeenCalledWith(expect.stringMatching(/Only this entry is revoked; other granted, automatic or legacy access stays/))
-    expect(screen.getByRole('button', { name: /^Granted access, 2, collapse/ })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /^Access history, 2, expand/ })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'Revoke access' }).textContent).toMatch(/Only this entry is revoked; other granted, automatic or legacy access stays/)
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('button', { name: /^Assigned policies, 2, collapse/ })).toBeTruthy()
+    expect(screen.getByText(/2 revoked or expired entries not shown/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /^Averyvery/ }).getAttribute('aria-expanded')).toBe('true')
   })
 
@@ -650,8 +692,8 @@ describe('People & Access redesign: presentation of memberships, status and hist
   it('an empty person shows no access sections and the summary stays honest', async () => {
     await mountPanel({ ...fixture, people: [fixture.people[0], { ...data.people[3] }] })
     const row = within(screen.getByRole('button', { name: /^Dina Dual/ }).closest('li')!)
-    expect(row.getByText('0 granted')).toBeTruthy()
-    expect(row.getByText('0 automatic')).toBeTruthy()
+    expect(row.getByText('0 assigned')).toBeTruthy()
+    expect(row.getByText('0 system-assigned')).toBeTruthy()
     expect(row.queryByText(/legacy$/)).toBeNull()
     expect(row.queryByText(/temporary$/)).toBeNull()
   })
@@ -681,28 +723,26 @@ describe('People & Access: revoke reconciles the active list and keeps history',
 
   it('after revoking one grant, the other grant in the same module stays visible and the summary reconciles', async () => {
     const people = [person([mkAsg('oa1', ORDER_APPROVER), mkAsg('ov1', ORDER_VIEWER)])]
-    vi.stubGlobal('prompt', vi.fn(() => 'No longer needed'))
     await mountPanel(world(people), vi.fn(), mutatingRevoke(people))
     await userEvent.click(screen.getByRole('button', { name: /^Rohani Reconcile/ }))
-    expect(screen.getByRole('button', { name: /^Granted access: Supply Chain, 2 roles, collapse/ })).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: /Revoke Order Approver/ }))
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Granted access: Supply Chain, 1 role, collapse/ })).toBeTruthy())
+    expect(screen.getByRole('button', { name: /^Assigned policies: Supply Chain, 2 roles, collapse/ })).toBeTruthy()
+    await revokeWith('Order Approver', 'No longer needed')
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Assigned policies: Supply Chain, 1 role, collapse/ })).toBeTruthy())
     expect(screen.getAllByText('Order Viewer').length).toBeGreaterThan(0)
     expect(screen.queryByText('Order Approver')).toBeNull()
-    expect(screen.getByRole('button', { name: /^Access history, 1, expand/ })).toBeTruthy()
+    expect(screen.getByText(/1 revoked or expired entry not shown/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /^Rohani Reconcile, 1 active role, collapse/ })).toBeTruthy()
   })
 
   it('removing the last grant drops the module heading, shows a concise empty state and keeps the person', async () => {
     const people = [person([mkAsg('oa1', ORDER_APPROVER)])]
-    vi.stubGlobal('prompt', vi.fn(() => 'No longer needed'))
     await mountPanel(world(people), vi.fn(), mutatingRevoke(people))
     await userEvent.click(screen.getByRole('button', { name: /^Rohani Reconcile/ }))
-    expect(screen.getByRole('button', { name: /^Granted access: Supply Chain, 1 role, collapse/ })).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: /Revoke Order Approver/ }))
-    await waitFor(() => expect(screen.getByText(/No active granted policies/)).toBeTruthy())
-    expect(screen.queryByRole('button', { name: /^Granted access: Supply Chain/ })).toBeNull()
-    expect(screen.getByRole('button', { name: /^Access history, 1, expand/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^Assigned policies: Supply Chain, 1 role, collapse/ })).toBeTruthy()
+    await revokeWith('Order Approver', 'No longer needed')
+    await waitFor(() => expect(screen.getByText(/No active assigned policies/)).toBeTruthy())
+    expect(screen.queryByRole('button', { name: /^Assigned policies: Supply Chain/ })).toBeNull()
+    expect(screen.getByText(/1 revoked or expired entry not shown/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /^Rohani Reconcile, 0 active roles, collapse/ })).toBeTruthy()
     expect(screen.getByRole('region', { name: 'Membership: Serapod HQ' })).toBeTruthy()
   })
@@ -715,11 +755,10 @@ describe('People & Access: revoke reconciles the active list and keeps history',
       }
       return { ok: true, status: 200, json: async () => ({}) }
     }
-    vi.stubGlobal('prompt', vi.fn(() => 'Reason here'))
     await mountPanel(world(people), vi.fn(), refuse)
     await userEvent.click(screen.getByRole('button', { name: /^Rohani Reconcile/ }))
-    await userEvent.click(screen.getByRole('button', { name: /Revoke Order Approver/ }))
-    await screen.findByText('Revoke refused by the database.')
+    await revokeWith('Order Approver', 'Reason here')
+    await screen.findByText('Revoke refused by the database. Nothing was changed.')
     expect(screen.getAllByText('Order Approver').length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: /Access history/ })).toBeNull()
     expect(screen.getByRole('button', { name: /^Rohani Reconcile, 1 active role, collapse/ })).toBeTruthy()
@@ -729,9 +768,9 @@ describe('People & Access: revoke reconciles the active list and keeps history',
     const people = [person([mkAsg('fa1', FUTURE_APPROVER, { effective_from: future })])]
     await mountPanel(world(people))
     const row = within(screen.getByRole('button', { name: /^Rohani Reconcile, 0 active roles, expand/ }).closest('li')!)
-    expect(row.getByText('0 granted')).toBeTruthy()
+    expect(row.getByText('0 assigned')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /^Rohani Reconcile/ }))
-    expect(screen.getByText(/No active granted policies/)).toBeTruthy()
+    expect(screen.getByText(/No active assigned policies/)).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /^Scheduled access, 1, expand/ }))
     const scheduledRow = within(screen.getAllByText('Future Approver')[0].closest('li')!)
     expect(scheduledRow.getByText('Scheduled')).toBeTruthy()
@@ -784,7 +823,7 @@ describe('Grant Policy: scope selection and existing grants', () => {
     expect(screen.getByText(/1 policy not listed: this person’s current access in this organization already includes every permission it holds/)).toBeTruthy()
     const gl = screen.getByRole('option', { name: /GL Clerk/ })
     expect(gl.getAttribute('aria-disabled')).toBe('true')
-    expect(gl.textContent).toMatch(/Already held — granted by an administrator · Scope: Alma/)
+    expect(gl.textContent).toMatch(/Already held — assigned by an administrator · Scope: Alma/)
   })
 })
 
@@ -1032,7 +1071,6 @@ describe('Grant a Group Policy: existing Full Access coverage', () => {
   })
 
   it('after a revoke the module is offered again without a page reload, and the Group Policy and Scope selectors keep working', async () => {
-    vi.stubGlobal('prompt', vi.fn(() => 'No longer administers access'))
     const person = admin(EXAMPLE)
     const revokeApi: Handler = (_url, init) => {
       const body = JSON.parse(init.body)
@@ -1043,7 +1081,7 @@ describe('Grant a Group Policy: existing Full Access coverage', () => {
     await openGrantFor('Ada Admin')
     expect(moduleNames()).not.toContain('Security & Access')
     await userEvent.click(screen.getByRole('button', { name: /^Ada Admin/ }))
-    await userEvent.click(screen.getByRole('button', { name: /Revoke Security & Access Full Access/ }))
+    await revokeWith('Security & Access Full Access', 'No longer administers access')
     await waitFor(() => expect(moduleNames()).toContain('Security & Access'))
     expect(moduleNames()).not.toContain('Platform & Settings')   // the other Full Access still applies
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Module filter' }), 'security_access')
@@ -1055,102 +1093,25 @@ describe('Grant a Group Policy: existing Full Access coverage', () => {
   })
 })
 
-describe('One-click Restore of a revoked Group Policy grant (Access history)', () => {
+describe('Revoked Group Policy grants leave People & Access (no Restore in the daily view)', () => {
   const restoreStatus = (extra: any = {}) => ({ eligible: true, code: null, message: null, effectiveFrom: null, effectiveUntil: null, ...extra })
-  /** Jafar (HQ) with one revoked administrator grant (GL Clerk) the server reports as restorable. */
-  const world = (revoked: any, membership: any = {}) => ({
+  /** Jafar (HQ) with one revoked administrator grant (GL Clerk) the server still reports as restorable. */
+  const world = (revoked: any) => ({
     ...data,
     people: data.people.map((p: any) => p.id !== 'u1' ? p : { ...p, membership: p.membership.map((m: any) => ({
-      ...m, ...membership, assignments: [...m.assignments, revoked],
+      ...m, assignments: [...m.assignments, revoked],
     })) }),
   })
-  const openHistory = async () => {
-    await userEvent.click(screen.getByRole('button', { name: /^Jafar Admin/ }))
-    await userEvent.click(screen.getByRole('button', { name: /^Access history, 1, expand/ }))
-  }
 
-  it('Restore → Confirm Restore creates a new grant: the dialog shows person, policy, organization, scope and validity, and the screen refreshes', async () => {
-    const onChanged = vi.fn()
-    const revoked = assignment('a8', 'r-gl', 'manual', { status: 'revoked', effective_until: '2026-10-01T00:00:00Z', restore: restoreStatus({ effectiveUntil: '2099-06-30T00:00:00Z' }) })
-    const w = world(revoked)
-    let release: () => void = () => {}
-    const posts: any[] = []
-    const fetchMock = await mountPanel(w, onChanged, async (url: string, init: any) => {
-      if (url === '/api/security-access/assignments' && init?.method === 'POST') {
-        posts.push(JSON.parse(init.body))
-        await new Promise<void>(r => { release = r })
-        // The server created a new active grant; the revoked entry stays.
-        const m = w.people.find((p: any) => p.id === 'u1')!.membership[0]
-        m.assignments.push(assignment('a8-new', 'r-gl', 'manual', { effective_until: '2099-06-30T00:00:00Z' }))
-        return { ok: true, status: 200, json: async () => ({ ok: true, assignmentId: 'a8-new', restoredFrom: 'a8' }) }
-      }
-      return { ok: true, status: 200, json: async () => ({}) }
-    })
-    await openHistory()
-    expect(screen.queryByRole('button', { name: /Revoke GL Clerk/ })).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: /^Restore GL Clerk/ }))
-    const dialog = within(screen.getByRole('dialog', { name: 'Restore revoked access' }))
-    expect(dialog.getByText('Jafar Admin')).toBeTruthy()
-    expect(dialog.getByText('jafar@example.test')).toBeTruthy()
-    expect(dialog.getByText('GL Clerk')).toBeTruthy()
-    expect(dialog.getAllByText('Serapod HQ').length).toBe(2) // organization and data scope
-    expect(dialog.getByText(/the original end date \(not extended\)/)).toBeTruthy()
-    expect(dialog.getByText(/permissions apply, including any changes made since this access was revoked/)).toBeTruthy()
-
-    const directoryCalls = () => fetchMock.mock.calls.filter(c => String(c[0]).startsWith('/api/security-access/people')).length
-    const before = directoryCalls()
-    await userEvent.click(dialog.getByRole('button', { name: 'Confirm Restore' }))
-    // Processing: actions are disabled, a second click sends nothing.
-    const busy = dialog.getByRole('button', { name: 'Restoring…' }) as HTMLButtonElement
-    expect(busy.disabled).toBe(true)
-    expect((dialog.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true)
-    await userEvent.click(busy)
-    expect(posts).toEqual([{ action: 'restore_grant', assignmentId: 'a8' }])
-    release()
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    expect(screen.getByText(/GL Clerk restored for Jafar Admin as a new grant\. The revoked entry stays in Access history\./)).toBeTruthy()
-    expect(onChanged).toHaveBeenCalled()
-    await waitFor(() => expect(directoryCalls()).toBeGreaterThan(before))
-    // Granted access now lists the new grant; Access history still holds the revoked one.
-    await waitFor(() => expect(screen.getByRole('button', { name: /Revoke GL Clerk/ })).toBeTruthy())
-    expect(screen.getByText('Revoked')).toBeTruthy()
-  })
-
-  it('an ineligible revoked grant explains why instead of offering Restore (expired temporary grant → Grant Policy)', async () => {
-    const revoked = assignment('a8', 'r-gl', 'manual', { status: 'revoked', restore: restoreStatus({ eligible: false, code: 'sa_restore_validity_expired',
-      message: "This temporary grant's original end date has passed, and a restore never extends it. Use Grant Policy to grant it again." }) })
+  it('a revoked grant is neither listed nor restorable here, even when the restore endpoint would accept it; nothing is posted', async () => {
+    const revoked = assignment('a8', 'r-gl', 'manual', { status: 'revoked', effective_until: '2026-10-01T00:00:00Z', restore: restoreStatus() })
     const fetchMock = await mountPanel(world(revoked))
-    await openHistory()
-    expect(screen.queryByRole('button', { name: /^Restore GL Clerk/ })).toBeNull()
-    expect(screen.getByText('Restore unavailable')).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: /Why GL Clerk cannot be restored/ }))
-    expect(screen.getByText(/original end date has passed.*Use Grant Policy/)).toBeTruthy()
-    expect(fetchMock.mock.calls.some(c => c[1]?.method === 'POST')).toBe(false)
-  })
-
-  it('no Restore where the administrator may not grant (membership not grantable) or when the server sent no restore status', async () => {
-    await mountPanel(world(assignment('a8', 'r-gl', 'manual', { status: 'revoked', restore: restoreStatus() }), { grantable: false }))
-    await openHistory()
-    expect(screen.queryByRole('button', { name: /^Restore GL Clerk/ })).toBeNull()
-    cleanup()
-    await mountPanel(world(assignment('a8', 'r-gl', 'manual', { status: 'revoked' })))
-    await openHistory()
-    expect(screen.queryByRole('button', { name: /^Restore GL Clerk/ })).toBeNull()
-    expect(screen.queryByText('Restore unavailable')).toBeNull()
-  })
-
-  it('a refusal by the server is shown in the dialog and changes nothing', async () => {
-    const onChanged = vi.fn()
-    await mountPanel(world(assignment('a8', 'r-gl', 'manual', { status: 'revoked', restore: restoreStatus() })), onChanged, async (url: string, init: any) =>
-      url === '/api/security-access/assignments' && init?.method === 'POST'
-        ? { ok: false, status: 409, json: async () => ({ error: 'This person already holds this policy in this organization. Nothing was changed.', code: 'sa_role_already_held' }) }
-        : { ok: true, status: 200, json: async () => ({}) })
-    await openHistory()
-    await userEvent.click(screen.getByRole('button', { name: /^Restore GL Clerk/ }))
-    await userEvent.click(screen.getByRole('button', { name: 'Confirm Restore' }))
-    expect((await screen.findByRole('alert')).textContent).toMatch(/already holds this policy/)
-    expect(screen.getByRole('dialog')).toBeTruthy()
-    expect(onChanged).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: /^Jafar Admin/ }))
+    expect(screen.queryByText('GL Clerk')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Restore GL Clerk/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Access history/ })).toBeNull()
+    expect(screen.getByText(/1 revoked or expired entry not shown/)).toBeTruthy()
+    expect(fetchMock.mock.calls.some(([, init]: any[]) => init?.method === 'POST')).toBe(false)
   })
 })
 
@@ -1328,5 +1289,260 @@ describe('Grant a Group Policy: contextual person preselection', () => {
     await userEvent.click(submit)
     await waitFor(() => expect(nonPreflightPosts(fetchMock).length).toBe(1))
     expect(JSON.parse(nonPreflightPosts(fetchMock)[0][1].body)).toMatchObject({ action: 'grant', userId: 'u2', organizationId: HQ, roleId: 'r-gl' })
+  })
+})
+
+describe('Revoke access dialog', () => {
+  const mkRole = (id: string, name: string, keys: string[], extra: any = {}) => ({ id, name, source: 'template', status: 'active', applicable_org_types: ['HQ'], permissions: keys.map(k => ({ permission: { permission_key: k } })), ...extra })
+  const ECOM = mkRole('r-ecom', 'E-Commerce Administrator', ['customer.ecommerce.manage'])
+  const ORDERS = mkRole('r-orders', 'Order Viewer', ['supply_chain.order.view'])
+  const LEGACY = mkRole('r-leg', 'Legacy HQ Admin', ['customer.crm.view'], { source: 'legacy' })
+  const ESS_ROLE = mkRole('r-ess2', 'Employee Self-Service', ['hr.self_service.use'])
+  const ORG = { org_name: 'Serapod Technology Sdn Bhd', org_type_code: 'HQ' }
+  const mk = (id: string, r: any, source: string) => ({ id, status: 'active', source, effective_until: null, role: { id: r.id, name: r.name, source: r.source }, scopes: [{ scope: { id: 'scope-hq', display_name: 'Serapod Technology Sdn Bhd' } }] })
+  const alif = () => ({
+    id: 'u-alif', full_name: 'Alif Dev', email: 'alif@dev.com', role_code: 'HQ', principal_type: 'INTERNAL_EMPLOYEE', is_active: true,
+    membership: [{ id: 'm-alif', organization_id: HQ, organization: ORG, status: 'active', is_primary: true, assignments: [
+      mk('g-ecom', ECOM, 'manual'), mk('g-orders', ORDERS, 'manual'), mk('auto-ess', ESS_ROLE, 'derived'), mk('leg-1', LEGACY, 'derived'),
+    ] }],
+  })
+  const world = (people: any[]) => ({ ...data, roles: [...data.roles, ECOM, ORDERS, LEGACY, ESS_ROLE], people })
+  const revokePosts = (fetchMock: any) => fetchMock.mock.calls.filter((c: any) => c[1]?.method === 'POST' && JSON.parse(c[1].body).action === 'revoke').map((c: any) => JSON.parse(c[1].body))
+  /** Revoke API backed by the fixture: marks only the posted assignment revoked; `reply` overrides the answer. */
+  const api = (people: any[], reply?: (body: any) => { status: number; body: any } | Promise<{ status: number; body: any }>): Handler => async (url, init) => {
+    if (String(url) !== '/api/security-access/assignments') return { ok: true, status: 200, json: async () => ({}) }
+    const body = JSON.parse(init.body)
+    const r = reply ? await reply(body) : { status: 200, body: { ok: true, assignmentId: body.assignmentId } }
+    if (r.status < 400 && body.action === 'revoke') for (const p of people) for (const m of p.membership) for (const a of m.assignments) if (a.id === body.assignmentId) a.status = 'revoked'
+    return { ok: r.status < 400, status: r.status, json: async () => r.body }
+  }
+  const openAlifRevoke = async () => {
+    await userEvent.click(screen.getByRole('button', { name: /^Alif Dev/ }))
+    await userEvent.click(screen.getByRole('button', { name: /Revoke E-Commerce Administrator/ }))
+    return within(screen.getByRole('dialog', { name: 'Revoke access' }))
+  }
+  const statusOf = (people: any[]) => Object.fromEntries(people[0].membership[0].assignments.map((a: any) => [a.id, a.status]))
+
+  it('shows the policy, person, organization and scope; revokes exactly the selected grant and refreshes the summary', async () => {
+    const people = [alif()]
+    const onChanged = vi.fn()
+    const fetchMock = await mountPanel(world(people), onChanged, api(people))
+    const row = () => screen.getByRole('button', { name: /^Alif Dev/ })
+    expect(within(row().closest('li')!).getByText('2 assigned')).toBeTruthy()
+    const dialog = await openAlifRevoke()
+    const text = screen.getByRole('dialog', { name: 'Revoke access' }).textContent!
+    expect(text).toMatch(/E-Commerce Administrator/)
+    expect(text).toMatch(/Alif Dev/)
+    expect(text).toMatch(/alif@dev\.com/)
+    expect(text).toMatch(/Organization\s*Serapod Technology Sdn Bhd/)
+    expect(text).toMatch(/Data scope/)
+    expect(text).not.toMatch(/automatic access \(/)   // an administrator grant: no automatic-override warning
+    await userEvent.type(dialog.getByRole('textbox', { name: /Reason for revoking/ }), '  Moved off the e-commerce team  ')
+    await userEvent.click(dialog.getByRole('button', { name: 'Confirm Revoke' }))
+    await screen.findByText('E-Commerce Administrator revoked for Alif Dev. Any other access this person holds is unchanged.')
+    expect(screen.queryByRole('dialog', { name: 'Revoke access' })).toBeNull()
+    expect(revokePosts(fetchMock)).toEqual([{ action: 'revoke', assignmentId: 'g-ecom', reason: 'Moved off the e-commerce team' }])
+    expect(onChanged).toHaveBeenCalled()
+    await waitFor(() => expect(within(row().closest('li')!).getByText('1 assigned')).toBeTruthy())
+    // Other granted, automatic and legacy access are untouched.
+    expect(statusOf(people)).toEqual({ 'g-ecom': 'revoked', 'g-orders': 'active', 'auto-ess': 'active', 'leg-1': 'active' })
+    expect(screen.getAllByText('Order Viewer').length).toBeGreaterThan(0)
+  })
+
+  it.each([['too short ("test")', 'test'], ['whitespace padded to look long', '   abc    ']])('a %s reason is explained and nothing is sent', async (_n, reason) => {
+    const people = [alif()]
+    const fetchMock = await mountPanel(world(people), vi.fn(), api(people))
+    const dialog = await openAlifRevoke()
+    await userEvent.type(dialog.getByRole('textbox', { name: /Reason for revoking/ }), reason)
+    await userEvent.click(dialog.getByRole('button', { name: 'Confirm Revoke' }))
+    expect(dialog.getByText('Enter a reason of at least 5 characters.')).toBeTruthy()
+    expect((dialog.getByRole('button', { name: 'Confirm Revoke' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(dialog.getByRole('textbox', { name: /Reason for revoking/ }).getAttribute('aria-invalid')).toBe('true')
+    expect(revokePosts(fetchMock)).toEqual([])
+    // Completing the reason enables Confirm again.
+    await userEvent.type(dialog.getByRole('textbox', { name: /Reason for revoking/ }), 'more detail')
+    expect((dialog.getByRole('button', { name: 'Confirm Revoke' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it.each([
+    ['unauthorized actor', 403, 'You are not authorized to change access in this organization.'],
+    ['already revoked', 409, 'This access was already revoked. Nothing was changed.'],
+    ['database failure', 500, 'The revoke could not be completed.'],
+  ])('%s: the error stays in the dialog, nothing is shown as revoked', async (_n, status, error) => {
+    const people = [alif()]
+    const onChanged = vi.fn()
+    const fetchMock = await mountPanel(world(people), onChanged, api(people, () => ({ status, body: { error } })))
+    const dialog = await openAlifRevoke()
+    await userEvent.type(dialog.getByRole('textbox', { name: /Reason for revoking/ }), 'Moved off the team')
+    await userEvent.click(dialog.getByRole('button', { name: 'Confirm Revoke' }))
+    const alert = await dialog.findByRole('alert')
+    expect(alert.textContent).toContain(error)
+    expect(alert.textContent).toMatch(/Nothing was changed\.$/)
+    expect(screen.queryByText(/revoked for Alif Dev/)).toBeNull()
+    expect(onChanged).not.toHaveBeenCalled()
+    expect(revokePosts(fetchMock)).toHaveLength(1)
+    expect(statusOf(people)['g-ecom']).toBe('active')
+  })
+
+  it('prevents a duplicate submission while the revoke runs and shows progress', async () => {
+    const people = [alif()]
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    const fetchMock = await mountPanel(world(people), vi.fn(), api(people, async (body) => { await gate; return { status: 200, body: { ok: true, assignmentId: body.assignmentId } } }))
+    const dialog = await openAlifRevoke()
+    await userEvent.type(dialog.getByRole('textbox', { name: /Reason for revoking/ }), 'Moved off the team')
+    await userEvent.click(dialog.getByRole('button', { name: 'Confirm Revoke' }))
+    const busy = dialog.getByRole('button', { name: 'Revoking…' }) as HTMLButtonElement
+    expect(busy.disabled).toBe(true)
+    await userEvent.click(busy)
+    expect((dialog.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true)
+    release()
+    await screen.findByText(/E-Commerce Administrator revoked for Alif Dev/)
+    expect(revokePosts(fetchMock)).toHaveLength(1)
+  })
+
+  it('Cancel and Escape close without revoking anything', async () => {
+    const people = [alif()]
+    const fetchMock = await mountPanel(world(people), vi.fn(), api(people))
+    const dialog = await openAlifRevoke()
+    await userEvent.type(dialog.getByRole('textbox', { name: /Reason for revoking/ }), 'Moved off the team')
+    await userEvent.click(dialog.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog', { name: 'Revoke access' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /Revoke E-Commerce Administrator/ }))
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Revoke access' })).toBeNull()
+    expect(revokePosts(fetchMock)).toEqual([])
+    expect(statusOf(people)['g-ecom']).toBe('active')
+  })
+})
+
+describe('Access classification (assigned, system-assigned, legacy-based, history)', () => {
+  const orgScope = [{ scope: { id: 'scope-hq', scope_type: 'organization', display_name: 'Serapod HQ' } }]
+  const entry = (id: string, source: string, role: any, extra: any = {}) => ({ id, status: 'active', source, effective_from: null, effective_until: null, role, scopes: orgScope, ...extra })
+  const LEGACY_USER = { id: 'r-legacy-user', role_key: 'legacy-user', name: 'Legacy USER', source: 'legacy', status: 'active' }
+  const ESS = { id: 'r-ess', role_key: 'employee-self-service', name: 'Employee Self-Service', source: 'template', status: 'active' }
+  const CATALOGUE_USER = { id: 'r-cat', role_key: 'catalog-viewer', name: 'Catalogue User', source: 'template', status: 'active' }
+  const CG_FULL = { id: 'r-cg', role_key: 'customer-growth-full-access', name: 'Customer & Growth Full Access', source: 'template', status: 'active' }
+  const alif = (assignments: any[], m: any = {}) => ({ ...data, people: [{ id: 'alif', full_name: 'Alif', email: 'alif@dev.test', role_code: 'USER', is_active: true,
+    membership: [{ id: 'ma', organization_id: HQ, organization: HQ_ORG, status: 'active', is_primary: true, assignments, ...m }] }] })
+  const ALIF = [
+    entry('x1', 'backfill', LEGACY_USER), entry('x2', 'derived', ESS, { scopes: [{ scope: { id: 'own', scope_type: 'own_record', display_name: 'Own record' } }] }),
+    entry('x3', 'backfill', CATALOGUE_USER), entry('x4', 'manual', CG_FULL),
+    entry('x5', 'manual', { ...CG_FULL, id: 'r-cg-old', name: 'Old Growth Grant' }, { status: 'revoked' }),
+  ]
+  const open = async (d: any) => { await mountPanel(d); await userEvent.click(screen.getByRole('button', { name: /^Alif/ })) }
+
+  it('classifies an explicit grant, system-assigned access and a legacy-based policy; a revoked grant is not listed (Alif)', async () => {
+    await mountPanel(alif(ALIF))
+    const row = within(screen.getByRole('button', { name: /^Alif/ }).closest('li')!)
+    // Only current entries are counted: the revoked grant is in none of the three totals.
+    expect(row.getByText('1 assigned')).toBeTruthy()
+    expect(row.getByText('2 system-assigned')).toBeTruthy()
+    expect(row.getByText('1 legacy-based')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: /^Alif/ }))
+    expect(screen.getByRole('button', { name: /^Assigned policies, 1, collapse/ })).toBeTruthy()
+    expect(screen.getAllByText('Customer & Growth Full Access').length).toBeGreaterThan(0)
+    expect(screen.getByText('Administrator assignment')).toBeTruthy()
+    // Revoked grant: never in the active list and no history list in the daily view.
+    expect(screen.queryByText('Old Growth Grant')).toBeNull()
+    expect(screen.getByText(/1 revoked or expired entry not shown/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^System-assigned access, 2, expand/ })).toBeTruthy()
+    // Legacy-based access is effective, not historical, and says where it comes from.
+    await userEvent.click(screen.getByRole('button', { name: /^Legacy-based access, 1, expand/ }))
+    for (const g of screen.getAllByRole('button', { name: /^Legacy-based access: .*expand/ })) await userEvent.click(g)
+    expect(screen.getAllByText('Legacy USER').length).toBeGreaterThan(0)
+    expect(screen.getByText('From legacy role code (migration)')).toBeTruthy()
+    const legacySection = screen.getByRole('button', { name: /^Legacy-based access, 1, collapse/ }).parentElement!
+    expect(within(legacySection).getByText(/^1 active · /)).toBeTruthy()
+    expect(within(legacySection).queryByText(/historical/)).toBeNull()
+  })
+
+  it('separates the S&A access model from Legacy Access: S&A policy, role code and legacy-based policy each in their own section (Alif)', async () => {
+    await open(alif(ALIF))
+    const membership = screen.getByRole('region', { name: 'Membership: Serapod HQ' })
+    const sa = within(membership).getByRole('group', { name: 'S&A Access' })
+    const legacy = within(membership).getByRole('group', { name: 'Legacy Access' })
+    expect(within(sa).getByText('Access managed through the Security & Access policy system.')).toBeTruthy()
+    expect(within(legacy).getByText(/Legacy role information retained for compatibility\. The legacy-based policy below still grants its permissions\./)).toBeTruthy()
+    // The explicit S&A policy and system-assigned access live under S&A Access, never under Legacy Access.
+    expect(within(sa).getAllByText('Customer & Growth Full Access').length).toBeGreaterThan(0)
+    expect(within(sa).getByRole('button', { name: /^Assigned policies, 1, collapse/ })).toBeTruthy()
+    expect(within(sa).getByRole('button', { name: /^System-assigned access, 2, expand/ })).toBeTruthy()
+    expect(within(legacy).queryByText('Customer & Growth Full Access')).toBeNull()
+    expect(within(legacy).queryByRole('button', { name: /^(Assigned policies|System-assigned access)/ })).toBeNull()
+    // The role code appears only in Legacy Access — not in the membership header, not under S&A Access.
+    expect(within(membership).getAllByText(/Legacy role code/)).toHaveLength(1)
+    expect(within(legacy).getByText('Legacy role code: USER')).toBeTruthy()
+    expect(within(sa).queryByText(/Legacy role code/)).toBeNull()
+    // Legacy-based access keeps its active status (it still grants).
+    expect(within(legacy).getByRole('button', { name: /^Legacy-based access, 1, expand/ })).toBeTruthy()
+    expect(within(legacy).getByText(/^1 active · 1 module$/)).toBeTruthy()
+    // System-assigned access keeps its real sources.
+    await userEvent.click(within(sa).getByRole('button', { name: /^System-assigned access, 2, expand/ }))
+    for (const g of within(sa).getAllByRole('button', { name: /^System-assigned access: .*expand/ })) await userEvent.click(g)
+    expect(within(sa).getByText('Managed by HR / User Management')).toBeTruthy()
+    expect(within(sa).getByText('Set up from the legacy role during migration')).toBeTruthy()
+    // Order: S&A Access → Legacy Access; no Access history list.
+    expect(sa.compareDocumentPosition(legacy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(membership).queryByRole('button', { name: /Access history/ })).toBeNull()
+  })
+
+  it('a retired legacy policy leaves daily access while assigned access stays visible', async () => {
+    const retired = [entry('x1', 'backfill', { ...LEGACY_USER, status: 'deprecated' }), entry('x4', 'manual', CG_FULL)]
+    await mountPanel(alif(retired))
+    const row = within(screen.getByRole('button', { name: /^Alif/ }).closest('li')!)
+    expect(row.getByText('1 assigned')).toBeTruthy()
+    expect(row.queryByText(/legacy-based/)).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /^Alif/ }))
+    const membership = within(screen.getByRole('region', { name: 'Membership: Serapod HQ' }))
+    expect(membership.queryByRole('group', { name: 'Legacy Access' })).toBeNull()
+    expect(membership.queryByText('Legacy role code: USER')).toBeNull()
+    expect(membership.getByRole('group', { name: 'S&A Access' })).toBeTruthy()
+  })
+
+  it('a secondary membership without legacy-based access has no Legacy Access section', async () => {
+    const d = alif(ALIF)
+    d.people[0].membership.push({ id: 'mb', organization_id: DIST, organization: DIST_ORG, status: 'active', is_primary: false, assignments: [entry('y1', 'manual', CG_FULL)] })
+    await open(d)
+    const second = screen.getByRole('region', { name: 'Membership: North Distributor' })
+    expect(within(second).getByRole('group', { name: 'S&A Access' })).toBeTruthy()
+    expect(within(second).queryByRole('group', { name: 'Legacy Access' })).toBeNull()
+  })
+
+  it('shows the legacy role code as operational membership metadata, not as a grant or as history', async () => {
+    await open(alif(ALIF))
+    expect(screen.getByText('Legacy role code: USER')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'About the legacy role code' }))
+    expect(screen.getByText(/It is not itself a Security & Access grant/)).toBeTruthy()
+    expect(screen.queryByText(/Original|Historical role/i)).toBeNull()
+  })
+
+  it('treats a legacy-* compatibility role as legacy-based even when the role source is not returned', async () => {
+    await open(alif([entry('x1', 'backfill', { ...LEGACY_USER, source: undefined })]))
+    expect(screen.getByRole('button', { name: /^Legacy-based access, 1, expand/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^System-assigned access/ })).toBeNull()
+  })
+
+  it('does not count a current entry as active when it grants nothing (inactive policy, no scope, inactive membership)', async () => {
+    await open(alif([entry('x4', 'manual', CG_FULL), entry('x6', 'manual', { ...CG_FULL, id: 'r-off', name: 'Retired Policy', status: 'inactive' }), entry('x7', 'manual', { ...CG_FULL, id: 'r-ns', name: 'Unscoped Policy' }, { scopes: [] })]))
+    expect(screen.getByText(/^1 active · 2 not in effect · /)).toBeTruthy()
+    expect(screen.getByText('Policy not active — grants nothing')).toBeTruthy()
+    expect(screen.getByText('No data scope — grants nothing')).toBeTruthy()
+    cleanup()
+    await open(alif([entry('x4', 'manual', CG_FULL)], { status: 'suspended' }))
+    expect(screen.getByText(/^0 active · 1 not in effect · /)).toBeTruthy()
+    expect(screen.getByText('Membership not active — grants nothing')).toBeTruthy()
+  })
+
+  it('marks a current entry whose only data scope is inactive as not in effect', async () => {
+    await open(alif([entry('x8', 'manual', CG_FULL, { scopes: [{ scope: { id: 'old', scope_type: 'organization', display_name: 'Closed Branch', status: 'inactive' } }] })]))
+    expect(screen.getByText(/^0 active · 1 not in effect · /)).toBeTruthy()
+    expect(screen.getByText('Data scope not active — grants nothing')).toBeTruthy()
+  })
+
+  it('shows the organization scope of an organization-scoped grant', async () => {
+    await open(alif([entry('x4', 'manual', CG_FULL)]))
+    expect(screen.getAllByText('Serapod HQ').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/grants nothing/)).toBeNull()
   })
 })

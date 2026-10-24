@@ -294,6 +294,8 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
   // Finance Configuration edit controls show what the save route decides (finance.settings.manage; its legacy rule is
   // role level 20), like the Currency settings screen.
   const canEditFinance = useSaCapability('finance.settings.manage', userProfile.roles.role_level <= 20)
+  // AI provider credentials: the settings API decides with platform.settings.manage; the edit controls show that answer.
+  const canEditPlatformSettings = useSaCapability('platform.settings.manage', userProfile.roles.role_level <= 20)
 
   const orgTypeCode = userProfile.organizations?.org_type_code
   const roleLevel = userProfile.roles?.role_level
@@ -762,7 +764,7 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
         return (
           <PaymentGatewaySettingsView
             organizationId={userProfile.organizations?.id}
-            canEdit={userProfile.roles?.role_level <= 20}
+            canEdit={navAccess.allows('ecommerce/payment-gateway')}
           />
         )
 
@@ -854,7 +856,7 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
         return (
           <AiProviderSettingsCard
             organizationId={userProfile.organizations.id}
-            canEdit={userProfile.roles.role_level <= 20}
+            canEdit={canEditPlatformSettings}
           />
         )
       case 'settings/ai/usage':
@@ -871,7 +873,7 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
         return (
           <PaymentGatewaySettingsView
             organizationId={userProfile.organizations.id}
-            canEdit={userProfile.roles.role_level <= 20}
+            canEdit={navAccess.allows('settings/payment-gateway')}
           />
         )
       case 'hr-people':

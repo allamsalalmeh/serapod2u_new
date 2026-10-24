@@ -23,7 +23,7 @@ interface LeaveType {
   id: string
   name: string
   code: string
-  max_days_per_year: number | null
+  max_consecutive_days: number | null
 }
 
 interface LeaveBalance {
