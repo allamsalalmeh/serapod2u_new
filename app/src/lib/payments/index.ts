@@ -65,7 +65,7 @@ function hasGatewayCredentials(provider: string, credentials: Record<string, str
 
 export function paymentMethodLabel(provider: string) {
   if (provider === 'billplz') return 'FPX / e-Wallet (Billplz)'
-  if (provider === 'stripe') return 'Card (Stripe)'
+  if (provider === 'stripe') return 'Card / FPX / GrabPay'
   if (provider === 'toyyibpay') return 'FPX (ToyyibPay)'
   return provider
 }
