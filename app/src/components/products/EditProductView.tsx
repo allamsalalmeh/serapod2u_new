@@ -20,6 +20,7 @@ import {
 import SafeImage from '@/components/shared/SafeImage'
 import { compressProductImage } from '@/lib/utils/imageCompression'
 import AdditionalAttributesEditor from '@/components/products/AdditionalAttributesEditor'
+import { confirmSwitchOffWithStock } from '@/lib/inventory/switch-off-stock-warning'
 import {
   loadStructuredAttributes,
   syncStructuredAttributes,
@@ -46,6 +47,7 @@ interface EditProductViewProps {
 export default function EditProductView({ userProfile, onViewChange }: EditProductViewProps) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [loadedActive, setLoadedActive] = useState(true)
   const [brands, setBrands] = useState<any[]>([])
   const [categories, setCategories] = useState<any[]>([])
   const [manufacturers, setManufacturers] = useState<any[]>([])
@@ -151,6 +153,7 @@ export default function EditProductView({ userProfile, onViewChange }: EditProdu
         age_restriction: data.age_restriction || 0,
         outdoor_store: Boolean((data as any).outdoor_only)
       })
+      setLoadedActive(data.is_active !== false)
       const row = data as any
       const loadedDelivery = {
         title: row.outdoor_shipping_title || '',
@@ -445,6 +448,12 @@ export default function EditProductView({ userProfile, onViewChange }: EditProdu
         variant: 'destructive'
       })
       return
+    }
+
+    if (loadedActive && !formData.is_active) {
+      const { data: variantRows } = await (supabase as any).from('product_variants').select('id').eq('product_id', productId)
+      const ids = ((variantRows || []) as Array<{ id: string }>).map((v) => v.id)
+      if (!(await confirmSwitchOffWithStock(supabase, formData.product_name, ids))) return
     }
 
     setSaving(true)
