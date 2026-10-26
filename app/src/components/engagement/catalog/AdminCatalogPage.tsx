@@ -410,33 +410,16 @@ export function AdminCatalogPage({ userProfile }: AdminCatalogPageProps) {
   }
 
   async function updateRedemptionStatus(transactionId: string, newStatus: string, notes?: string) {
-    const supabaseClient = createClient()
-
     try {
-      const updateData: any = {
-        fulfillment_status: newStatus
-      }
-
-      if (newStatus === 'fulfilled' || newStatus === 'processing') {
-        updateData.fulfilled_by = userProfile.id
-      }
-
-      if (newStatus === 'fulfilled') {
-        updateData.fulfilled_at = new Date().toISOString()
-      }
-
-      if (notes) {
-        updateData.fulfillment_notes = notes
-      }
-
-      const { error } = await supabaseClient
-        .from('points_transactions')
-        .update(updateData)
-        .eq('id', transactionId)
-
-      if (error) {
-        console.error('Error updating redemption status:', error)
-        alert('Failed to update status: ' + error.message)
+      const response = await fetch('/api/admin/redemptions/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transaction_id: transactionId, status: newStatus, notes: notes || null }),
+      })
+      const result = await response.json().catch(() => null)
+      if (!response.ok || !result?.success) {
+        console.error('Error updating redemption status:', result?.error || response.statusText)
+        alert('Failed to update status: ' + (result?.error || response.statusText))
         return
       }
 

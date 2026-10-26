@@ -78,6 +78,7 @@ export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
   "admin/qr-collection": { kind: 'ENTERPRISE', permissions: ["customer.consumer.view"], via: ["lib/consumer/qr-collection-info.ts"] },
   "admin/redemption-history": { kind: 'ENTERPRISE', permissions: ["customer.redemption.manage"] },
   "admin/redemptions": { kind: 'ENTERPRISE', permissions: ["customer.redemption.manage"] },
+  "admin/redemptions/status": { kind: 'ENTERPRISE', permissions: ["customer.redemption.manage"] },
   "admin/restore-data": { kind: 'ENTERPRISE', permissions: ["platform.data.destructive"] },
   "admin/send-deletion-notification": { kind: 'ENTERPRISE', permissions: ["platform.data.destructive"] },
   "admin/setup-delete-function": { kind: 'ENTERPRISE', permissions: ["platform.data.destructive"], via: ["lib/server/destructive-ops-guard.ts"] },
