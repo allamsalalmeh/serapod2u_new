@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Plus, Edit, Trash2, Search, Loader2, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Download } from 'lucide-react'
 import VariantDialog, { type MediaItem } from '../dialogs/VariantDialog'
 import { getStorageUrl } from '@/lib/utils'
+import { confirmSwitchOffWithStock } from '@/lib/inventory/switch-off-stock-warning'
 import {
   PRODUCT_CODE_DUPLICATE_MESSAGE,
   isProductCodeDuplicateError,
@@ -202,6 +203,11 @@ export default function VariantsTab({ userProfile, onRefresh, refreshTrigger }: 
   const handleSave = async (variantData: Partial<Variant> & { mediaItems?: MediaItem[]; certificateFile?: File | null }) => {
     try {
       setIsSaving(true)
+      // Ask before anything is uploaded or written.
+      if (editingVariant && editingVariant.is_active !== false && variantData.is_active === false) {
+        const name = variantData.variant_name || editingVariant.variant_name
+        if (!(await confirmSwitchOffWithStock(supabase, name, [editingVariant.id]))) return
+      }
       const mediaItems = variantData.mediaItems || []
 
       // ── Upload new media files ───────────────────────
