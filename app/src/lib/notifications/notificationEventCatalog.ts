@@ -7,6 +7,7 @@ export const REGISTRATION_OTP_EVENT = 'registration_otp'
 export const DELETE_USER_OTP_EVENT = 'delete_user_otp'
 export const TIKTOK_DAILY_REPORT_EVENT = 'tiktok_shop_daily_report'
 export const TIKTOK_DAILY_SUMMARY_EVENT = 'tiktok_shop_daily_report_sms'
+export const STOREFRONT_ORDER_PAID_EVENT = 'storefront_order_paid'
 
 export const REQUIRED_NOTIFICATION_TYPES = [
     {
@@ -73,6 +74,11 @@ export const REQUIRED_NOTIFICATION_TYPES = [
         category: 'ecommerce', event_code: TIKTOK_DAILY_SUMMARY_EVENT, event_name: 'TikTok Shop Daily Shipping Summary (short)',
         event_description: 'One-line parcel and item totals per TikTok shop, sent at the same times as the full report. Meant for SMS or WhatsApp.',
         default_enabled: false, available_channels: ['sms', 'whatsapp'], is_system: false, sort_order: 11,
+    },
+    {
+        category: 'ecommerce', event_code: STOREFRONT_ORDER_PAID_EVENT, event_name: 'New Paid Website Order (staff alert)',
+        event_description: 'Short alert to staff when a Serapod2U Store or Outdoor website order is paid. Only the recipients chosen here get it, never the customer.',
+        default_enabled: false, available_channels: ['sms', 'whatsapp'], is_system: false, sort_order: 12,
     },
 ] as const
 

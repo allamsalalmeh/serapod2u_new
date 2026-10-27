@@ -265,6 +265,13 @@ export const smsTemplates: Record<string, SmsTemplate[]> = {
         channel: 'sms',
         body: `{{summary_text}}`,
     }],
+    storefront_order_paid: [{
+        id: 'sf_paid_sms_1',
+        name: 'SMS New Paid Order',
+        description: 'Shop, order number, total and item count',
+        channel: 'sms',
+        body: `[Serapod2U] New paid {{shop_name}} order {{order_ref}}: {{total}}, {{item_count}} item(s) from {{buyer_name}}.`,
+    }],
     generic: [{
         id: 'gen_sms_1',
         name: 'Generic SMS',
