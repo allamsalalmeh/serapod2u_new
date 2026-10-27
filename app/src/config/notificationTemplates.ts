@@ -1118,6 +1118,13 @@ export const notificationTemplates: Record<string, Template[]> = {
         },
     ],
 
+    'storefront_order_paid': [
+        {
+            id: 'sf_paid_wa_1', name: 'New Paid Order', channel: 'whatsapp',
+            body: `*New paid {{shop_name}} order*\n\n*Order:* {{order_ref}}\n*Total:* {{total}}\n*Customer:* {{buyer_name}}\n*Paid:* {{paid_at}}\n\n{{item_summary}}`
+        },
+    ],
+
     // ══════════════════════════════════════════════════════════
     // SYSTEM CHECK
     // ══════════════════════════════════════════════════════════

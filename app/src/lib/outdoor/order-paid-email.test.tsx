@@ -44,12 +44,12 @@ describe('notifyOutdoorOrderPaid', () => {
 
   it('emails the customer and the Outdoor inbox by default', async () => {
     await notifyOutdoorOrderPaid('o1')
-    expect(state.sent.map((m) => m.to)).toEqual(['aina@example.com', OUTDOOR_INBOX])
+    expect(state.sent.map((m) => m.to)).toEqual(['aina@example.com', OUTDOOR_INBOX, 'store@serapod.com'])
   })
 
   it('still tells the Outdoor inbox when staff switched the customer email off', async () => {
     state.settings = { email_enabled: false, sms_enabled: true }
     await notifyOutdoorOrderPaid('o1')
-    expect(state.sent.map((m) => m.to)).toEqual([OUTDOOR_INBOX])
+    expect(state.sent.map((m) => m.to)).toEqual([OUTDOOR_INBOX, 'store@serapod.com'])
   })
 })

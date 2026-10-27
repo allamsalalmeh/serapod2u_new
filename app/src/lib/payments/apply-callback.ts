@@ -77,7 +77,15 @@ export async function applyStorefrontPaymentResult(result: PaymentCallbackResult
         console.error('[payments] order paid SMS failed:', err)
       }
     })()
-    await Promise.all([email, storeEmail, sms])
+    const staffAlert = (async () => {
+      try {
+        const { notifyStaffOrderPaid } = await import('@/lib/storefront/order-paid-staff-alert')
+        await notifyStaffOrderPaid(result.orderId)
+      } catch (err) {
+        console.error('[payments] staff paid alert failed:', err)
+      }
+    })()
+    await Promise.all([email, storeEmail, sms, staffAlert])
   }
   if (!updated && result.paid) {
     const { data: current } = await supabase

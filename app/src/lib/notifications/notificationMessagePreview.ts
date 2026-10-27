@@ -155,7 +155,18 @@ export function buildNotificationSampleData(type: PreviewType, sampleId = ''): R
         event_name: type.event_name || 'Order Submitted',
         reference_id: sampleId || 'ORD26000048',
         ...(type.event_code.startsWith('tiktok_shop_daily_report') ? TIKTOK_DAILY_SAMPLE : {}),
+        ...(type.event_code === 'storefront_order_paid' ? STOREFRONT_ORDER_PAID_SAMPLE : {}),
     }
+}
+
+const STOREFRONT_ORDER_PAID_SAMPLE: Record<string, string> = {
+    shop_name: 'Outdoor',
+    order_ref: 'ORD-MVPDTUMR-HUXH',
+    total: 'RM 289.00',
+    item_count: '2',
+    item_summary: 'Moonchair Highback - Black x 1\nTumbler 1L - Green x 1',
+    buyer_name: 'Ahmad Faiz',
+    paid_at: '27 Oct 2026, 2:15 pm',
 }
 
 const TIKTOK_DAILY_SAMPLE: Record<string, string> = {
@@ -214,6 +225,8 @@ const EVENT_VARIABLES: Record<string, string[]> = {
     // lib/marketplace/tiktok-daily-report-server
     tiktok_shop_daily_report: [...TIKTOK_DAILY_PAYLOAD, 'report_text', 'email_subject'],
     tiktok_shop_daily_report_sms: TIKTOK_DAILY_PAYLOAD,
+    // lib/storefront/order-paid-staff-alert
+    storefront_order_paid: ['shop_name', 'order_ref', 'total', 'item_count', 'item_summary', 'buyer_name', 'paid_at'],
 }
 
 // trigger_document_notification (SQL) sends only these. Its order_no is the
