@@ -58,7 +58,7 @@ describe('notifyStoreOrderPaid', () => {
 
   it('emails the customer the order details with the Stripe receipt, and the store inbox', async () => {
     await notifyStoreOrderPaid('o1')
-    expect(state.sent.map((m) => m.to)).toEqual(['amirul@example.com', 'admin@serapod.com', 'jafar@serapod.com'])
+    expect(state.sent.map((m) => m.to)).toEqual(['amirul@example.com', 'admin@serapod.com', 'jafar@serapod.com', 'store@serapod.com'])
     const [customer, staff] = state.sent
     expect(customer.fromName).toBe('Serapod2U Store')
     expect(customer.subject).toContain('ORD-1')
@@ -74,7 +74,7 @@ describe('notifyStoreOrderPaid', () => {
   it('still sends the details when the Stripe receipt cannot be read', async () => {
     state.secretKey = ''
     await notifyStoreOrderPaid('o1')
-    expect(state.sent).toHaveLength(3)
+    expect(state.sent).toHaveLength(4)
     expect(state.sent[0].html).not.toContain('pay.stripe.com')
     expect(state.fetchCalls).toHaveLength(0)
   })

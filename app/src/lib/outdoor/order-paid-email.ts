@@ -5,6 +5,8 @@ import { outdoorPublicOrigin } from '@/lib/outdoor/auth-return'
 import { escapeHtml, money, OUTDOOR_FROM, OUTDOOR_INBOX, shell } from '@/lib/outdoor/order-email-shell'
 import { outdoorMessageChannels } from '@/lib/outdoor/customer-messages'
 
+export const OUTDOOR_STAFF_INBOXES = [OUTDOOR_INBOX, 'store@serapod.com']
+
 /**
  * Sent once, when an Outdoor order first becomes paid. /store orders are left alone.
  * Staff can switch off the customer's copy; the Outdoor inbox always gets its notice.
@@ -75,8 +77,7 @@ ${address ? `<p style="margin:0 0 12px;line-height:1.55;font-size:13px;color:#7c
   if (customer && !customer.success) console.error('[outdoor-order-paid] customer email failed:', customer.error)
 
   const deskLink = `${origin}/outdoor/fulfilment`
-  const staff = await sendTransactionalHtmlEmail(admin, orgId, {
-    to: OUTDOOR_INBOX,
+  const staffMessage = {
     subject: `New paid order ${ref} · ${money(total, currency)}`,
     text: [
       `Order: ${ref}`,
@@ -93,6 +94,9 @@ ${address ? `<p style="margin:0;line-height:1.55;font-size:13px"><strong>Deliver
       { href: deskLink, label: 'Open fulfilment desk' },
     ),
     ...OUTDOOR_FROM,
-  })
-  if (!staff.success) console.error('[outdoor-order-paid] staff email failed:', staff.error)
+  }
+  for (const inbox of OUTDOOR_STAFF_INBOXES) {
+    const staff = await sendTransactionalHtmlEmail(admin, orgId, { ...staffMessage, to: inbox })
+    if (!staff.success) console.error(`[outdoor-order-paid] staff email to ${inbox} failed:`, staff.error)
+  }
 }

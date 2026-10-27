@@ -4,7 +4,7 @@ import { resolveOrgForEmail } from '@/server/auth/passwordResetService'
 import { getGatewayByProvider } from '@/lib/payments'
 import { escapeHtml, money } from '@/lib/outdoor/order-email-shell'
 
-export const STORE_INBOXES = ['admin@serapod.com', 'jafar@serapod.com']
+export const STORE_INBOXES = ['admin@serapod.com', 'jafar@serapod.com', 'store@serapod.com']
 export const STORE_FROM_NAME = 'Serapod2U Store'
 
 export function storeOrigin() {
