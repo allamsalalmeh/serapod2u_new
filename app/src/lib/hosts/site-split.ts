@@ -90,7 +90,7 @@ function mainSiteAuthTarget(search: URLSearchParams): SiteRole {
   const next = search.get('next') || search.get('redirect') || ''
   const safeNext = next.startsWith('/') && !next.startsWith('//') ? next.split('?')[0] : ''
   if (search.get('mode') === 'store' || underPrefix(safeNext, STORE_PREFIXES)) return 'store'
-  if (safeNext && (underPrefix(safeNext, MAIN_PREFIXES) || isPublicRoadtourScan(safeNext))) return 'main'
+  if (safeNext && (underPrefix(safeNext, MAIN_PREFIXES) || underPrefix(safeNext, PHONE_APP_PREFIXES) || isPublicRoadtourScan(safeNext))) return 'main'
   return 'admin'
 }
 

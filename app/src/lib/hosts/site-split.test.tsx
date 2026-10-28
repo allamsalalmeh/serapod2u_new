@@ -52,6 +52,8 @@ describe('site split: main site', () => {
     expect(decide(MAIN, '/login', 'next=/store/checkout')).toEqual(redirectTo(STORE, '/login'))
     expect(decide(MAIN, '/login', 'mode=store')).toEqual(redirectTo(STORE, '/login'))
     expect(decide(MAIN, '/login', 'next=/outdoor/account')).toBeNull()
+    expect(decide(MAIN, '/login', 'next=/serapp/conversation')).toBeNull()
+    expect(decide(MAIN, '/login', 'next=/hr/mobile/home')).toBeNull()
     expect(decide(MAIN, '/signup', 'next=/outdoor')).toBeNull()
   })
 })
