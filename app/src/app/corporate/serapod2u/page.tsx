@@ -6,8 +6,8 @@ import Serapod2uLanding, { type LandingProduct } from './Serapod2uLanding'
 export const dynamic = 'force-dynamic'
 
 export const metadata: Metadata = {
-  title: { absolute: 'Serapod2U' },
-  description: 'Serapod2U — shop the Serapod2U Store and Serapod Outdoor.',
+  title: { absolute: 'Serapod' },
+  description: 'Shop the Serapod Store and Serapod Outdoor.',
 }
 
 const OUTDOOR_URL = process.env.NEXT_PUBLIC_OUTDOOR_SITE_URL?.replace(/\/$/, '') || OUTDOOR_SITE_DEFAULT

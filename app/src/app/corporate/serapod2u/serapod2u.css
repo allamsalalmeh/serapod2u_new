@@ -71,6 +71,41 @@
   box-shadow: 0 0 18px 4px rgba(232, 93, 4, 0.75);
 }
 
+/* Hero product carousel: cards on a ring that turns around the Y axis */
+.s2u-stage {
+  --s2u-card-w: 112px;
+  --s2u-r: 165px;
+}
+@media (min-width: 640px) {
+  .s2u-stage { --s2u-card-w: 140px; --s2u-r: 230px; }
+}
+@media (min-width: 1024px) {
+  .s2u-stage { --s2u-card-w: 158px; --s2u-r: 255px; }
+}
+.s2u-carousel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.s2u-carousel-spin {
+  position: relative;
+  width: var(--s2u-card-w);
+  height: calc(var(--s2u-card-w) * 1.32);
+  transform-style: preserve-3d;
+  animation: s2u-spin 40s linear infinite;
+}
+.s2u-stage:hover .s2u-carousel-spin { animation-play-state: paused; }
+.s2u-carousel-card {
+  position: absolute;
+  inset: 0;
+  transform: rotateY(var(--a)) translateZ(var(--s2u-r));
+  backface-visibility: hidden;
+}
+@keyframes s2u-spin {
+  from { transform: rotateY(0deg); }
+  to { transform: rotateY(-360deg); }
+}
+
 .s2u-device-float { animation: s2u-float 6s ease-in-out infinite; }
 @keyframes s2u-float {
   0%, 100% { transform: translateY(0); }
@@ -140,6 +175,7 @@
   .s2u-device-shadow,
   .s2u-chip-bob,
   .s2u-flow,
+  .s2u-carousel-spin,
   .s2u-pulse::before,
   .s2u-pulse::after,
   .s2u-sheen { animation: none !important; }

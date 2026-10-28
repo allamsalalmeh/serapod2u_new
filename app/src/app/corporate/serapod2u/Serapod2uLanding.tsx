@@ -41,7 +41,7 @@ function brands(outdoorUrl: string): Brand[] {
   return [
     {
       id: 'store',
-      name: 'Serapod2U Store',
+      name: 'Serapod Store',
       line: 'The online store for Serapod devices, electronics, pet food and accessories.',
       href: STORE_HREF,
       cta: 'Shop the store',
@@ -75,7 +75,7 @@ function brands(outdoorUrl: string): Brand[] {
     {
       id: 'ellbow',
       name: 'Ellbow',
-      line: 'Ellbow cat treats, available in the Serapod2U Store.',
+      line: 'Ellbow cat treats, available in the Serapod Store.',
       href: '/store/products',
       cta: 'See in the store',
       mark: (
@@ -161,15 +161,36 @@ function Header({ outdoorUrl }: { outdoorUrl: string }) {
   )
 }
 
-/* ── Hero with 3D device stage ─────────────────────────────────────────── */
+/* ── Hero with a 3D product carousel ───────────────────────────────────── */
 
-function HeroStage() {
+const OUTDOOR_CAROUSEL: { image: string; label: string }[] = [
+  { image: '/outdoor/products/tumbler-burgundy.png', label: 'Outdoor tumbler' },
+  { image: '/outdoor/products/mat-grey.png', label: 'Camping mat' },
+  { image: '/outdoor/products/tumbler-pink.png', label: 'Outdoor tumbler' },
+  { image: '/outdoor/products/mat-burgundy.png', label: 'Camping mat' },
+  { image: '/outdoor/products/tumbler-grey.png', label: 'Outdoor tumbler' },
+  { image: '/outdoor/products/mat-pink.png', label: 'Camping mat' },
+]
+
+/** Outdoor products and store products alternate, so no single category leads. */
+function carouselItems(products: LandingProduct[]) {
+  const store = products.slice(0, 4).map((p) => ({ image: p.image, label: p.name }))
+  const items: { image: string; label: string }[] = []
+  for (let i = 0; items.length < 8 && (i < OUTDOOR_CAROUSEL.length || i < store.length); i++) {
+    if (OUTDOOR_CAROUSEL[i]) items.push(OUTDOOR_CAROUSEL[i])
+    if (store[i] && items.length < 8) items.push(store[i])
+  }
+  return items
+}
+
+function HeroStage({ products }: { products: LandingProduct[] }) {
   const reduce = useReducedMotion()
   const px = useMotionValue(0)
   const py = useMotionValue(0)
-  const rotateY = useSpring(useTransform(px, [-0.5, 0.5], [-22, 22]), { stiffness: 120, damping: 16 })
-  const rotateX = useSpring(useTransform(py, [-0.5, 0.5], [14, -14]), { stiffness: 120, damping: 16 })
-  const shiftX = useSpring(useTransform(px, [-0.5, 0.5], [-18, 18]), { stiffness: 80, damping: 20 })
+  const rotateY = useSpring(useTransform(px, [-0.5, 0.5], [-14, 14]), { stiffness: 120, damping: 18 })
+  const rotateX = useSpring(useTransform(py, [-0.5, 0.5], [6, -14]), { stiffness: 120, damping: 18 })
+  const items = carouselItems(products)
+  const step = 360 / items.length
 
   const onMove = (e: PointerEvent<HTMLDivElement>) => {
     if (reduce) return
@@ -178,57 +199,40 @@ function HeroStage() {
     py.set((e.clientY - r.top) / r.height - 0.5)
   }
 
-  const chips = [
-    { label: 'Serapod2U Store', className: 'left-0 top-[18%]', delay: '0s' },
-    { label: 'Serapod Outdoor', className: 'right-0 top-[30%]', delay: '1.2s' },
-    { label: 'Cellera Hero', className: 'left-[4%] bottom-[22%]', delay: '2.1s' },
-    { label: 'Ellbow', className: 'right-[6%] bottom-[14%]', delay: '0.6s' },
-  ]
-
   return (
     <div
       className="s2u-stage relative mx-auto aspect-square w-full max-w-[560px]"
       onPointerMove={onMove}
       onPointerLeave={() => { px.set(0); py.set(0) }}
     >
-      <div className="absolute inset-[12%] rounded-full bg-[radial-gradient(circle,rgba(232,93,4,0.45),rgba(232,93,4,0.08)_45%,transparent_70%)] blur-2xl" />
-      <div className="s2u-ring s2u-ring--1"><span className="s2u-ring-dot" /></div>
-      <div className="s2u-ring s2u-ring--2" />
-      <div className="s2u-ring s2u-ring--3"><span className="s2u-ring-dot" /></div>
+      <div className="absolute inset-[14%] rounded-full bg-[radial-gradient(circle,rgba(232,93,4,0.4),rgba(232,93,4,0.08)_45%,transparent_70%)] blur-2xl" />
+      <div className="s2u-ring s2u-ring--1" style={{ top: '62%' }}><span className="s2u-ring-dot" /></div>
+      <div className="s2u-ring s2u-ring--2" style={{ top: '62%' }} />
 
       <motion.div
-        className="absolute inset-0 flex items-center justify-center"
-        style={{ rotateX, rotateY, x: shiftX, transformStyle: 'preserve-3d' }}
+        className="s2u-carousel absolute inset-0"
+        style={{ rotateX, rotateY, transformStyle: 'preserve-3d' }}
       >
-        <div className="s2u-device-float relative h-[78%]" style={{ transform: 'translateZ(60px)' }}>
-          <Image
-            src="/brand/serapod-device-hero.png"
-            alt="Serapod device"
-            width={437}
-            height={2030}
-            priority
-            className="h-full w-auto drop-shadow-[0_40px_60px_rgba(0,0,0,0.65)]"
-          />
+        <div className="s2u-carousel-spin">
+          {items.map((item, i) => (
+            <div key={`${item.image}-${i}`} className="s2u-carousel-card" style={{ ['--a' as string]: `${i * step}deg` }}>
+              <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-[0_30px_60px_-24px_rgba(0,0,0,0.75)] ring-1 ring-white/20">
+                <div className="relative flex-1">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={item.image} alt="" className="absolute inset-0 h-full w-full object-contain p-3" loading={i < 4 ? 'eager' : 'lazy'} />
+                </div>
+                <p className="truncate border-t border-black/5 px-3 py-2 text-[11px] font-semibold text-[var(--s2u-ink)]">{item.label}</p>
+              </div>
+            </div>
+          ))}
         </div>
       </motion.div>
-      <div className="s2u-device-shadow absolute bottom-[7%] left-1/2 h-6 w-40 rounded-[50%] bg-black/70 blur-xl" />
-
-      {chips.map((chip) => (
-        <div key={chip.label} className={`absolute ${chip.className}`}>
-          <div
-            className="s2u-chip-bob rounded-full border border-white/15 bg-white/10 px-3.5 py-1.5 text-xs font-semibold tracking-wide text-white/90 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.6)] backdrop-blur-md sm:text-[13px]"
-            style={{ animationDelay: chip.delay }}
-          >
-            <span className="mr-2 inline-block h-1.5 w-1.5 rounded-full bg-[var(--s2u-orange)] align-middle" />
-            {chip.label}
-          </div>
-        </div>
-      ))}
+      <div className="absolute bottom-[10%] left-1/2 h-8 w-2/3 -translate-x-1/2 rounded-[50%] bg-black/60 blur-2xl" />
     </div>
   )
 }
 
-function Hero({ outdoorUrl }: { outdoorUrl: string }) {
+function Hero({ outdoorUrl, products }: { outdoorUrl: string; products: LandingProduct[] }) {
   const words = ['Shop', 'Serapod', 'online.']
   return (
     <section className="relative isolate overflow-hidden bg-[var(--s2u-ink)] pb-16 pt-28 text-white sm:pt-32 lg:min-h-[100svh] lg:pb-0">
@@ -268,7 +272,7 @@ function Hero({ outdoorUrl }: { outdoorUrl: string }) {
               href={STORE_HREF}
               className="group inline-flex h-12 items-center gap-2 rounded-full bg-[var(--s2u-orange)] px-6 text-sm font-semibold text-white shadow-[0_18px_40px_-14px_rgba(232,93,4,0.9)] transition-all hover:bg-[var(--s2u-orange-deep)]"
             >
-              Shop Serapod2U Store
+              Shop Serapod Store
               <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
             </a>
             <a
@@ -286,7 +290,7 @@ function Hero({ outdoorUrl }: { outdoorUrl: string }) {
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 1.1, ease: EASE, delay: 0.25 }}
         >
-          <HeroStage />
+          <HeroStage products={products} />
         </motion.div>
       </div>
     </section>
@@ -391,9 +395,9 @@ function BrandHub({ list }: { list: Brand[] }) {
                 )}
               </svg>
 
-              <div className="s2u-pulse absolute left-1/2 top-1/2 flex h-[30%] w-[30%] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[1.75rem] bg-[var(--s2u-ink)] shadow-[0_30px_60px_-20px_rgba(18,20,23,0.7)]">
+              <div className="s2u-pulse absolute left-1/2 top-1/2 flex h-[30%] w-[30%] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[1.75rem] border border-[var(--s2u-orange)]/20 bg-white shadow-[0_24px_60px_-24px_rgba(232,93,4,0.55)]">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/brand/serapod-wordmark-light.png" alt="Serapod" className="w-[72%]" />
+                <img src="/brand/serapod-wordmark.png" alt="Serapod" className="w-[70%]" />
               </div>
 
               {list.map((brand, i) => {
@@ -413,7 +417,7 @@ function BrandHub({ list }: { list: Brand[] }) {
                     <motion.span
                       animate={{ scale: on ? 1.12 : 1 }}
                       transition={{ type: 'spring', stiffness: 260, damping: 18 }}
-                      className={`mx-auto block h-14 w-14 overflow-hidden rounded-2xl ring-2 transition-shadow sm:h-16 sm:w-16 ${on ? 'shadow-[0_18px_40px_-12px_rgba(232,93,4,0.7)] ring-[var(--s2u-orange)]' : 'shadow-md ring-white'}`}
+                      className={`mx-auto block h-14 w-14 overflow-hidden rounded-2xl ring-1 transition-shadow sm:h-16 sm:w-16 ${on ? 'shadow-[0_18px_40px_-12px_rgba(232,93,4,0.6)] ring-[var(--s2u-orange)]/60' : 'shadow-md ring-black/5'}`}
                     >
                       {brand.mark}
                     </motion.span>
@@ -461,7 +465,12 @@ function StoreShowcase({ products }: { products: LandingProduct[] }) {
                     className="absolute inset-0"
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={current.image} alt={current.name} className="h-full w-full object-contain p-8 sm:p-10" />
+                    <img
+                      src={current.image}
+                      alt={current.name}
+                      className="h-full w-full object-contain p-8 sm:p-10"
+                      style={{ maskImage: 'linear-gradient(to bottom, #000 72%, transparent 96%)', WebkitMaskImage: 'linear-gradient(to bottom, #000 72%, transparent 96%)' }}
+                    />
                   </motion.div>
                 </AnimatePresence>
                 {current.category && (
@@ -498,7 +507,7 @@ function StoreShowcase({ products }: { products: LandingProduct[] }) {
 
         <div className="order-1 lg:order-2">
           <Reveal>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--s2u-orange)]">Serapod2U Store</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--s2u-orange)]">Serapod Store</p>
             <h2 className="font-display mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">Products in the store</h2>
           </Reveal>
           <Reveal delay={0.1}>
@@ -670,7 +679,7 @@ function Footer({ outdoorUrl }: { outdoorUrl: string }) {
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white">Shop</p>
           <ul className="mt-4 space-y-2.5 text-sm">
-            <li><a href={STORE_HREF} className="hover:text-white">Serapod2U Store</a></li>
+            <li><a href={STORE_HREF} className="hover:text-white">Serapod Store</a></li>
             <li><a href={outdoorUrl} className="hover:text-white">Serapod Outdoor</a></li>
           </ul>
         </div>
@@ -696,7 +705,7 @@ export default function Serapod2uLanding({ products, outdoorUrl }: { products: L
     <div className="s2u bg-[var(--s2u-paper)] text-[var(--s2u-ink)]">
       <Header outdoorUrl={outdoorUrl} />
       <main>
-        <Hero outdoorUrl={outdoorUrl} />
+        <Hero outdoorUrl={outdoorUrl} products={products} />
         <BrandHub list={list} />
         <StoreShowcase products={products} />
         <OutdoorColourways outdoorUrl={outdoorUrl} />
