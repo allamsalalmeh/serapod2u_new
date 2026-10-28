@@ -2,9 +2,18 @@ import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import SignupPageClient from '@/components/auth/SignupPageClient'
 import { listLoginHeroBanners } from '@/lib/storefront/banners'
+import { headers } from 'next/headers'
+import type { Metadata } from 'next'
+import { isStoreSiteHost } from '@/lib/hosts/site-split'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
+
+export async function generateMetadata(): Promise<Metadata> {
+  const requestHeaders = await headers()
+  const host = (requestHeaders.get('x-forwarded-host') || requestHeaders.get('host') || '').split(',')[0]
+  return isStoreSiteHost(host) ? { title: 'Create account | Serapod2U Store' } : {}
+}
 
 export default async function SignupPage() {
   let branding = {

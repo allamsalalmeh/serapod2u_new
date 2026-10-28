@@ -2,13 +2,20 @@ import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { redirect } from 'next/navigation'
 import { headers } from 'next/headers'
+import type { Metadata } from 'next'
 import LoginPageClient from '@/components/auth/LoginPageClient'
-import { loginModeForHost } from '@/lib/hosts/site-split'
+import { isStoreSiteHost, loginModeForHost } from '@/lib/hosts/site-split'
 import { listLoginHeroBanners } from '@/lib/storefront/banners'
 import { getStorageUrl } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
+
+export async function generateMetadata(): Promise<Metadata> {
+  const requestHeaders = await headers()
+  const host = (requestHeaders.get('x-forwarded-host') || requestHeaders.get('host') || '').split(',')[0]
+  return isStoreSiteHost(host) ? { title: 'Sign in | Serapod2U Store' } : {}
+}
 
 export default async function LoginPage() {
   // Load branding settings from HQ organization
