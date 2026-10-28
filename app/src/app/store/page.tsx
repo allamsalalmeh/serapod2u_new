@@ -8,16 +8,20 @@ import StoreBrandMark from '@/components/storefront/StoreBrandMark'
 import StoreReveal from '@/components/storefront/StoreReveal'
 import StoreSpotlightMedia from '@/components/storefront/StoreSpotlightMedia'
 import { ArrowRight, Package, ShieldCheck, Truck, Sparkles, LayoutGrid } from 'lucide-react'
+import { headers } from 'next/headers'
+import { isStoreSiteHost } from '@/lib/hosts/site-split'
 
 export const dynamic = 'force-dynamic'
 
 export default async function StorefrontHomePage() {
-  const [{ products }, categories, banners, heroConfig] = await Promise.all([
+  const [{ products }, categories, banners, heroConfig, requestHeaders] = await Promise.all([
     listProducts({ sort: 'newest', limit: 6 }),
     listCategories(),
     listActiveStoreBanners(),
     getHeroConfig(),
+    headers(),
   ])
+  const showBusinessLogin = !isStoreSiteHost((requestHeaders.get('x-forwarded-host') || requestHeaders.get('host') || '').split(',')[0])
 
   const [leadProduct, ...restProducts] = products
 
@@ -46,6 +50,7 @@ export default async function StorefrontHomePage() {
             <StoreHeroSlider
               banners={carouselBanners}
               interval={heroConfig.auto_rotate_interval}
+              showBusinessLogin={showBusinessLogin}
             />
           )
         })()
@@ -86,12 +91,14 @@ export default async function StorefrontHomePage() {
                   Shop Now
                   <ArrowRight className="h-4 w-4" />
                 </Link>
-                <Link
-                  href="/login"
-                  className="inline-flex items-center gap-2 rounded-xl border border-[var(--sera-line)] bg-[var(--sera-surface)] px-6 py-3 text-sm font-semibold text-[var(--sera-ink)] shadow-sm transition-colors hover:border-[var(--sera-orange)]/30 hover:text-[var(--sera-orange)]"
-                >
-                  Business Login
-                </Link>
+                {showBusinessLogin && (
+                  <Link
+                    href="/login"
+                    className="inline-flex items-center gap-2 rounded-xl border border-[var(--sera-line)] bg-[var(--sera-surface)] px-6 py-3 text-sm font-semibold text-[var(--sera-ink)] shadow-sm transition-colors hover:border-[var(--sera-orange)]/30 hover:text-[var(--sera-orange)]"
+                  >
+                    Business Login
+                  </Link>
+                )}
               </div>
             </div>
 

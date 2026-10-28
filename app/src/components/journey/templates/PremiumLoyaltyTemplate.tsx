@@ -689,6 +689,7 @@ export default function PremiumLoyaltyTemplate({
     const [pointsErrorAction, setPointsErrorAction] = useState<'shop-profile-link' | 'roadtour-shop-only' | null>(null)
     const [pointsErrorTitle, setPointsErrorTitle] = useState('Complete Your Profile')
     const [showPointsSuccessModal, setShowPointsSuccessModal] = useState(false)
+    const [alreadyCollectedNotice, setAlreadyCollectedNotice] = useState('')
     const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false)
     const [forgotPasswordReturnTarget, setForgotPasswordReturnTarget] = useState<'profile' | 'collect'>('collect')
     const [collectPointsStep, setCollectPointsStep] = useState<'login' | 'complete-profile' | 'consumer-confirm' | 'roadtour-survey'>('login')
@@ -4069,14 +4070,12 @@ export default function PremiumLoyaltyTemplate({
                         }
                         return { success: false, alreadyCollected: true, error: data.error }
                     }
-                    // Points already collected for this QR
-                    setPointsEarned(data.points_earned || 0)
-                    setPreviousBalance(data.total_balance || 0)
+                    // Points already collected for this QR: nothing was earned, so no success animation
                     setTotalBalance(data.total_balance || 0)
                     setPointsCollected(true)
                     setRoadtourProductQrSuccessNote(null)
                     setShowPointsLoginModal(false)
-                    setShowPointsSuccessModal(true)
+                    setAlreadyCollectedNotice(data.error || 'Points for this QR code have already been collected.')
                     setPointsError('')
                     showRoadtourProductQrProgressNotice(data)
                     resetPendingCollectFlowState()
@@ -4253,13 +4252,12 @@ export default function PremiumLoyaltyTemplate({
                         }
                         return { success: false, alreadyCollected: true, error: data.error }
                     }
-                    // Points already collected for this QR
-                    setPointsEarned(data.points_earned || 0)
-                    setPreviousBalance(data.total_balance || 0)
+                    // Points already collected for this QR: nothing was earned, so no success animation
                     setTotalBalance(data.total_balance || 0)
                     setPointsCollected(true)
                     setRoadtourProductQrSuccessNote(null)
-                    setShowPointsSuccessModal(true)
+                    setShowPointsLoginModal(false)
+                    setAlreadyCollectedNotice(data.error || 'Points for this QR code have already been collected.')
                     setPointsError('')
                     showRoadtourProductQrProgressNotice(data)
                     resetPendingCollectFlowState()
@@ -8625,6 +8623,38 @@ export default function PremiumLoyaltyTemplate({
                             style={{ backgroundColor: config.button_color }}
                         >
                             Got it
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {alreadyCollectedNotice && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-2xl w-full max-w-sm p-6 space-y-4">
+                        <div className="text-center">
+                            <div className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center bg-amber-100">
+                                <AlertCircle className="w-8 h-8 text-amber-600" />
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-900">Already Collected</h3>
+                            <p className="text-sm text-gray-500 mt-1">No points were added for this scan</p>
+                        </div>
+
+                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                            <p className="text-sm text-amber-800 text-center">{alreadyCollectedNotice}</p>
+                        </div>
+
+                        <button
+                            onClick={() => {
+                                setAlreadyCollectedNotice('')
+                                setShowPointsLoginModal(false)
+                                setShopId('')
+                                setShopPassword('')
+                                setCollectPointsStep('login')
+                            }}
+                            className="w-full py-3 px-4 rounded-xl font-medium text-white transition-colors"
+                            style={{ backgroundColor: config.primary_color }}
+                        >
+                            Close
                         </button>
                     </div>
                 </div>
