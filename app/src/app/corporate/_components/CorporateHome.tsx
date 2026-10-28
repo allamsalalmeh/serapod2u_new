@@ -41,7 +41,7 @@ export default function CorporateHome({ site = 'serapod' }: { site?: 'serapod' |
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="relative z-10 px-6 sm:px-10 py-6 flex items-center justify-between">
+      <header className="relative z-10 px-6 sm:px-10 py-6 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/brand/serapod-wordmark.png"
@@ -51,7 +51,7 @@ export default function CorporateHome({ site = 'serapod' }: { site?: 'serapod' |
           height={56}
         />
         {isSerapod2u ? (
-          <nav className="flex items-center gap-5 sm:gap-7">
+          <nav className="flex flex-wrap items-center gap-x-5 gap-y-2 sm:gap-x-7">
             <a
               href="/store"
               className="text-sm font-medium text-[var(--corp-muted)] hover:text-[var(--corp-accent)] transition-colors"
@@ -82,12 +82,12 @@ export default function CorporateHome({ site = 'serapod' }: { site?: 'serapod' |
       </header>
 
       <main className="flex-1">
-        <section className="relative min-h-[78vh] overflow-hidden flex flex-col justify-end px-6 sm:px-10 pb-16 sm:pb-20 pt-16">
+        <section className="relative isolate min-h-[78vh] overflow-hidden flex flex-col justify-end px-6 sm:px-10 pb-16 sm:pb-20 pt-16">
           <div
             className="absolute inset-0 -z-10"
             style={{
               backgroundImage:
-                'linear-gradient(180deg, rgba(18,20,23,0.25) 0%, rgba(18,20,23,0.55) 48%, rgba(18,20,23,0.88) 100%), url(https://images.unsplash.com/photo-1469474968028-69744495dcbd?auto=format&fit=crop&w=2400&q=80)',
+                'linear-gradient(180deg, rgba(18,20,23,0.25) 0%, rgba(18,20,23,0.55) 48%, rgba(18,20,23,0.88) 100%), url(/outdoor/brand/photos/artboard-3.jpg)',
               backgroundSize: 'cover',
               backgroundPosition: 'center',
             }}
