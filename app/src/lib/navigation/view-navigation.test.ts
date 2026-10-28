@@ -104,6 +104,22 @@ describe('DashboardContent leaves the arriving page as the only renderer of a UR
         expect(source).toContain('openView(view, `/supply-chain/${orgPath}`)')
     })
 
+    it('keeps staging finance URLs while using the shared destination-render guard', () => {
+        const source = shellSource()
+        const start = source.indexOf("const financeViewId = view.replace")
+        const end = source.indexOf('// ── Redirect Customer & Growth', start)
+        const finance = source.slice(start, end)
+        expect(finance).toContain("view.replace(/^\\//, '')")
+        expect(finance).toContain("financeViewId === 'finance' || financeViewId.startsWith('finance/')")
+        expect(finance).toContain('openView(financeViewId, `/${financeViewId}`)')
+        expect(finance).not.toContain('setCurrentView(')
+        expect(finance).not.toContain('router.push(')
+        for (const destination of ['/finance', '/finance/gl/journals', '/finance/cash/bank-accounts']) {
+            expect(shouldSwitchViewInMemory('/dashboard', destination)).toBe(false)
+            expect(shouldSwitchViewInMemory(destination, destination)).toBe(true)
+        }
+    })
+
     it('keeps the S&A gate in front of every Supply Chain view it renders', () => {
         const source = shellSource()
         expect(source).toContain("navAccess.status === 'loading'")

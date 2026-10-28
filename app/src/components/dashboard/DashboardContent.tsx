@@ -479,8 +479,7 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
     // route under src/app/finance (finance → /finance, finance/gl/journals → …).
     const financeViewId = view.replace(/^\//, '')
     if (financeViewId === 'finance' || financeViewId.startsWith('finance/')) {
-      setCurrentView(financeViewId)
-      router.push(`/${financeViewId}`)
+      openView(financeViewId, `/${financeViewId}`)
       return
     }
 
