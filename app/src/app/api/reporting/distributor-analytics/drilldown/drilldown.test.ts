@@ -31,7 +31,7 @@ vi.mock('@/lib/supabase/server', () => ({
 const A = 'aaaaaaaa-0000-4000-8000-000000000001' // returning
 const B = 'aaaaaaaa-0000-4000-8000-000000000002' // new in Aug
 const C = 'aaaaaaaa-0000-4000-8000-000000000003' // inactive in Aug
-const D = 'aaaaaaaa-0000-4000-8000-000000000004' // returning (history in March), Aug order cancelled
+const D = 'aaaaaaaa-0000-4000-8000-000000000004' // history in March, Aug order cancelled → not active in Aug
 const E = 'aaaaaaaa-0000-4000-8000-000000000005' // inactive in Aug, orders again in Sep
 const HQ = 'bbbbbbbb-0000-4000-8000-000000000001'
 
@@ -125,30 +125,34 @@ beforeEach(() => seed())
 describe('headline counts (unchanged by the drill-down work)', () => {
   it('17. August, all distributors, all status', async () => {
     const report = await headline(AUG)
-    expect(report.summary).toMatchObject({ totalOrders: 4, orderValue: 8600, activeDistributors: 3, returningDistributors: 2 })
-    expect(report.relationship).toMatchObject({ newDistributors: 1, returningDistributors: 2, inactiveThisPeriod: 2 })
+    // Delta's August order is cancelled: it is created, never active.
+    expect(report.summary).toMatchObject({ ordersCreated: 4, activeOrders: 3, activeOrderValue: 8000, activeDistributors: 2, returningDistributors: 1 })
+    expect(report.relationship).toMatchObject({ newDistributors: 1, returningDistributors: 1, inactiveThisPeriod: 2 })
+    expect(report.orderProcessing).toMatchObject({ total: 4, cancelledOrders: 1, cancelledValue: 600, approvedSalesValue: 6500, pipelineValue: 1500 })
+    // Cancelled orders stay visible in Recent Orders, labelled by status.
+    expect(report.recentOrders.find((o: any) => o.orderNo === 'SO26000125')).toMatchObject({ status: 'cancelled', orderValue: 600 })
   })
 })
 
 describe('drill-downs reconcile exactly with the headline', () => {
-  it('7. Total Orders lists exactly the 4 eligible orders (no HQ buyer, no H2M) with values that sum to the headline', async () => {
+  it('7. Active Orders lists exactly the 3 active orders (no cancelled, no HQ buyer, no H2M) with values that sum to the headline', async () => {
     const { body } = await drill('total_orders', AUG)
     const d = body.drilldown
-    expect(d.title).toBe('Total Orders')
-    expect(d.headline).toMatchObject({ count: 4, totalOrders: 4, orderValue: 8600 })
+    expect(d.title).toBe('Active Orders')
+    expect(d.headline).toMatchObject({ count: 3, activeOrders: 3, activeOrderValue: 8000, ordersCreated: 4 })
     expect(d.reconciled).toBe(true)
-    expect(d.orders.map((o: any) => o.orderNo)).toEqual(['SO26000125', 'SO26000120', 'SO26000115', 'SO26000110'])
-    expect(d.orders.reduce((s: number, o: any) => s + o.orderValue, 0)).toBe(8600)
+    expect(d.orders.map((o: any) => o.orderNo)).toEqual(['SO26000120', 'SO26000115', 'SO26000110'])
+    expect(d.orders.reduce((s: number, o: any) => s + o.orderValue, 0)).toBe(8000)
     expect(d.orders.find((o: any) => o.orderNo === 'SO26000110')).toMatchObject({
       distributorName: 'Alpha Distribution', distributorCode: 'ALPHA', status: 'approved', lineCount: 2, orderValue: 2500, createdByName: 'Siti Sales',
     })
   })
 
-  it('8. Active Distributors lists exactly the 3 distributors counted', async () => {
+  it('8. Active Distributors lists exactly the 2 distributors counted (a cancelled order does not make Delta active)', async () => {
     const d = (await drill('active', AUG)).body.drilldown
-    expect(d.headline.count).toBe(3)
+    expect(d.headline.count).toBe(2)
     expect(d.reconciled).toBe(true)
-    expect(names(d.distributors)).toEqual(['Alpha Distribution', 'Beta Vape', 'Delta Supply'])
+    expect(names(d.distributors)).toEqual(['Alpha Distribution', 'Beta Vape'])
     expect(d.distributors[0]).toMatchObject({
       name: 'Alpha Distribution', code: 'ALPHA', currentOrders: 2, currentValue: 6500, aov: 3250, previousOrders: 1, previousValue: 1000,
       // Labelled by business date; `at` is that date's 00:00 MYT.
@@ -161,7 +165,7 @@ describe('drill-downs reconcile exactly with the headline', () => {
     expect(d.headline.count).toBe(1)
     expect(d.distributors).toHaveLength(1)
     expect(d.distributors[0]).toMatchObject({ name: 'Beta Vape', firstOrder: { orderNo: 'SO26000115' }, currentOrders: 1, currentValue: 1500, aov: 1500 })
-    // Delta ordered in August but traded in March → returning, never new.
+    // Delta's only August order is cancelled → neither new nor active.
     expect(names(d.distributors)).not.toContain('Delta Supply')
   })
 
@@ -177,12 +181,12 @@ describe('drill-downs reconcile exactly with the headline', () => {
 
   it('11. Returning Distributors uses the existing classification, with previous and current-period order refs', async () => {
     const d = (await drill('returning', AUG)).body.drilldown
-    expect(d.headline.count).toBe(2)
-    expect(names(d.distributors)).toEqual(['Alpha Distribution', 'Delta Supply'])
-    const delta = d.distributors.find((r: any) => r.name === 'Delta Supply')
-    expect(delta).toMatchObject({
-      lastOrderBeforePeriod: { orderNo: 'SO26000020' },
-      currentFirstOrder: { orderNo: 'SO26000125' },
+    expect(d.headline.count).toBe(1)
+    expect(names(d.distributors)).toEqual(['Alpha Distribution'])
+    const alpha = d.distributors.find((r: any) => r.name === 'Alpha Distribution')
+    expect(alpha).toMatchObject({
+      lastOrderBeforePeriod: { orderNo: 'SO26000101' },
+      currentFirstOrder: { orderNo: 'SO26000110' },
     })
     expect(d.definition).toMatch(/first ever eligible order is earlier than the report period/)
   })
@@ -195,7 +199,7 @@ describe('filters are respected', () => {
     const orders = (await drill('total_orders', jul)).body.drilldown
     const fresh = (await drill('new', jul)).body.drilldown
     expect(orders.orders.map((o: any) => o.orderNo).sort()).toEqual(['SO26000101', 'SO26000102', 'SO26000105'])
-    expect(orders.orders).toHaveLength(report.summary.totalOrders)
+    expect(orders.orders).toHaveLength(report.summary.activeOrders)
     expect(names(fresh.distributors)).toEqual(['Alpha Distribution', 'Cahaya Trading', 'Ekor Enterprise'])
     expect(fresh.distributors).toHaveLength(report.relationship.newDistributors)
     expect(orders.period.label).toMatch(/July 2026/)
@@ -206,7 +210,7 @@ describe('filters are respected', () => {
     const report = await headline(scope)
     const orders = (await drill('total_orders', scope)).body.drilldown
     const active = (await drill('active', scope)).body.drilldown
-    expect(report.summary.totalOrders).toBe(1)
+    expect(report.summary.activeOrders).toBe(1)
     expect(orders.orders.map((o: any) => o.orderNo)).toEqual(['SO26000115'])
     expect(names(active.distributors)).toEqual(['Beta Vape'])
     expect(active.scope.distributorName).toBe('Beta Vape')
@@ -218,12 +222,24 @@ describe('filters are respected', () => {
     const orders = (await drill('total_orders', scope)).body.drilldown
     const active = (await drill('active', scope)).body.drilldown
     const inactive = (await drill('inactive', scope)).body.drilldown
-    expect(report.summary).toMatchObject({ totalOrders: 1, activeDistributors: 1 })
+    expect(report.summary).toMatchObject({ activeOrders: 1, activeDistributors: 1 })
     expect(orders.orders.map((o: any) => o.orderNo)).toEqual(['SO26000110'])
     expect(names(active.distributors)).toEqual(['Alpha Distribution'])
     expect(names(inactive.distributors)).toEqual(['Cahaya Trading', 'Ekor Enterprise'])
     expect(inactive.distributors).toHaveLength(report.relationship.inactiveThisPeriod)
     expect(orders.scope.statusLabel).toBe('Approved')
+  })
+
+  it('a specific status is intersected with the active set: Cancelled shows no active orders but keeps the history', async () => {
+    const scope = { ...AUG, status: 'cancelled' }
+    const report = await headline(scope)
+    const orders = (await drill('total_orders', scope)).body.drilldown
+    expect(report.summary).toMatchObject({ ordersCreated: 1, activeOrders: 0, activeOrderValue: 0, activeDistributors: 0 })
+    expect(report.orderProcessing).toMatchObject({ total: 1, cancelledOrders: 1, cancelledValue: 600, approvedSalesValue: 0 })
+    expect(report.recentOrders.map((o: any) => o.orderNo)).toEqual(['SO26000125'])
+    expect(report.isEmpty).toBe(false)
+    expect(orders.orders).toEqual([])
+    expect(orders.reconciled).toBe(true)
   })
 
   it('15. an empty metric returns zero rows with its empty-state message', async () => {
@@ -244,7 +260,7 @@ describe('filters are respected', () => {
     // An extra eligible order the aggregate never saw (e.g. inserted between reads).
     db.tables.orders.push({ ...db.tables.orders[1], id: 'late', display_doc_no: 'SO26000199' })
     const d = (await drill('total_orders', AUG)).body.drilldown
-    expect(d.orders).toHaveLength(5)
+    expect(d.orders).toHaveLength(4)
     expect(d.reconciled).toBe(false)
   })
 
@@ -275,14 +291,14 @@ describe('backdated SO: web report, drill-down and CSV agree on the business dat
   }
   const SEP = { ...AUG, month: '2026-09' }
 
-  it('13/19/20. counts in August — headline, Total Orders drill-down and CSV all include it', async () => {
+  it('13/19/20. counts in August — headline, Active Orders drill-down and CSV all include it', async () => {
     seed([BACKDATED])
     const report = await headline(AUG)
     const orders = (await drill('total_orders', AUG)).body.drilldown
     const file = await csv(AUG)
 
-    expect(report.summary.totalOrders).toBe(5)
-    expect(report.summary.orderValue).toBe(2500 + 4000 + 1500 + 600 + 700)
+    expect(report.summary.activeOrders).toBe(4)
+    expect(report.summary.activeOrderValue).toBe(2500 + 4000 + 1500 + 700)
     expect(orders.reconciled).toBe(true)
     const row = orders.orders.find((o: any) => o.orderNo === 'SO26000140')
     expect(row).toMatchObject({ orderDate: '2026-08-31', createdAt: '2026-09-21T03:00:00.000Z' })
@@ -290,8 +306,11 @@ describe('backdated SO: web report, drill-down and CSV agree on the business dat
     expect(orders.orders[0].orderNo).toBe('SO26000140')
 
     const csvRows = file.split('\n').filter((line) => line.startsWith('"SO'))
-    expect(csvRows).toHaveLength(report.summary.totalOrders)
-    expect(file).toContain('"SO26000140","2026-08-31","Cahaya Trading","Approved","1","700.00"')
+    // The CSV is detailed reporting: every status of the scope, active rows marked.
+    expect(csvRows).toHaveLength(report.summary.ordersCreated)
+    expect(csvRows.filter((line) => line.includes('"Yes"'))).toHaveLength(report.summary.activeOrders)
+    expect(file).toContain('"SO26000140","2026-08-31","Cahaya Trading","Approved","Yes","1","700.00"')
+    expect(file).toContain('"SO26000125","2026-08-25","Delta Supply","Cancelled","No","1","600.00"')
     expect(file).toContain('Bucketed on orders.order_date (business SO date)')
   })
 
@@ -301,8 +320,8 @@ describe('backdated SO: web report, drill-down and CSV agree on the business dat
     seed([BACKDATED])
     const after = await headline(SEP)
     const orders = (await drill('total_orders', SEP)).body.drilldown
-    expect(after.summary.totalOrders).toBe(before.summary.totalOrders)
-    expect(after.summary.orderValue).toBe(before.summary.orderValue)
+    expect(after.summary.activeOrders).toBe(before.summary.activeOrders)
+    expect(after.summary.activeOrderValue).toBe(before.summary.activeOrderValue)
     expect(orders.orders.map((o: any) => o.orderNo)).not.toContain('SO26000140')
     expect(await csv(SEP)).toBe(beforeFile)
   })
@@ -323,5 +342,52 @@ describe('backdated SO: web report, drill-down and CSV agree on the business dat
     })
     expect(active.distributors).toHaveLength(report.summary.activeDistributors)
     expect(report.meta.dateField).toBe('orders.order_date')
+  })
+})
+
+describe('approved-first headline (Approved Sales / Approved Orders)', () => {
+  it('18. August approved figures: approved-stage D2H orders of DIST buyers only, reconciled with Order Processing Health', async () => {
+    const report = await headline(AUG)
+    const a = report.approvedSales
+    // Alpha's approved RM2,500 + closed RM4,000. Not Beta's submitted, Delta's cancelled, the HQ buyer or the H2M order.
+    expect(a).toMatchObject({ value: 6500, orders: 2, distributors: 1, avgOrderValue: 3250, reconciled: true })
+    expect(a.statuses).toEqual([{ status: 'approved', label: 'Approved', orders: 1 }, { status: 'closed', label: 'Closed', orders: 1 }])
+    expect(a.value).toBe(report.orderProcessing.approvedSalesValue)
+    expect(a.orders).toBe(report.orderProcessing.approvedOrders)
+    expect(a).toMatchObject({ submittedOrders: 1, submittedValue: 1500, submittedAvgOrderValue: 1500 })
+  })
+
+  it('19. compares approved with approved: July approved RM6,200 over 3 orders (Alpha, Cahaya, Ekor)', async () => {
+    const a = (await headline(AUG)).approvedSales
+    expect(a.previous).toEqual({ value: 6200, orders: 3, distributors: 3, avgOrderValue: 2066.67 })
+    expect(a.valueChangePct).toBe(4.8)
+    expect(a.ordersChangePct).toBe(-33.3)
+  })
+
+  it('20. honours the Distributor and Status filters', async () => {
+    expect((await headline({ ...AUG, distributor: B })).approvedSales).toMatchObject({ value: 0, orders: 0, submittedOrders: 1 })
+    expect((await headline({ ...AUG, status: 'closed' })).approvedSales).toMatchObject({ value: 4000, orders: 1 })
+    expect((await headline({ ...AUG, status: 'submitted' })).approvedSales).toMatchObject({ value: 0, orders: 0, submittedOrders: 1 })
+    expect((await headline({ ...AUG, status: 'cancelled' })).approvedSales).toMatchObject({ value: 0, orders: 0, submittedOrders: 0 })
+  })
+
+  it('21. Approved Orders drill-down lists exactly the approved-stage orders and reconciles', async () => {
+    const { body } = await drill('approved_orders', AUG)
+    const d = body.drilldown
+    expect(d.title).toBe('Approved Orders')
+    expect(d.orders.map((o: any) => o.orderNo).sort()).toEqual(['SO26000110', 'SO26000120'])
+    expect(d.headline).toMatchObject({ count: 2, approvedOrders: 2, approvedSalesValue: 6500 })
+    expect(d.reconciled).toBe(true)
+  })
+
+  it('22. the period comparison leads with approved rows; active rows stay in report.comparison for the PDF and drawer', async () => {
+    const report = await headline(AUG)
+    expect(report.approvedComparison.slice(0, 3)).toEqual([
+      { key: 'approvedOrders', label: 'Approved Orders', format: 'count', current: 2, previous: 3, changePct: -33.3, changePoints: null },
+      { key: 'approvedSalesValue', label: 'Approved Sales', format: 'currency', current: 6500, previous: 6200, changePct: 4.8, changePoints: null },
+      { key: 'avgApprovedOrderValue', label: 'Average Approved Order Value', format: 'currency', current: 3250, previous: 2066.67, changePct: 57.3, changePoints: null },
+    ])
+    expect(report.approvedComparison.map((r: any) => r.key)).not.toContain('activeOrderValue')
+    expect(report.comparison.find((r: any) => r.key === 'activeOrderValue')).toMatchObject({ current: 8000 })
   })
 })

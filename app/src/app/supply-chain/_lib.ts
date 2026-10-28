@@ -1,4 +1,5 @@
 import 'server-only'
+import { timeInventoryOperation, type InventoryTrace } from '@/lib/inventory/inventory-timing'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { navActorFromProfile, resolveDestinationAccess } from '@/lib/server/nav-access'
@@ -11,13 +12,13 @@ import { SUPPLY_CHAIN_MODULE_DESTINATION } from '@/lib/security-access/nav-acces
  * Returns the authenticated user profile and whether the user may open `destination` (a Supply Chain destination from
  * nav-access.ts: the module landing by default, or `supply-chain/<view>` from supplyChainDestinationForView).
  */
-export async function getSupplyChainPageContext(destination: string = SUPPLY_CHAIN_MODULE_DESTINATION) {
-    const supabase = await createClient()
+export async function getSupplyChainPageContext(destination: string = SUPPLY_CHAIN_MODULE_DESTINATION, timingTrace?: InventoryTrace) {
+    const supabase = await timeInventoryOperation(timingTrace, 'server.createClient', () => createClient())
 
-    const { data: { user }, error } = await supabase.auth.getUser()
+    const { data: { user }, error } = await timeInventoryOperation(timingTrace, 'server.auth.getUser', () => supabase.auth.getUser())
     if (error || !user) redirect('/login')
 
-    const { data: userProfile, error: userProfileError } = await supabase
+    const { data: userProfile, error: userProfileError } = await timeInventoryOperation(timingTrace, 'server.profile.users', () => supabase
         .from('users')
         .select(`
       *,
@@ -33,7 +34,7 @@ export async function getSupplyChainPageContext(destination: string = SUPPLY_CHA
       )
     `)
         .eq('id', user.id)
-        .single()
+        .single())
 
     if (userProfileError || !userProfile) redirect('/login')
 
@@ -59,9 +60,9 @@ export async function getSupplyChainPageContext(destination: string = SUPPLY_CHA
     // The module entry opens the landing; a view also needs the permission its own APIs and data read with. A revoked or
     // expired grant answers DENY on the next request (no cache across requests). Hiding is not authorization: every API,
     // RPC and RLS policy behind these pages decides again.
-    const access = await resolveDestinationAccess(navActorFromProfile(transformedUserProfile), [SUPPLY_CHAIN_MODULE_DESTINATION])
+    const access = await timeInventoryOperation(timingTrace, 'server.access.module', () => resolveDestinationAccess(navActorFromProfile(transformedUserProfile), [SUPPLY_CHAIN_MODULE_DESTINATION]))
     const viewAccess = access.state === 'allowed' && destination !== SUPPLY_CHAIN_MODULE_DESTINATION
-        ? await resolveDestinationAccess(navActorFromProfile(transformedUserProfile), destination)
+        ? await timeInventoryOperation(timingTrace, 'server.access.inventory', () => resolveDestinationAccess(navActorFromProfile(transformedUserProfile), destination))
         : access
     const canViewSupplyChain = viewAccess.state === 'allowed'
 

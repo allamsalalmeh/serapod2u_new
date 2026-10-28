@@ -45,10 +45,10 @@ describe('GET /api/security-access/people', () => {
   it('reports the Root Access capability from the database, and "unavailable" when it cannot be read', async () => {
     loadDirectory.mockResolvedValue({ ok: true, value: { people: [], total: 0, counts: {}, organizations: [] } })
     // admin without rpc (or a missing migration): no Root option, never an error for the directory.
-    expect((await (await get()).json()).capabilities.rootAccess).toEqual({ available: false, viewerIsRoot: false, activeCount: null })
+    expect((await (await get()).json()).capabilities.rootAccess).toEqual({ available: false, viewerIsRoot: false, activeCount: null, activePermissionCount: null })
     const rpc = vi.fn(async (fn: string, args: any) => ({ data: fn === 'sa_actor_is_root' ? args.p_actor === ACTOR : 3, error: null }))
     actor = { userId: ACTOR, admin: { rpc } }
-    expect((await (await get()).json()).capabilities.rootAccess).toEqual({ available: true, viewerIsRoot: true, activeCount: 3 })
+    expect((await (await get()).json()).capabilities.rootAccess).toEqual({ available: true, viewerIsRoot: true, activeCount: 3, activePermissionCount: null })
     expect(rpc).toHaveBeenCalledWith('sa_actor_is_root', { p_actor: ACTOR })
   })
 

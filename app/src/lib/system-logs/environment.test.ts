@@ -27,4 +27,12 @@ describe('System Logs environment (trusted runtime configuration only)', () => {
     expect(appBuild(env({ NEXT_PUBLIC_APP_BUILD: 'bad build id; drop table' }))).toBe('unknown')
     expect(appBuild(env({}))).toBe('unknown')
   })
+
+  it('resolves the build id from runtime deployment env vars (fixes "App build: unknown")', () => {
+    expect(appBuild(env({ SOURCE_COMMIT: '039908de92d03e36cb165263a189188e1dff951d' }))).toBe('039908de92d03e36cb165263a189188e1dff951d')
+    expect(appBuild(env({ GIT_COMMIT_SHA: 'abc123def456' }))).toBe('abc123def456')
+    expect(appBuild(env({ APP_BUILD_ID: 'release-1.2.3' }))).toBe('release-1.2.3')
+    expect(appBuild(env({ NEXT_PUBLIC_APP_BUILD: 'v1', APP_BUILD_ID: 'v2' }))).toBe('v1')
+    expect(appBuild(env({ SOURCE_COMMIT: 'not a valid id!' }))).toBe('unknown')
+  })
 })

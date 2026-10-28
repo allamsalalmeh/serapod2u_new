@@ -31,6 +31,7 @@ import {
     Wrench,
     Landmark,
     UserCircle,
+    Scale,
     type LucideIcon,
 } from 'lucide-react'
 
@@ -103,8 +104,11 @@ export const hrNavGroups: HrNavGroup[] = [
         label: 'Attendance',
         icon: CalendarCheck2,
         children: [
-            { id: 'hr/attendance/clock-in-out', label: 'Clock In / Out', icon: Clock3, href: toHref('hr/attendance/clock-in-out') },
+            // One HR workspace (tabs): daily board, exceptions, corrections, manual entry, Excel import, overtime, report,
+            // policy & shifts. Employees clock in/out from My Attendance (My Workspace), not here.
+            { id: 'hr/attendance/clock-in-out', label: 'Attendance Operations', icon: Clock3, href: toHref('hr/attendance/clock-in-out') },
             { id: 'hr/attendance/timesheets', label: 'Timesheets', icon: FileSpreadsheet, href: toHref('hr/attendance/timesheets') },
+            { id: 'hr/attendance/public-holidays', label: 'Public Holidays', icon: CalendarDays, href: toHref('hr/attendance/public-holidays') },
         ],
     },
     {
@@ -112,9 +116,11 @@ export const hrNavGroups: HrNavGroup[] = [
         label: 'Leave Management',
         icon: CalendarDays,
         children: [
+            { id: 'hr/leave/requests', label: 'Leave Requests & Approvals', icon: ClipboardList, href: toHref('hr/leave/requests') },
+            // Same screen, Balances tab (ledger, entitlements, adjustments, entitlement run / carry-forward previews).
+            { id: 'hr/leave/balances', label: 'Balances & Entitlements', icon: Scale, href: '/hr/leave/requests?tab=balances', requiresAny: ['hr/leave/requests'] },
             { id: 'hr/leave/types', label: 'Leave Types', icon: CalendarDays, href: toHref('hr/leave/types') },
-            { id: 'hr/leave/requests', label: 'Leave Requests', icon: ClipboardList, href: toHref('hr/leave/requests') },
-            { id: 'hr/leave/approval-flow', label: 'Approval Flow', icon: CheckCircle2, href: toHref('hr/leave/approval-flow') },
+            // 'hr/leave/approval-flow' removed (B2B): it showed mock data; the URL renders an explicit unavailable state.
         ],
     },
     {

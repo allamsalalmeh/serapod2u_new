@@ -75,7 +75,9 @@ describe('GET /api/notifications/resolve', () => {
   it('says empty when the order exists but nobody resolves', async () => {
     const none = { recipient_targets: { order_creator: false, roles: false, users: false, consumer: false, dynamic_org: true } }
     const { body } = await call({ eventCode: 'order_approved', sampleId: 'ORD26000001', channel: 'whatsapp', recipientConfig: JSON.stringify(none) })
-    expect(body).toMatchObject({ success: true, status: 'empty', recipients: [], notUsedWhenSending: ['dynamic_org'] })
+    expect(body).toMatchObject({ success: true, status: 'empty', recipients: [], notUsedWhenSending: [] })
+    // Related organization saved without a target says why it adds nobody.
+    expect(body.diagnostics).toEqual([expect.objectContaining({ source: 'related_org', reason: 'not_configured' })])
   })
 
   it('says not_found for an order outside the caller organization', async () => {

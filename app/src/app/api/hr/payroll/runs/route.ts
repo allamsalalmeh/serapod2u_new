@@ -45,27 +45,26 @@ export async function POST(request: NextRequest) {
         if (!ctx.organizationId) return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
         if (!(await hrCan(ctx, 'hr.payroll.prepare'))) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
 
-        const body = await request.json()
+        const body = await request.json().catch(() => ({}))
+        const iso = /^\d{4}-\d{2}-\d{2}$/
+        if (!iso.test(String(body?.period_start ?? '')) || !iso.test(String(body?.period_end ?? '')) || body.period_end < body.period_start) {
+            return NextResponse.json({ success: false, error: 'period_start and period_end (YYYY-MM-DD, end on/after start) are required' }, { status: 400 })
+        }
 
-        // Count employees with active compensation in this org
-        const { count } = await supabase
-            .from('hr_employee_compensation')
-            .select('id', { count: 'exact', head: true })
-            .eq('organization_id', ctx.organizationId)
-            .eq('status', 'active')
-
+        // B2B column contract: hr_payroll_runs has no name/employee_count columns. The run label is kept in notes;
+        // the employee count is known only after calculation.
+        const label = [typeof body.name === 'string' ? body.name.trim() : '', typeof body.notes === 'string' ? body.notes.trim() : '']
+            .filter(Boolean).join(' — ')
         const { data, error } = await supabase
             .from('hr_payroll_runs')
             .insert({
                 organization_id: ctx.organizationId,
-                name: body.name,
                 period_start: body.period_start,
                 period_end: body.period_end,
-                payroll_date: body.period_end,
+                payroll_date: body.payroll_date || body.period_end,
                 status: 'draft',
                 currency: 'MYR',
-                employee_count: count || 0,
-                notes: body.notes || null
+                notes: label || null
             })
             .select()
             .single()

@@ -111,8 +111,9 @@ export const schemaSnapshot = existsSync(snapshotUrl) ? readFileSync(snapshotUrl
 const relationBody = (sql: string, relation: string): string | null => {
   const table = sql.indexOf(`CREATE TABLE public.${relation} (`)
   if (table >= 0) return sql.slice(table, sql.indexOf('\n);', table))
-  const view = sql.indexOf(`CREATE VIEW public.${relation} AS`)
-  if (view >= 0) return sql.slice(view, sql.indexOf(';\n', view))
+  // pg_dump includes view options between the relation name and AS.
+  const view = new RegExp(`CREATE VIEW public\\.${relation}(?: WITH \\([^;]*?\\))? AS\\s`).exec(sql)
+  if (view) return sql.slice(view.index, sql.indexOf(';\n', view.index))
   return null
 }
 

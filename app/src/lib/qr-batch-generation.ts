@@ -321,6 +321,7 @@ export async function runQRBatchGeneration(
         try {
           const displayOrderNo = order.display_doc_no || order.order_no
           const notifPayload = {
+            order_id: order.id,
             order_no: displayOrderNo,
             batch_id: batch.id,
             total_master_codes: qrBatch.totalMasterCodes.toString(),

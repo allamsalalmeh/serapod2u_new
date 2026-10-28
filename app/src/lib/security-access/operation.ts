@@ -1,7 +1,7 @@
 import 'server-only'
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { authorize, type LegacyEvaluator } from './authorization'
+import { authorize, AuthorizationUnavailableError, type LegacyEvaluator } from './authorization'
 import type { AuthorizationDecision, AuthorizationResource } from './types'
 import type { Trace } from './diagnostics'
 
@@ -11,6 +11,8 @@ export interface OperationRequest {
   resource: AuthorizationResource
   /** The module's existing check; decides in LEGACY_ENFORCED/SHADOW. */
   legacy?: LegacyEvaluator
+  diagnosticOrigin?: 'page_navigation' | 'api_operation'
+  operationId?: string
   correlationId?: string | null
   /** Decide and explain without writing an audit row (UI preflight; nothing is being authorized). */
   explainOnly?: boolean
@@ -30,7 +32,7 @@ export async function authorizeOperation(request: OperationRequest): Promise<Aut
       actorId: request.actorId,
       permission: request.permission,
       resource: request.resource,
-      context: { correlationId: request.correlationId ?? null, ...(request.explainOnly ? { explainOnly: true } : {}) },
+      context: { diagnosticOrigin: request.diagnosticOrigin ?? 'api_operation', operationId: request.operationId, correlationId: request.correlationId ?? null, ...(request.explainOnly ? { explainOnly: true } : {}) },
     },
     { legacy: request.legacy, trace: request.trace },
   )
@@ -46,16 +48,16 @@ export async function guardOperation(request: OperationRequest): Promise<NextRes
   let decision: AuthorizationDecision
   try {
     decision = await authorizeOperation(request)
-  } catch {
-    return NextResponse.json({ success: false, error: 'Authorization service unavailable' }, { status: 503 })
+  } catch (error) {
+    return NextResponse.json({ success: false, error: 'Authorization service unavailable', code: 'sa_unavailable', referenceId: error instanceof AuthorizationUnavailableError ? error.referenceId : undefined }, { status: 503 })
   }
   if (decision.decision === 'ALLOW') return null
   // Fail closed, but an infrastructure failure is not a confirmed denial.
   if (decision.unavailable) {
-    return NextResponse.json({ success: false, error: 'Authorization service unavailable', code: 'sa_unavailable', decisionId: decision.decisionId }, { status: 503 })
+    return NextResponse.json({ success: false, error: 'Authorization service unavailable', code: 'sa_unavailable', decisionId: decision.decisionId, referenceId: decision.referenceId }, { status: 503 })
   }
   return NextResponse.json(
-    { success: false, error: 'Forbidden', code: 'sa_forbidden', permission: request.permission, decisionId: decision.decisionId, reason: decision.reasonCode },
+    { success: false, error: 'Forbidden', code: 'sa_forbidden', permission: request.permission, decisionId: decision.decisionId, reason: decision.reasonCode, referenceId: decision.referenceId },
     { status: 403 },
   )
 }

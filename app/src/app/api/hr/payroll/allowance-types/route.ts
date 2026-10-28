@@ -9,7 +9,7 @@ export async function GET(_request: NextRequest) {
         if (!ctxResult.success || !ctxResult.data) return NextResponse.json({ success: false, error: ctxResult.error }, { status: 401 })
         const ctx = ctxResult.data
         if (!ctx.organizationId) return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
-        if (!(await hrCan(ctx, 'hr.compensation.view', () => true))) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+        if (!(await hrCan(ctx, 'hr.compensation.view'))) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
 
         const { data, error } = await supabase
             .from('hr_allowance_types')

@@ -154,3 +154,37 @@ unchanged.
    Admin who will run resets. Remove it afterwards.
 4. Use HR Settings → Configuration → Data Management. When HR goes live:
    `select public.hr_mark_go_live('<super admin id>', '<organization id>', 'HR go-live');`
+
+## 7. Delete Employee / Reset HR Registration (one employee)
+
+Migration: `supabase/migrations/20261214100000_hr_employee_controlled_delete.sql` (apply manually).
+Replica tests: `supabase/tests/security/hr_employee_delete/` (isolated databases only).
+UI: HR → People → Employees → row menu (⋯). API: `/api/hr/employees/registration`.
+
+Why no row is deleted: the identity (`public.users`) is shared with User Management, S&A, Supply Chain
+and Finance, and most HR tables reference it `ON DELETE CASCADE`. The employment record
+(`hr_employees`) is the anchor that owns the employee number and projects employment facts onto the
+identity; deleting it is undone by `identity_users_forward_employment` with a **new** employee number.
+So both actions change the HR registration (onboarding state) only.
+
+| Action | Result | Allowed when |
+|---|---|---|
+| **Delete Employee** | `completed`/`reset` → `pending` (onboarding columns cleared, hire date unconfirmed). Leaves the Employees list; shown under Awaiting onboarding. | No HR row references the person (attendance, leave, payroll, compensation, commission, performance, contracts, claims, approvals, HR configuration … — discovered from `pg_constraint` at preview and execution), no direct reports, HR not live, not yourself. |
+| **Reset HR Registration** | `completed` → `reset`; HR history kept (read-only; new HR transactions need onboarding again). | Onboarding completed, HR not live, not yourself. |
+
+Kept by both: login, `public.users`, account status, organization membership, S&A assignments,
+employment facts and their projection, employee number, HR history, Supply Chain / Finance / audit rows.
+Re-onboarding through Add Employee works from both states and reuses the employee number. A full
+removal of a test identity is User Management → Archive Identity (`platform.identity.delete`).
+
+Authorization (database, every call): explicit S&A decision for `hr.employee.delete` in the
+organization (assignment or Root Access; no legacy level, compatibility rule or delegation). It is held
+only by the break-glass policy **HR Employee Record Administrator** (assigned to nobody) and is a
+reviewed exclusion of HR & Payroll Full Access. Other organizations' employees are reported as not found.
+
+Safety: preview token, `request_id` idempotency (repeat → recorded outcome; reuse for another target
+refused), per-employee advisory lock, row locks on the identity and employment rows, SHARE locks on HR
+tables whose person column has no foreign key, `lock_timeout` 5 s, reason ≥ 10 characters, append-only
+`hr_employee_registration_actions` (completed and blocked attempts, before-image) and an onboarding log
+entry (`removed` / `reset`). The operational guard (§5) now reads the employment row `FOR KEY SHARE`,
+so a clock-in, leave request or payroll line racing a delete/reset waits and is refused.

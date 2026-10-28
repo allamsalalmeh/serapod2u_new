@@ -1,3 +1,4 @@
+import { MODULE_TAXONOMY, OTHER_MODULE } from '@/lib/security-access/modules'
 import { z } from 'zod'
 import { LOG_CATEGORIES, LOG_ENVIRONMENTS, LOG_SEVERITIES, ACTIVITY_OUTCOMES } from './contract'
 
@@ -59,7 +60,8 @@ export function resolveWindow(q: Pick<ListQuery, 'tab' | 'from' | 'to'>, now: Da
 }
 
 /** Module filter options (error modules come from moduleFromPath / reporters; activity modules from the SQL read model). */
-export const MODULE_OPTIONS = [
+export const MODULE_OPTIONS = [...new Set([
   'Supply Chain', 'Inventory', 'Product Catalog', 'Orders', 'HR', 'Finance', 'Security & Access', 'User Management', 'Settings',
   'QR & Traceability', 'Customer & Growth', 'E-Commerce', 'RoadTour', 'Manufacturing', 'Dashboard', 'Background jobs', 'System Logs', 'Other',
-] as const
+  ...MODULE_TAXONOMY.map(group => group.name), OTHER_MODULE.name,
+])]

@@ -9,7 +9,7 @@ interface EcommerceSubPageProps {
 }
 
 export default async function EcommerceSubPage({ params }: EcommerceSubPageProps) {
-  const { userProfile, canViewEcommerce, accessState } = await getEcommercePageContext()
+  const { userProfile, canViewEcommerce, accessState, access: moduleAccess } = await getEcommercePageContext()
   const { slug = [] } = await params
   const initialView = resolveEcommerceSlug(slug)
 
@@ -17,7 +17,7 @@ export default async function EcommerceSubPage({ params }: EcommerceSubPageProps
   const access = canViewEcommerce ? await resolveChildViewAccess(userProfile, initialView, 'ecommerce') : null
   if (!access || access.state !== 'allowed') {
     const state = access?.state ?? accessState
-    return <AccessState kind={state === 'unavailable' ? 'unavailable' : 'denied'} />
+    return <AccessState kind={state === 'unavailable' ? 'unavailable' : 'denied'} referenceId={access?.state === 'denied' ? access.referenceId : moduleAccess?.state === 'denied' ? moduleAccess.referenceId : undefined} />
   }
 
   return <DashboardContent userProfile={userProfile} initialView={initialView} />

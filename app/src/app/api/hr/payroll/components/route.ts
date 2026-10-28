@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
         if (!userData?.organization_id) {
             return NextResponse.json({ error: 'User has no organization' }, { status: 400 })
         }
-        if (!(await hrCan({ userId: user.id, organizationId: userData.organization_id, roleCode: null, roleLevel: null }, 'hr.compensation.view', () => true))) {
+        if (!(await hrCan({ userId: user.id, organizationId: userData.organization_id, roleCode: null, roleLevel: null }, 'hr.compensation.view'))) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
         }
 

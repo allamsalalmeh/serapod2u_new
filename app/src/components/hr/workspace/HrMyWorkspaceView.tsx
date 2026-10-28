@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import ModuleLightHeader from '@/components/layout/ModuleLightHeader'
 import ModuleLandingCard from '@/components/layout/ModuleLandingCard'
 import HrManagerWorkspaceView from '@/components/hr/workspace/HrManagerWorkspaceView'
+import EmploymentHistoryPanel from '@/components/hr/people/EmploymentHistoryPanel'
 import { landingAccents } from '@/lib/landing-accents'
 import { useNavAccess } from '@/hooks/useNavAccess'
 
@@ -47,9 +48,10 @@ const titleCase = (value: string | null) => (value ? value.replace(/[_-]+/g, ' '
  * payslips open the existing employee screens; the organization chart is the limited staff view and is independent of
  * the employee link. A pending setup is announced once; the affected cards only carry a short "Pending setup" status.
  */
-export default function HrMyWorkspaceView({ userName }: { userName?: string | null }) {
+export default function HrMyWorkspaceView({ userName, userId }: { userName?: string | null; userId?: string | null }) {
     const nav = useNavAccess()
     const [state, setState] = useState<State>({ kind: 'loading' })
+    const [historyOpen, setHistoryOpen] = useState(false)
 
     const load = useCallback(async () => {
         setState({ kind: 'loading' })
@@ -129,6 +131,15 @@ export default function HrMyWorkspaceView({ userName }: { userName?: string | nu
                         <Field label="Organization" value={state.employment.organization} />
                         <Field label="Hire date" value={state.employment.hireDate} />
                     </dl>
+                    {userId && (
+                        <div className="mt-4 border-t border-[var(--sera-line)] pt-3">
+                            <Button size="sm" variant="ghost" aria-expanded={historyOpen} onClick={() => setHistoryOpen((o) => !o)}>
+                                {historyOpen ? 'Hide my employment history' : 'Show my employment history'}
+                            </Button>
+                            {/* Read-only: the database returns the person's own effective-dated history. */}
+                            {historyOpen && <div className="mt-3"><EmploymentHistoryPanel userId={userId} /></div>}
+                        </div>
+                    )}
                 </ModuleLandingCard>
             )}
 

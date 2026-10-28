@@ -54,13 +54,20 @@ export interface ManualStockCatalogRow {
   status: string
   isCellera: boolean
   currentOnHand: number
+  /** Loose pieces held on top of currentOnHand (product_inventory.pcs_on_hand). */
+  currentPcsOnHand?: number
+  /** product_inventory.pcs_per_case snapshot; null/undefined when unknown. */
+  pcsPerCase?: number | null
   averageCost: number | null
 }
 
 export interface ManualStockLineInput {
   stockConfigId: string
   variantId: string
+  /** Whole stock units (cases for cartridges, pieces for other products). */
   quantity: number
+  /** Loose pieces added on top of `quantity`; 0 when none were entered. */
+  pcs?: number
   unitCost: number | null
   rowNote?: string | null
 }
@@ -300,15 +307,25 @@ export function buildManualStockRpcItems(
   quantities: Record<string, string>,
   unitCosts: Record<string, string>,
   rowNotes: Record<string, string>,
+  pcsQuantities: Record<string, string> = {},
 ): ManualStockLineInput[] {
   const items: ManualStockLineInput[] = []
   for (const key of selectedKeys) {
     const row = rows.find((entry) => entry.rowKey === key)
     if (!row) continue
     const qtyRaw = quantities[key]
-    if (!qtyRaw || !String(qtyRaw).trim()) continue
-    const parsedQty = parseAddQuantity(qtyRaw)
+    const pcsRaw = pcsQuantities[key]
+    const hasQty = Boolean(qtyRaw && String(qtyRaw).trim())
+    const hasPcs = Boolean(pcsRaw && String(pcsRaw).trim() && Number(pcsRaw) > 0)
+    // A line may carry whole units, loose pieces, or both — "add 2 pcs" is a
+    // legitimate addition on its own.
+    if (!hasQty && !hasPcs) continue
+    const parsedQty = parseAddQuantity(hasQty ? qtyRaw : '0')
     if (!parsedQty.ok) throw new Error(`${row.stockSku}: ${parsedQty.error}`)
+    const parsedPcs = Number(pcsRaw ?? 0)
+    if (!Number.isFinite(parsedPcs) || parsedPcs < 0 || !Number.isInteger(parsedPcs)) {
+      throw new Error(`${row.stockSku}: extra pieces must be a whole number`)
+    }
     const parsedCost = parseUnitCost(unitCosts[key])
     if (!parsedCost.ok) throw new Error(`${row.stockSku}: ${parsedCost.error}`)
     if (!isSelectableManualStockConfiguration(row)) {
@@ -318,6 +335,7 @@ export function buildManualStockRpcItems(
       stockConfigId: row.stockConfigId,
       variantId: row.variantId,
       quantity: parsedQty.value,
+      pcs: parsedPcs,
       unitCost: parsedCost.value,
       rowNote: rowNotes[key]?.trim() || null,
     })
@@ -338,6 +356,7 @@ export function buildPostManualStockAdditionParams(input: ManualStockPostPayload
     p_request_id: input.requestId,
     p_organization_id: input.warehouseId,
     p_items: input.items.map((item) => ({
+      pcs: item.pcs ?? 0,
       stock_config_id: item.stockConfigId,
       variant_id: item.variantId,
       quantity: item.quantity,

@@ -1,6 +1,9 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -30,6 +33,15 @@ import {
     Pencil, Plus, Timer, Trash2
 } from 'lucide-react'
 import OvertimeRulesCard from './OvertimeRulesCard'
+import HrAttendanceOperationsView, { OPERATIONS_TABS, type OperationsTab } from './HrAttendanceOperationsView'
+
+/** Top-level sections of the HR attendance workspace. `?tab=` may name a section or one of the operations tabs. */
+export type AttendanceSection = 'operations' | 'setup' | 'my'
+export function resolveAttendanceTab(tab: string | null | undefined): { section: AttendanceSection; operations: OperationsTab } {
+    if (tab === 'setup' || tab === 'my') return { section: tab, operations: 'board' }
+    if (tab && (OPERATIONS_TABS as readonly string[]).includes(tab)) return { section: 'operations', operations: tab as OperationsTab }
+    return { section: 'operations', operations: 'board' }
+}
 
 interface HrAttendanceClockViewProps {
     userProfile: {
@@ -66,6 +78,10 @@ export default function HrAttendanceClockView({ userProfile }: HrAttendanceClock
     const { hasPermission } = usePermissions(userProfile.roles.role_level, userProfile.role_code, userProfile.department_id)
     const canManage = userProfile.roles.role_level <= 20 || hasPermission('manage_org_chart') || hasPermission('edit_org_settings')
     const { toast } = useToast()
+    const searchParams = useSearchParams()
+    const initial = resolveAttendanceTab(searchParams?.get('tab'))
+    const [section, setSection] = useState<AttendanceSection>(initial.section)
+    useEffect(() => { setSection(resolveAttendanceTab(searchParams?.get('tab')).section) }, [searchParams])
 
     const [policy, setPolicy] = useState<AttendancePolicy>(DEFAULT_POLICY)
     const [shifts, setShifts] = useState<AttendanceShift[]>([])
@@ -116,8 +132,8 @@ export default function HrAttendanceClockView({ userProfile }: HrAttendanceClock
     const handleClock = async (action: 'clock_in' | 'clock_out') => {
         setActionLoading(true)
         const result = await clockAttendance(action, selectedShift === 'none' ? null : selectedShift)
-        if (result.success) { toast({ title: 'Success', description: action === 'clock_in' ? 'Clocked in.' : 'Clocked out.' }); loadData() }
-        else toast({ title: 'Unable to proceed', description: result.error || 'Action failed', variant: 'destructive' })
+        if (result.success) { toast({ title: action === 'clock_in' ? 'Clocked in' : 'Clocked out', description: 'Recorded with the server time.' }); loadData() }
+        else toast({ title: 'Not recorded', description: result.error || 'The attendance could not be recorded.', variant: 'destructive' })
         setActionLoading(false)
     }
 
@@ -136,8 +152,8 @@ export default function HrAttendanceClockView({ userProfile }: HrAttendanceClock
             corrected_clock_in: correctionForm.corrected_clock_in || null,
             corrected_clock_out: correctionForm.corrected_clock_out || null
         })
-        if (result.success) { toast({ title: 'Correction requested', description: 'Your manager will review.' }); setCorrectionDialogOpen(false); loadData() }
-        else toast({ title: 'Error', description: result.error || 'Failed', variant: 'destructive' })
+        if (result.success) { toast({ title: 'Correction requested', description: 'Another authorized person (HR) reviews it; your original record is kept.' }); setCorrectionDialogOpen(false); loadData() }
+        else toast({ title: 'Correction not submitted', description: result.error || 'The correction could not be submitted.', variant: 'destructive' })
         setActionLoading(false)
     }
 
@@ -211,6 +227,27 @@ export default function HrAttendanceClockView({ userProfile }: HrAttendanceClock
     return (
         <TooltipProvider>
             <div className="space-y-6">
+                <div>
+                    <h1 className="text-lg font-semibold tracking-tight">Attendance Operations</h1>
+                    <p className="text-sm text-muted-foreground mt-1">
+                        Review and correct attendance, import records and decide overtime. Employees clock in and out from{' '}
+                        <Link href="/hr/mobile/attendance" className="underline underline-offset-2">My Attendance</Link>.
+                    </p>
+                </div>
+                <Tabs value={section} onValueChange={(v) => setSection(v as AttendanceSection)}>
+                    <TabsList className="flex flex-wrap h-auto">
+                        <TabsTrigger value="operations">Operations</TabsTrigger>
+                        <TabsTrigger value="setup">Policy &amp; shifts</TabsTrigger>
+                        <TabsTrigger value="my">My clock-in</TabsTrigger>
+                    </TabsList>
+
+                {/* Wave 3: HR operations (daily board, exceptions, corrections, manual entry, Excel import, overtime,
+                    report). The page is gated by hr.attendance.manage; every action is decided again by the database. */}
+                <TabsContent value="operations" className="space-y-6">
+                    <HrAttendanceOperationsView initialTab={initial.operations} />
+                </TabsContent>
+
+                <TabsContent value="my" className="space-y-6">
                 {exceptions.length > 0 && (
                     <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-4 flex items-start gap-3">
                         <AlertTriangle className="h-5 w-5 text-yellow-600 mt-0.5" />
@@ -268,9 +305,8 @@ export default function HrAttendanceClockView({ userProfile }: HrAttendanceClock
                     </CardContent>
                 </Card>
 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <Card>
-                        <CardHeader><CardTitle className="text-base">Recent Activity</CardTitle><CardDescription>Last 5 clock events</CardDescription></CardHeader>
+                        <CardHeader><CardTitle className="text-base">My recent activity</CardTitle><CardDescription>Your last 5 clock events. Corrections and overtime: My Attendance.</CardDescription></CardHeader>
                         <CardContent className="space-y-3">
                             {recentEntries.length === 0 ? <div className="text-sm text-gray-500">No activity yet.</div> : recentEntries.map(entry => (
                                 <div key={entry.id} className="flex items-center justify-between rounded-lg border p-3">
@@ -294,7 +330,9 @@ export default function HrAttendanceClockView({ userProfile }: HrAttendanceClock
                             ))}
                         </CardContent>
                     </Card>
+                </TabsContent>
 
+                <TabsContent value="setup" className="space-y-6">
                     <Card>
                         <CardHeader>
                             <div className="flex items-center justify-between">
@@ -341,7 +379,6 @@ export default function HrAttendanceClockView({ userProfile }: HrAttendanceClock
                             </div>
                         </CardContent>
                     </Card>
-                </div>
 
                 {/* Overtime Rules – always visible for configuration access */}
                 <OvertimeRulesCard canManage={canManage} />
@@ -385,6 +422,8 @@ export default function HrAttendanceClockView({ userProfile }: HrAttendanceClock
                         ))}
                     </CardContent>
                 </Card>
+                </TabsContent>
+                </Tabs>
 
                 <Dialog open={shiftDialogOpen} onOpenChange={setShiftDialogOpen}>
                     <DialogContent className="sm:max-w-[500px]">
@@ -410,7 +449,7 @@ export default function HrAttendanceClockView({ userProfile }: HrAttendanceClock
 
                 <Dialog open={correctionDialogOpen} onOpenChange={setCorrectionDialogOpen}>
                     <DialogContent className="sm:max-w-[520px]">
-                        <DialogHeader><DialogTitle>Request Attendance Correction</DialogTitle><DialogDescription>Submit a correction. Your manager will review.</DialogDescription></DialogHeader>
+                        <DialogHeader><DialogTitle>Request Attendance Correction</DialogTitle><DialogDescription>Submit a correction for your own entry. Another authorized person (HR) reviews it; you can never approve your own.</DialogDescription></DialogHeader>
                         {correctionEntry && (
                             <div className="space-y-4">
                                 <div className="rounded-lg border p-3 bg-gray-50">

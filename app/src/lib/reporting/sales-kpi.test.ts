@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { APPROVED_SALES_STATUSES, isApprovedSalesStatus, salesClassOf, summarizeSales } from './sales-kpi'
+import { ACTIVE_ORDER_STATUSES, APPROVED_SALES_STATUSES, isActiveOrderStatus, isApprovedSalesStatus, salesClassOf, summarizeSales } from './sales-kpi'
+
+describe('Active Orders classification', () => {
+  it('is Approved Sales + Pipeline: submitted and every approved stage, never draft or cancelled', () => {
+    expect([...ACTIVE_ORDER_STATUSES]).toEqual(['submitted', 'approved', 'warehouse_packed', 'shipped_distributor', 'closed'])
+    for (const s of ACTIVE_ORDER_STATUSES) expect(isActiveOrderStatus(s)).toBe(true)
+    for (const s of ['draft', 'cancelled', '', null, undefined]) expect(isActiveOrderStatus(s)).toBe(false)
+  })
+})
 
 describe('Approved Sales classification', () => {
   it('counts every approved-stage status and nothing before approval', () => {
@@ -25,10 +33,25 @@ describe('Approved Sales classification', () => {
     ])
     expect(summary).toEqual({
       approvedSalesValue: 1000.3, approvedSalesOrders: 4,
+      distributorSalesValue: 700.3, distributorSalesOrders: 3,
+      shopSalesValue: 300, shopSalesOrders: 1,
       pipelineValue: 50, pipelineOrders: 1,
       cancelledValue: 75, cancelledOrders: 1,
       purchaseValue: 5555, purchaseOrders: 1,
+      unclassifiedOrders: 0, unclassifiedValue: 0,
     })
+  })
+
+  it('never counts an order without a recognised type as a sale', () => {
+    const summary = summarizeSales([
+      { status: 'approved', orderType: null, value: 900 },
+      { status: 'approved', orderType: 'X2Y', value: 100 },
+      { status: 'approved', orderType: 's2d', value: 40 },
+    ])
+    expect(summary.approvedSalesValue).toBe(40)
+    expect(summary.shopSalesValue).toBe(40)
+    expect(summary.unclassifiedOrders).toBe(2)
+    expect(summary.unclassifiedValue).toBe(1000)
   })
 
   it('removes an approved order from Approved Sales once it is cancelled', () => {

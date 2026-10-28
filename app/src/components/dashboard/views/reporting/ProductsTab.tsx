@@ -6,8 +6,8 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, Boxes, Calendar,
-  ArrowLeft, ChevronLeft, ChevronRight, Crown, Download, Layers, Loader2,
+  AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, Boxes,
+  ArrowLeft, ChevronRight, Crown, Download, Layers, Loader2,
   Megaphone, Minus, Package, PieChart as PieIcon, RefreshCw, Rocket, Search,
   ShieldAlert, ShoppingCart, Tag, Target, TrendingUp, Warehouse,
 } from 'lucide-react'
@@ -26,7 +26,6 @@ import {
   ALL_CATEGORIES_LABEL,
   CONCENTRATION_THRESHOLD_PCT,
   NO_ACTION_RECOMMENDATION,
-  buildReportingMonthOptions,
   currentReportingMonthKey,
   type ActionKey,
   type ContributionBandKey,
@@ -39,6 +38,7 @@ import {
 import type { ReportingCategory } from '@/lib/reporting/product-analytics-source'
 import type { ReportingPeriod } from '@/lib/reporting/reporting-period'
 import ExecutiveKpiValue from './ExecutiveKpiValue'
+import ReportingMonthSelector from './ReportingMonthSelector'
 import { REPORTING_COLORS, REPORTING_PANEL_CLASS, ReportingTabLoading } from './reportingChrome'
 
 interface ProductsTabProps {
@@ -46,6 +46,9 @@ interface ProductsTabProps {
   chartGridColor: string
   chartTickColor: string
   isDark: boolean
+  /** Dashboard-level Reporting Month; the tab keeps its own when rendered alone. */
+  month?: string
+  onMonthChange?: (month: string) => void
 }
 
 interface ReportResponse {
@@ -271,8 +274,10 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
 
 // ── Main component ─────────────────────────────────────────────────────────
 
-export default function ProductsTab({ userProfile, chartGridColor, chartTickColor }: ProductsTabProps) {
-  const [month, setMonth] = useState<string>(() => currentReportingMonthKey())
+export default function ProductsTab({ userProfile, chartGridColor, chartTickColor, month: monthProp, onMonthChange }: ProductsTabProps) {
+  const [localMonth, setLocalMonth] = useState<string>(() => currentReportingMonthKey())
+  const month = monthProp ?? localMonth
+  const setMonth = onMonthChange ?? setLocalMonth
   // The report opens consolidated; the user is never made to pick a category first.
   const [categoryId, setCategoryId] = useState<string>(ALL_CATEGORIES)
   const [availableMonths, setAvailableMonths] = useState<string[]>([])
@@ -348,13 +353,6 @@ export default function ProductsTab({ userProfile, chartGridColor, chartTickColo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month, categoryId, loadReport])
 
-  const monthOptions = useMemo(
-    () => buildReportingMonthOptions([...availableMonths, month]),
-    [availableMonths, month],
-  )
-  const monthIndex = monthOptions.findIndex((option) => option.value === month)
-  const olderMonth = monthIndex >= 0 ? monthOptions[monthIndex + 1]?.value : undefined
-  const newerMonth = monthIndex > 0 ? monthOptions[monthIndex - 1]?.value : undefined
 
   const report = response?.report ?? null
   const meta = response?.meta ?? null
@@ -448,53 +446,20 @@ export default function ProductsTab({ userProfile, chartGridColor, chartTickColo
   // ── Header ───────────────────────────────────────────────────────────────
   const controls = (
     <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:items-end">
-      <div className="space-y-1.5">
-        <label htmlFor="product-analytics-month" className="text-xs font-medium text-[var(--sera-muted)]">
-          Reporting Month
-        </label>
-        <div className="flex items-center gap-1.5">
-          <Select value={month} onValueChange={setMonth}>
-            <SelectTrigger
-              id="product-analytics-month"
-              className="h-10 min-w-0 flex-1 border-[var(--sera-line)] bg-white text-sm lg:h-9 lg:w-[190px] lg:flex-none"
-            >
-              <Calendar className="mr-2 h-3.5 w-3.5 shrink-0 text-[var(--sera-muted)]" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {monthOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline" size="icon"
-            className="h-10 w-10 shrink-0 border-[var(--sera-line)] lg:h-9 lg:w-9"
-            onClick={() => olderMonth && setMonth(olderMonth)}
-            disabled={!olderMonth}
-            title="Previous month"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="outline" size="icon"
-            className="h-10 w-10 shrink-0 border-[var(--sera-line)] lg:h-9 lg:w-9"
-            onClick={() => newerMonth && setMonth(newerMonth)}
-            disabled={!newerMonth}
-            title="Next month"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
-        {report ? (
-          <p className="text-[11px] leading-tight text-[var(--sera-muted)]">
+      <ReportingMonthSelector
+        id="product-analytics-month"
+        month={month}
+        onMonthChange={setMonth}
+        availableMonths={availableMonths}
+        caption={report ? (
+          <>
             <span className="font-medium text-[var(--sera-ink)]">{report.period.rangeLabel}</span>
             {report.period.isCurrentMonth ? ' (month to date)' : ''}
             <br className="sm:hidden" />
             <span className="sm:ml-1">vs {report.period.comparisonRangeLabel}</span>
-          </p>
+          </>
         ) : null}
-      </div>
+      />
 
       {/* Category is a dropdown, not another tab row: it scales as management
           adds categories and keeps the mobile header to one column. */}

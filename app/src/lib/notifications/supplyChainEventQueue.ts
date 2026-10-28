@@ -1,6 +1,8 @@
 import {
     deliveryChainForPreset,
     firstAvailableDeliveryChannel,
+    independentChannelsForPreset,
+    isMultiChannelPreset,
     isFallbackRoutingPreset,
     isNotificationRoutingPreset,
     resolveNotificationRoutingPreset,
@@ -181,6 +183,10 @@ export async function queueNotificationEvent(supabase: SupabaseLikeClient, input
         }
 
         channels = [chain[0]]
+    } else if (isMultiChannelPreset(routingPreset)) {
+        // Independent channels: queue every selected channel. queue_notification
+        // still skips a channel that is not enabled or has no active provider.
+        channels = independentChannelsForPreset(routingPreset)
     } else if (routingPreset === 'whatsapp_only') {
         channels = ['whatsapp']
     } else if (routingPreset === 'email_only') {

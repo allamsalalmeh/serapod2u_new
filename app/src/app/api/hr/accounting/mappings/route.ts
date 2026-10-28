@@ -137,7 +137,7 @@ export async function GET() {
             return NextResponse.json({ error: 'User has no organization' }, { status: 400 })
         }
         if (!(await hrCan({ userId: user.id, organizationId: userData.organization_id, roleCode: null, roleLevel: null },
-            'finance.payroll_integration.manage', () => true))) {
+            'finance.payroll_integration.manage'))) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
         }
 

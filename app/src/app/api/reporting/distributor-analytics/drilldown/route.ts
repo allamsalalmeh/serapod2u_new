@@ -19,7 +19,7 @@ export const dynamic = 'force-dynamic'
 
 /**
  * GET /api/reporting/distributor-analytics/drilldown
- *     ?metric=total_orders|active|new|inactive|returning
+ *     ?metric=total_orders|approved_orders|active|new|inactive|returning
  *     &month=YYYY-MM&distributor=all|<uuid>&status=all|<order_status>
  *
  * The rows behind one dashboard card, for the SAME scope the dashboard shows.
@@ -50,7 +50,7 @@ export async function GET(request: Request) {
     const { aggregate, source } = await fetchDistributorAnalyticsAggregate(supabase, month, distributor, status, now)
     const period = resolveDistributorReportPeriod(month, now)
 
-    if (metric === 'total_orders') {
+    if (metric === 'total_orders' || metric === 'approved_orders') {
       const all = await fetchReportingDistributors(supabase)
       const scoped = distributor === ALL_DISTRIBUTORS ? all : all.filter((row) => row.id === distributor)
       const orders = await fetchEligibleWindowOrders(supabase, { distributors: scoped, status, period, source })

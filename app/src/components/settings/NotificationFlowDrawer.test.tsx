@@ -9,7 +9,7 @@ vi.mock('./recipients/UserMultiSelect', () => ({
   UserMultiSelect: ({ selectedUserIds }: { selectedUserIds: string[] }) => <div data-testid="user-select">{selectedUserIds.length} selected</div>,
 }))
 
-const allAvailable = { whatsapp_only: true, email_only: true, sms_only: true, whatsapp_email_fallback: true, whatsapp_sms_email_fallback: true }
+const allAvailable = { whatsapp_only: true, email_only: true, sms_only: true, whatsapp_email_fallback: true, whatsapp_sms_email_fallback: true, whatsapp_sms: true, whatsapp_email: true, sms_email: true, whatsapp_sms_email: true }
 
 const orderSubmitted = {
   event_code: 'order_submitted',
@@ -259,7 +259,7 @@ describe('NotificationFlowDrawer', () => {
     renderDrawer({ type: { ...orderSubmitted, event_code: 'order_deleted', event_name: 'Order Deleted' }, setting: baseSetting({ event_code: 'order_deleted' }) })
     await userEvent.click(screen.getByRole('button', { name: 'Test notification' }))
     expect(screen.queryByRole('button', { name: 'Find recipients' })).toBeNull()
-    expect(screen.getByText(/available for Order Submitted, Approved, Rejected and Closed only/)).toBeTruthy()
+    expect(screen.getByText(/available for Supply Chain order, production, receiving and document notifications only/)).toBeTruthy()
   })
 
   it('shows a server-side unsupported test result as a failure, not a send', async () => {
@@ -308,5 +308,43 @@ describe('NotificationFlowDrawer', () => {
     expect(Object.fromEntries(params)).toMatchObject({ channel: 'sms', module: 'supply_chain', type: 'order_submitted' })
     expect(params.get('from')! < params.get('to')!).toBe(true)
     open.mockRestore()
+  })
+
+  it('Related organization is automatic when newly enabled and adds to Specific users', async () => {
+    const { onSave } = renderDrawer()
+    await userEvent.click(screen.getByRole('button', { name: /Edit recipients/ }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /Related organization/ }))
+    expect(screen.getAllByText('Uses the distributor or manufacturer linked to this transaction.').length).toBeGreaterThan(0)
+    const chips = within(screen.getByRole('list', { name: 'Selected recipients' })).getAllByRole('listitem').map((item) => item.textContent)
+    expect(chips).toEqual(['Order creator', 'Related organization · Linked to this transaction', 'Specific users · 1'])
+    expect(screen.queryByText(/Seller/)).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /Save changes/ }))
+    const saved = onSave.mock.calls[0][0].recipient_config
+    expect(saved.dynamic_target).toBe('transaction_counterparty')
+    expect(saved.recipient_targets).toMatchObject({ dynamic_org: true, users: true, order_creator: true })
+    expect(saved.recipient_users).toEqual(['user-a'])
+  })
+
+  it('keeps a saved explicit choice as saved and flags a saved setting with no organization', () => {
+    renderDrawer({ setting: baseSetting({ recipient_config: { dynamic_target: 'distributor', recipient_targets: { dynamic_org: true } } }) })
+    // The label appears in the summary bar and in the chip list, so check the chip list itself.
+    const chips = within(screen.getByRole('list', { name: 'Selected recipients' })).getAllByRole('listitem').map((item) => item.textContent)
+    expect(chips).toContain('Related organization · Distributor on this order (saved choice)')
+    cleanup()
+    renderDrawer({ setting: baseSetting({ recipient_config: { recipient_targets: { dynamic_org: true } } }) })
+    expect(screen.getAllByText(/notifies nobody/).length).toBeGreaterThan(0)
+  })
+
+  it('offers independent channels ("+") for order notifications, separate from fallback ("→")', async () => {
+    renderDrawer()
+    await userEvent.click(screen.getByRole('button', { name: 'Additional options' }))
+    const options = Array.from((screen.getByLabelText(/^Delivery for/) as HTMLSelectElement).options).map((option) => option.textContent)
+    expect(options).toContain('Custom · WhatsApp + SMS')
+    expect(options).toContain('Custom · WhatsApp → SMS → Email')
+    cleanup()
+    renderDrawer({ type: { ...orderSubmitted, category: 'security', event_code: 'password_reset_otp', event_name: 'Password Reset OTP' }, setting: baseSetting({ event_code: 'password_reset_otp' }) })
+    await userEvent.click(screen.getByRole('button', { name: 'Additional options' }))
+    const otpOptions = Array.from((screen.getByLabelText(/^Delivery for/) as HTMLSelectElement).options).map((option) => option.textContent)
+    expect(otpOptions.some((text) => text?.includes('+'))).toBe(false)
   })
 })

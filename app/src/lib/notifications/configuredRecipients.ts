@@ -10,10 +10,14 @@ import { expandNotificationRoleCodes } from '@/lib/notifications/recipientRoleCo
 import { normalizeAndDedupeManualEmails } from '@/lib/notifications/manualEmailAddresses'
 import { normalizeAndDedupeManualPhones, toSmsE164 } from '@/lib/notifications/manualPhoneNumbers'
 import { isSingleCreatorSource, ownerEmailFromPayload, ownerPhoneFromPayload, resolveRecipientTargets } from '@/lib/notifications/orderOwnerNotify'
+import { RELATED_ORG_EVENTS, resolveRelatedOrgContact, type RelatedOrgReason } from '@/lib/notifications/relatedOrganization'
 
 /** Order events whose payload can be rebuilt from an order (buildOrderEventPayload). */
 export const RESOLVABLE_ORDER_EVENTS = ['order_submitted', 'order_approved', 'order_rejected', 'order_closed'] as const
 export type ResolvableOrderEvent = typeof RESOLVABLE_ORDER_EVENTS[number]
+
+/** Events the Configure drawer can preview from a real order or document. */
+export const PREVIEWABLE_EVENTS: string[] = Array.from(RELATED_ORG_EVENTS)
 
 export type RecipientSource =
     | 'order_creator'
@@ -24,12 +28,23 @@ export type RecipientSource =
     | 'consumer'
     | 'manual_whatsapp'
     | 'event_address'
+    | 'related_org'
 
 export interface ResolvedRecipient {
     address: string
     source: RecipientSource
     name?: string | null
     userId?: string | null
+    /** Set for related_org: the organization the address belongs to. */
+    orgId?: string | null
+}
+
+/** Why a configured source added nobody for this event/channel (shown in preview and the outbox error). */
+export interface RecipientDiagnostic {
+    source: 'related_org' | 'users'
+    reason: RelatedOrgReason | 'users_unavailable'
+    message: string
+    orgId?: string | null
 }
 
 export interface ConfiguredRecipientInput {
@@ -40,6 +55,8 @@ export interface ConfiguredRecipientInput {
     /** Legacy columns on the notification_settings row. */
     setting?: { recipient_users?: string[] | null; recipient_roles?: string[] | null; recipient_custom?: string[] | null } | null
     payload: Record<string, any>
+    /** Receives a reason for every selected source that resolved nobody. */
+    diagnostics?: RecipientDiagnostic[]
 }
 
 export function splitConfiguredRecipients(value?: string | null): string[] {
@@ -63,11 +80,15 @@ export function normalizeRecipientAddress(channel: string, value: unknown): stri
 class RecipientList {
     private readonly byAddress = new Map<string, ResolvedRecipient>()
     constructor(private readonly channel: string) {}
-    add(values: Array<string | null | undefined>, source: RecipientSource, meta: Array<{ name?: string | null; userId?: string | null }> = []) {
+    add(values: Array<string | null | undefined>, source: RecipientSource, meta: Array<{ name?: string | null; userId?: string | null; orgId?: string | null }> = []) {
         values.forEach((value, index) => {
             const address = normalizeRecipientAddress(this.channel, value)
-            if (!address || this.byAddress.has(address)) return
-            this.byAddress.set(address, { address, source, name: meta[index]?.name ?? null, userId: meta[index]?.userId ?? null })
+            // Emails compare case-insensitively; the first source to supply an address keeps it.
+            const key = this.channel === 'email' ? address.toLowerCase() : address
+            if (!address || this.byAddress.has(key)) return
+            const entry: ResolvedRecipient = { address, source, name: meta[index]?.name ?? null, userId: meta[index]?.userId ?? null }
+            if (meta[index]?.orgId) entry.orgId = meta[index]!.orgId
+            this.byAddress.set(key, entry)
         })
     }
     list() { return Array.from(this.byAddress.values()) }
@@ -76,6 +97,8 @@ class RecipientList {
 /**
  * Every configured source except the creator-only shortcut. Roles are always
  * limited to `orgId`, the organization that owns the notification setting.
+ * Sources are additive: Related organization and Specific users are a union,
+ * deduplicated per channel; neither replaces the other.
  */
 export async function collectConfiguredRecipients(supabase: any, input: ConfiguredRecipientInput): Promise<ResolvedRecipient[]> {
     const { orgId, eventCode, channel, payload, setting } = input
@@ -89,12 +112,32 @@ export async function collectConfiguredRecipients(supabase: any, input: Configur
         list.add([channel === 'email' ? ownerEmailFromPayload(payload) : ownerPhoneFromPayload(payload)], 'order_creator', [{ name: payload.created_by || null, userId: payload.created_by_id || null }])
     }
 
+    // Related organization: the distributor/manufacturer on this event's own transaction,
+    // reached at its organization master-data contact. Never another organization.
+    if (targets.dynamic_org) {
+        const contact = await resolveRelatedOrgContact(supabase, { orgId, eventCode, channel, dynamicTarget: recipientConfig.dynamic_target, payload })
+        if (contact.status === 'resolved') {
+            list.add([contact.address], 'related_org', [{ name: contact.organization.name, orgId: contact.organization.id }])
+        } else {
+            input.diagnostics?.push({ source: 'related_org', reason: contact.reason, message: contact.message, orgId: contact.organization?.id ?? null })
+        }
+    }
+
     const configUsers = recipientConfig.recipient_users
     const legacyUsers = setting?.recipient_users
     const userIds = configUsers?.length ? configUsers : legacyUsers?.length ? legacyUsers : []
     if (targets.users && userIds.length) {
         const { data: users } = await supabase.from('users').select('id, full_name, phone, email').in('id', userIds).eq('is_active', true)
         if (users) list.add(users.map(contactOf), 'users', users.map((user: any) => ({ name: user.full_name, userId: user.id })))
+        const found = new Set((users || []).map((user: any) => user.id))
+        const missing = userIds.filter((id: string) => !found.has(id))
+        if (missing.length) {
+            input.diagnostics?.push({ source: 'users', reason: 'users_unavailable', message: `${missing.length} selected user${missing.length === 1 ? ' is' : 's are'} deleted or inactive and receive nothing.` })
+        }
+        const withoutContact = (users || []).filter((user: any) => !String(contactOf(user) || '').trim())
+        if (withoutContact.length) {
+            input.diagnostics?.push({ source: 'users', reason: 'users_unavailable', message: `${withoutContact.map((user: any) => user.full_name || 'A selected user').join(', ')} ${withoutContact.length === 1 ? 'has' : 'have'} no ${channel === 'email' ? 'email' : 'phone'}.` })
+        }
     }
 
     const configuredRoles = Array.isArray(recipientConfig.roles) && recipientConfig.roles.length > 0
@@ -166,8 +209,10 @@ export async function previewNotificationRecipients(supabase: any, input: Previe
     return list.list()
 }
 
-/** Configured sources that no sender uses, so a preview must not imply them. */
-export function sourcesNotUsedWhenSending(recipientConfig: Record<string, any> | null | undefined): string[] {
-    const targets = recipientConfig?.recipient_targets || {}
-    return targets.dynamic_org ? ['dynamic_org'] : []
+/**
+ * Configured sources that no sender uses, so a preview must not imply them.
+ * Related organization is resolved by the worker now; nothing is unused.
+ */
+export function sourcesNotUsedWhenSending(_recipientConfig: Record<string, any> | null | undefined): string[] {
+    return []
 }

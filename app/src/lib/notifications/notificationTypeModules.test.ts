@@ -14,7 +14,8 @@ describe('groupByModule', () => {
     const types = Object.keys(CATEGORY_MODULE).map((category) => type(category, `${category}_event`))
     const sections = groupByModule(types)
     expect(sections.map((s) => s.name)).toEqual(['Supply Chain', 'Customer & Growth', 'Platform & Settings'])
-    expect(sections[0].categories.map((c) => c.label)).toEqual(['Order Status', 'Order Document', 'Inventory & Stock', 'Return Product'])
+    // Unmapped order/document events stay visible under neutral labels; mapped ones use the display groups.
+    expect(sections[0].categories.map((c) => c.label)).toEqual(['Other order notifications', 'Other document notifications', 'Inventory & Stock', 'Returns'])
     expect(sections[1].categories.map((c) => c.label)).toEqual(['QR & Consumer', 'RoadTour', 'E-Commerce'])
     expect(sections[2].categories.map((c) => c.label)).toEqual(['Security & OTP', 'User Account', 'Delete Organization Masterdata', 'System Check'])
     expect(sections.flatMap((s) => s.categories.flatMap((c) => c.types)).length).toBe(types.length)
@@ -57,7 +58,7 @@ describe('resolveEventDelivery', () => {
 })
 
 describe('filterCategoryTypes', () => {
-  const category = { category: 'order', label: 'Order Status', types: [type('order', 'a', 'Order Approved', 'Sent on approval'), type('order', 'b', 'Order Rejected', 'Sent on rejection')] }
+  const category = { category: 'order', label: 'Order Status', routingCategory: 'order', sharesRoutingWith: [] as string[], types: [type('order', 'a', 'Order Approved', 'Sent on approval'), type('order', 'b', 'Order Rejected', 'Sent on rejection')] }
   const enabled = (t: { event_code: string }) => t.event_code === 'a'
 
   it('matches names and descriptions', () => {

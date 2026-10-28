@@ -9,6 +9,9 @@ const rpc = vi.fn(async (fn: string, _args?: any): Promise<any> => fn === 'sa_ac
   : assignErrors.length ? { data: null, error: assignErrors.shift() } : { data: 'assignment-1', error: null })
 const writes = () => rpc.mock.calls.filter(c => c[0] !== 'sa_actor_may_assign_profile')
 let actorResult: any = null
+// The assignment row the revoke pre-check reads (undefined = not found); readError = the read itself fails.
+let assignmentRow: any = { status: 'active' }
+let assignmentReadError: any = null
 let orgType = 'HQ'
 // Eligible organization types of the non-ESS test policy (an ordering policy: HQ, Distributor and Shop).
 let otherOrgTypes: string[] = ['HQ', 'DIST', 'SHOP']
@@ -19,6 +22,7 @@ vi.mock('@/lib/security-access/admin-api', () => ({
     rpc,
     from: (table: string) => table === 'organizations'
       ? { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { org_type_code: orgType } }) }) }) }
+      : table === 'sa_role_assignments' ? { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: assignmentReadError ? null : assignmentRow ?? null, error: assignmentReadError }) }) }) }
       : table === 'sa_scope_definitions' ? { select: () => ({ in: async () => ({ data: [{ id: 's', display_name: 'Serapod HQ' }] }) }) }
       : { select: () => ({ eq: (_c: string, id: string) => ({ maybeSingle: async () => ({ data: { role_key: id === ESS ? 'employee-self-service' : 'receiver', status: 'active', name: 'GL Clerk', email: 'supply@dev.com', applicable_org_types: id === ESS ? ['HQ'] : otherOrgTypes, permissions: id === ESS ? [] : [{ permission: { permission_key: 'supply_chain.order.create' } }] } }) }) }) },
   } })),
@@ -42,7 +46,7 @@ const body = (roleId: string) => new NextRequest('http://t/api', { method: 'POST
   action: 'grant', userId: '00000000-0000-4000-8000-0000000000aa', roleId, organizationId: '00000000-0000-4000-8000-0000000000bb',
   scopeIds: ['00000000-0000-4000-8000-000000000011'], reason: 'Needs it' }) })
 
-beforeEach(() => { rpc.mockClear(); mayAssign = true; assignErrors = []; actorResult = null; validateScopeGrant.mockClear(); scopeResult = { ok: true }; heldResult = { held: false }; findHeldGrant.mockClear(); orgType = 'HQ'; otherOrgTypes = ['HQ', 'DIST', 'SHOP'] })
+beforeEach(() => { rpc.mockClear(); mayAssign = true; assignErrors = []; actorResult = null; assignmentRow = { status: 'active' }; assignmentReadError = null; validateScopeGrant.mockClear(); scopeResult = { ok: true }; heldResult = { held: false }; findHeldGrant.mockClear(); orgType = 'HQ'; otherOrgTypes = ['HQ', 'DIST', 'SHOP'] })
 
 describe('POST /api/security-access/assignments — Employee Self Service is HQ-only', () => {
   it.each(['DIST', 'SHOP', 'MFG', 'WH'])('rejects an ESS grant inside a %s organization before the database is called', async (type) => {
@@ -259,5 +263,73 @@ describe('POST /api/security-access/assignments — one-click restore of a revok
     const { POST } = await import('./route')
     expect((await POST(restoreBody({ assignmentId: 'not-a-uuid' }))).status).toBe(400)
     expect(restoreMock.calls).toEqual([])
+  })
+})
+
+describe('POST /api/security-access/assignments — revoke one assignment', () => {
+  const ID = '00000000-0000-4000-8000-0000000000cc'
+  const revoke = (reason: any) => new NextRequest('http://t/api', { method: 'POST', body: JSON.stringify({ action: 'revoke', assignmentId: ID, reason }) })
+  const revokes = () => rpc.mock.calls.filter(c => c[0] === 'sa_revoke_assignment')
+
+  it('revokes exactly the selected assignment through the audited database function, with the trimmed reason', async () => {
+    const { POST } = await import('./route')
+    const res = await POST(revoke('  Removed from the e-commerce team  '))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, assignmentId: ID })
+    // One call, one id: sa_revoke_assignment authorizes in the membership organization, updates only this row and
+    // writes the access change log (actor, assignment, reason) in the same transaction.
+    expect(revokes()).toEqual([['sa_revoke_assignment', { p_actor: 'admin', p_assignment: ID, p_reason: 'Removed from the e-commerce team' }]])
+    expect(writes()).toHaveLength(1)
+  })
+
+  it.each([['missing', undefined], ['empty', ''], ['too short ("test")', 'test'], ['whitespace only', '      '], ['too long', 'x'.repeat(501)]])(
+    'refuses a %s reason before the database is called', async (_n, reason) => {
+      const { POST } = await import('./route')
+      expect((await POST(revoke(reason))).status).toBe(400)
+      expect(writes()).toEqual([])
+    })
+
+  it('an already revoked assignment is refused (409), never reported as revoked, and the database is not called', async () => {
+    assignmentRow = { status: 'revoked' }
+    const { POST } = await import('./route')
+    const res = await POST(revoke('No longer needed'))
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ code: 'sa_assignment_already_revoked', error: expect.stringMatching(/already revoked\. Nothing was changed/) })
+    expect(writes()).toEqual([])
+  })
+
+  it('an unknown assignment is refused (404) without calling the revoke', async () => {
+    assignmentRow = null
+    const { POST } = await import('./route')
+    const res = await POST(revoke('No longer needed'))
+    expect(res.status).toBe(404)
+    expect((await res.json()).code).toBe('sa_assignment_not_found')
+    expect(writes()).toEqual([])
+  })
+
+  it('a failed pre-check is an error (503), never a success', async () => {
+    assignmentReadError = { message: 'connection reset' }
+    const { POST } = await import('./route')
+    const res = await POST(revoke('No longer needed'))
+    expect(res.status).toBe(503)
+    expect(writes()).toEqual([])
+  })
+
+  it.each([['outside the actor\'s organization scope', 'sa_authorization_required'], ['database failure', 'could not serialize access']])(
+    'a database refusal (%s) is returned as an error, never as revoked', async (_n, message) => {
+      assignErrors = [{ message }]
+      const { POST } = await import('./route')
+      const res = await POST(revoke('No longer needed'))
+      expect(res.status).toBe(409)   // governanceError (mocked here) maps it
+      expect((await res.json()).ok).toBeUndefined()
+      expect(revokes()).toHaveLength(1)
+    })
+
+  it('an actor without security.role.assign is refused before anything is read or changed', async () => {
+    const { NextResponse } = await import('next/server')
+    actorResult = NextResponse.json({ error: 'Forbidden', code: 'sa_forbidden' }, { status: 403 })
+    const { POST } = await import('./route')
+    expect((await POST(revoke('No longer needed'))).status).toBe(403)
+    expect(rpc).not.toHaveBeenCalled()
   })
 })

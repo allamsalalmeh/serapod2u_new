@@ -48,6 +48,62 @@ describe('readableOrganizations', () => {
     const { readableOrganizations } = await import('./scope')
     await expect(readableOrganizations('u', 'inventory.report.view', () => ({ all: true }))).resolves.toEqual({ all: false, organizationIds: [] })
   })
+
+  it('an active Root Administrator resolves to global scope (all organizations)', async () => {
+    mode = 'NEW_ENFORCED'
+    rpc.mockImplementation(async (fn: string) => (
+      fn === 'sa_actor_is_root'
+        ? { data: true, error: null }
+        : { data: ['hq', 'wh-1', 'shop-1'], error: null }
+    ))
+    const { readableOrganizations } = await import('./scope')
+    await expect(readableOrganizations('root', 'platform.system_logs.view', () => ({ all: false, organizationIds: [] }))).resolves.toEqual({ all: true })
+    expect(rpc).toHaveBeenCalledWith('sa_actor_is_root', { p_actor: 'root' })
+  })
+
+  it('LEGACY_RETIRED also resolves Root to global scope (legacy not consulted)', async () => {
+    mode = 'LEGACY_RETIRED'
+    rpc.mockImplementation(async (fn: string) => (
+      fn === 'sa_actor_is_root'
+        ? { data: true, error: null }
+        : { data: ['hq'], error: null }
+    ))
+    const { readableOrganizations } = await import('./scope')
+    await expect(readableOrganizations('root', 'platform.system_logs.view', () => ({ all: true }))).resolves.toEqual({ all: true })
+  })
+
+  it('a scoped non-Root actor stays scoped (never global)', async () => {
+    mode = 'NEW_ENFORCED'
+    rpc.mockImplementation(async (fn: string) => (
+      fn === 'sa_actor_is_root'
+        ? { data: false, error: null }
+        : { data: ['hq', 'wh-1'], error: null }
+    ))
+    const { readableOrganizations } = await import('./scope')
+    await expect(readableOrganizations('u', 'inventory.report.view', () => ({ all: true }))).resolves.toEqual({ all: false, organizationIds: ['hq', 'wh-1'] })
+  })
+
+  it('an expired or revoked Root is not global (sa_actor_is_root false)', async () => {
+    mode = 'NEW_ENFORCED'
+    rpc.mockImplementation(async (fn: string) => (
+      fn === 'sa_actor_is_root'
+        ? { data: false, error: null }
+        : { data: ['hq'], error: null }
+    ))
+    const { readableOrganizations } = await import('./scope')
+    await expect(readableOrganizations('u', 'platform.system_logs.view', () => ({ all: true }))).resolves.toEqual({ all: false, organizationIds: ['hq'] })
+  })
+
+  it('falls back to the S&A list when Root Access is not installed (no sa_actor_is_root)', async () => {
+    mode = 'NEW_ENFORCED'
+    rpc.mockImplementation(async (fn: string) => (
+      fn === 'sa_actor_is_root'
+        ? { data: null, error: { code: 'PGRST202' } }
+        : { data: ['hq'], error: null }
+    ))
+    const { readableOrganizations } = await import('./scope')
+    await expect(readableOrganizations('u', 'platform.system_logs.view', () => ({ all: true }))).resolves.toEqual({ all: false, organizationIds: ['hq'] })
+  })
 })
 
 describe('targetProtectionAllows', () => {

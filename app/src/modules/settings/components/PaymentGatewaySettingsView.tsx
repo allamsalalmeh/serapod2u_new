@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   CreditCard,
   Check,
@@ -112,7 +112,7 @@ interface GatewayRow {
 
 export default function PaymentGatewaySettingsView({ organizationId, canEdit }: Props) {
   // Cast to any: new tables not in generated types until migration runs
-  const supabase: any = createClient()
+  const supabase: any = useMemo(() => createClient(), [])
   const [gateways, setGateways] = useState<Map<string, GatewayRow>>(new Map())
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<string | null>(null)
@@ -129,6 +129,7 @@ export default function PaymentGatewaySettingsView({ organizationId, canEdit }: 
       .select('*')
       .eq('organization_id', organizationId)
 
+    if (error) setMessage({ type: 'error', text: 'Gateway settings could not be loaded. Please refresh or contact your administrator.' })
     if (!error && data) {
       const map = new Map<string, GatewayRow>()
       data.forEach((row: any) => {
@@ -148,6 +149,15 @@ export default function PaymentGatewaySettingsView({ organizationId, canEdit }: 
     loadGateways()
   }, [loadGateways])
 
+  // A stale open page must get the same authoritative denial/reference as an API action.
+  const checkInteractiveAccess = async () => {
+    const response = await fetch('/api/payment-gateway/access', { method: 'POST' })
+    if (response.ok) return true
+    // The shared observer owns authorization/session/outage notifications; no duplicate inline error.
+    if (![401, 403, 503].includes(response.status)) setMessage({ type: 'error', text: 'Unable to check access. Please retry.' })
+    return false
+  }
+
   // ── Save / Update ──────────────────────────────────────────────
 
   const handleSave = async (providerKey: string, credentials: Record<string, string>, activate: boolean) => {
@@ -157,6 +167,7 @@ export default function PaymentGatewaySettingsView({ organizationId, canEdit }: 
     const existing = gateways.get(providerKey)
 
     try {
+      if (!await checkInteractiveAccess()) return
       if (activate) {
         // Deactivate all other providers first
         const { error: deactErr } = await supabase
@@ -165,21 +176,21 @@ export default function PaymentGatewaySettingsView({ organizationId, canEdit }: 
           .eq('organization_id', organizationId)
           .neq('provider', providerKey)
 
-        if (deactErr) console.error('Deactivation error:', deactErr)
+        if (deactErr) throw deactErr
       }
 
       if (existing?.id) {
         // Update
-        const { error } = await supabase
+        const { data: changed, error } = await supabase
           .from('payment_gateway_settings')
           .update({
             credentials,
             is_active: activate,
             updated_at: new Date().toISOString(),
           })
-          .eq('id', existing.id)
+          .eq('id', existing.id).select('id').maybeSingle()
 
-        if (error) throw error
+        if (error || !changed) throw error ?? new Error('write_not_confirmed')
       } else {
         // Insert
         const { error } = await supabase.from('payment_gateway_settings').insert({
@@ -194,7 +205,7 @@ export default function PaymentGatewaySettingsView({ organizationId, canEdit }: 
       setMessage({ type: 'success', text: `${providerKey} settings saved${activate ? ' & activated' : ''}.` })
       await loadGateways()
     } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Failed to save' })
+      setMessage({ type: 'error', text: 'Settings could not be saved. Access or configuration may have changed. Please refresh and retry.' })
     } finally {
       setSaving(null)
     }
@@ -204,11 +215,14 @@ export default function PaymentGatewaySettingsView({ organizationId, canEdit }: 
     const existing = gateways.get(providerKey)
     if (!existing?.id) return
     setSaving(providerKey)
+    setMessage(null)
     try {
-      await supabase
+      if (!await checkInteractiveAccess()) return
+      const { data: changed, error } = await supabase
         .from('payment_gateway_settings')
         .update({ is_active: false })
-        .eq('id', existing.id)
+        .eq('id', existing.id).select('id').maybeSingle()
+      if (error || !changed) throw error ?? new Error('write_not_confirmed')
       setMessage({ type: 'success', text: `${providerKey} deactivated.` })
       await loadGateways()
     } catch {

@@ -24,8 +24,36 @@ export function isFanoutChild(payload: Record<string, any> | null | undefined): 
     return Boolean(payload && payload[FANOUT_MARKER])
 }
 
-export function fanoutChildPayload(payload: Record<string, any> | null | undefined): Record<string, any> {
-    return { ...(payload || {}), [FANOUT_MARKER]: true }
+/** Audit record of who a row was resolved to, kept on the row across retries. */
+export const RESOLVED_RECIPIENT_KEY = '_resolved_recipient'
+export type ResolvedRecipientAudit = { source: string; name?: string | null; org_id?: string | null; user_id?: string | null; resolved_at: string }
+
+export function fanoutChildPayload(
+    payload: Record<string, any> | null | undefined,
+    recipient?: Omit<ResolvedRecipientAudit, 'resolved_at'> | null,
+): Record<string, any> {
+    const child: Record<string, any> = { ...(payload || {}), [FANOUT_MARKER]: true }
+    delete child[RESOLVED_RECIPIENT_KEY]
+    if (recipient) child[RESOLVED_RECIPIENT_KEY] = { ...recipient, resolved_at: new Date().toISOString() }
+    return child
+}
+
+/**
+ * A row that already has its destination keeps it: fan-out children, and any
+ * row being retried (retry_count > 0) after a destination was resolved and
+ * written. Retrying never re-reads master data, so a changed organization
+ * contact cannot silently retarget a message that was already queued.
+ */
+export function keepsQueuedAddress(input: {
+    payload: Record<string, any> | null | undefined
+    channel: string
+    toPhone?: string | null
+    toEmail?: string | null
+    retryCount?: number | null
+}): boolean {
+    const hasAddress = Boolean(input.channel === 'email' ? input.toEmail : input.toPhone)
+    if (!hasAddress) return false
+    return isFanoutChild(input.payload) || Number(input.retryCount || 0) > 0
 }
 
 /**
@@ -44,6 +72,9 @@ export function fanoutChildKeepsAddress(
 /** The rows that belong to one notification (an order, or one scheduled report run). */
 export function fanoutScope(payload: Record<string, any> | null | undefined): Record<string, string> | null {
     const orderNo = String(payload?.order_no || '').trim()
+    // Two documents of one order (deposit and balance payment) are two notifications.
+    const docNo = String(payload?.doc_no || '').trim()
+    if (orderNo && docNo) return { order_no: orderNo, doc_no: docNo }
     if (orderNo) return { order_no: orderNo }
     const reportKey = String(payload?.report_key || '').trim()
     return reportKey ? { report_key: reportKey } : null

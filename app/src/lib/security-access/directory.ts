@@ -58,7 +58,7 @@ export function mapDirectoryError(error: any): DirectoryFailure {
 const PERSON_SELECT = [
   'id', 'full_name', 'email', 'role_code', 'is_active', 'organization_id', 'principal_type', 'account_status',
   'organization:organizations!fk_users_organization(org_name,org_type_code)',
-  'membership:sa_organization_memberships!sa_organization_memberships_user_id_fkey(id,status,is_primary,membership_type,organization_id,organization:organizations(org_name,org_type_code),assignments:sa_role_assignments!sa_role_assignments_membership_id_fkey(id,status,source,effective_from,effective_until,assignment_reason,role:sa_business_roles(id,role_key,name,source),scopes:sa_assignment_scopes(scope:sa_scope_definitions(id,scope_type,scope_value,display_name))))',
+  'membership:sa_organization_memberships!sa_organization_memberships_user_id_fkey(id,status,is_primary,membership_type,organization_id,organization:organizations(org_name,org_type_code),assignments:sa_role_assignments!sa_role_assignments_membership_id_fkey(id,status,source,effective_from,effective_until,assignment_reason,role:sa_business_roles(id,role_key,name,source,status),scopes:sa_assignment_scopes(scope:sa_scope_definitions(id,scope_type,scope_value,display_name,status))))',
 ].join(',')
 
 export interface DirectoryResult {
