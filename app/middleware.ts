@@ -1,7 +1,7 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { resolvePortalHomePath } from '@/lib/serapp/access'
-import { resolveMarketingHostRewrite } from '@/lib/hosts/site-hosts'
+import { resolveMarketingHostRewrite, resolveSiteSplitRoute } from '@/lib/hosts/site-hosts'
 import {
   extractQRCodeFromPath,
   extractTokenFromQRCode,
@@ -88,6 +88,10 @@ async function handleQRSecurityRedirect(
 }
 
 export async function middleware(request: NextRequest) {
+  // 0) Main site / store / portal addresses. A no-op on hosts outside an active split group.
+  const siteSplit = resolveSiteSplitRoute(request)
+  if (siteSplit) return siteSplit
+
   // 1) QR security redirect – may return a redirect response
   const qrRedirect = await handleQRSecurityRedirect(request);
   if (qrRedirect) return qrRedirect;

@@ -1,7 +1,9 @@
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { redirect } from 'next/navigation'
+import { headers } from 'next/headers'
 import LoginPageClient from '@/components/auth/LoginPageClient'
+import { loginModeForHost } from '@/lib/hosts/site-split'
 import { listLoginHeroBanners } from '@/lib/storefront/banners'
 import { getStorageUrl } from '@/lib/utils'
 
@@ -83,10 +85,14 @@ export default async function LoginPage() {
     console.warn('Failed to load login banners:', err)
   }
 
+  const requestHeaders = await headers()
+  const hostMode = loginModeForHost((requestHeaders.get('x-forwarded-host') || requestHeaders.get('host') || '').split(',')[0])
+
   return (
     <LoginPageClient
       branding={branding}
       loginBanners={loginBanners}
+      hostMode={hostMode}
     />
   )
 }
