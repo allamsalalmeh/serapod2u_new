@@ -1,7 +1,8 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { resolvePortalHomePath } from '@/lib/serapp/access'
-import { resolveMarketingHostRewrite, resolveSiteSplitRoute } from '@/lib/hosts/site-hosts'
+import { getRequestHostname, resolveMarketingHostRewrite, resolveSiteSplitRoute } from '@/lib/hosts/site-hosts'
+import { phoneAppSignInKeepsMainSite } from '@/lib/hosts/site-split'
 import {
   extractQRCodeFromPath,
   extractTokenFromQRCode,
@@ -227,7 +228,11 @@ export async function middleware(request: NextRequest) {
 
         // Only redirect if not already on login page
         if (request.nextUrl.pathname !== '/login' && request.nextUrl.pathname !== '/forgot-password') {
-          response = NextResponse.redirect(new URL('/login', request.url))
+          const loginUrl = new URL('/login', request.url)
+          if (phoneAppSignInKeepsMainSite(getRequestHostname(request), request.nextUrl.pathname)) {
+            loginUrl.searchParams.set('next', `${request.nextUrl.pathname}${request.nextUrl.search || ''}`)
+          }
+          response = NextResponse.redirect(loginUrl)
 
           // Clear ALL session cookies
           const cookieNames = [

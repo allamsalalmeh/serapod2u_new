@@ -134,6 +134,11 @@ export function decideSiteRoute(
   return to(owner === 'phone-app' ? 'admin' : owner)
 }
 
+/** On the split main site, a SerApp / HR sign-in must say where it came from so it stays on that site. */
+export function phoneAppSignInKeepsMainSite(hostname: string | null | undefined, pathname: string) {
+  return siteForHost(hostname)?.role === 'main' && underPrefix(pathname, PHONE_APP_PREFIXES)
+}
+
 /** The login page's mode on this address: business on the portal, store on the store, unchanged elsewhere. */
 export function loginModeForHost(hostname: string | null | undefined): 'business' | 'store' | null {
   const site = siteForHost(hostname)

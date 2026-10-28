@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { NextRequest } from 'next/server'
-import { decideSiteRoute, isStoreSiteHost, loginModeForHost, pathOwner, splitSiteOrigin } from './site-split'
+import { decideSiteRoute, isStoreSiteHost, loginModeForHost, pathOwner, phoneAppSignInKeepsMainSite, splitSiteOrigin } from './site-split'
 import { sameHostOrigin } from './same-host'
 import { publicOriginFromRequest } from '@/lib/http/public-origin'
 
@@ -94,6 +94,14 @@ describe('site split: store address', () => {
 })
 
 describe('site split: helpers', () => {
+  it('SerApp / HR sign-in on the split main site keeps its page; nowhere else', () => {
+    expect(phoneAppSignInKeepsMainSite(MAIN, '/serapp/conversation')).toBe(true)
+    expect(phoneAppSignInKeepsMainSite(MAIN, '/hr/mobile/home')).toBe(true)
+    expect(phoneAppSignInKeepsMainSite(MAIN, '/dashboard')).toBe(false)
+    expect(phoneAppSignInKeepsMainSite(ADMIN, '/serapp/conversation')).toBe(false)
+    expect(phoneAppSignInKeepsMainSite('www.serapod2u.com', '/serapp/conversation')).toBe(false)
+  })
+
   it('classifies paths', () => {
     expect(pathOwner('/storefront')).toBe('admin')
     expect(pathOwner('/store')).toBe('store')
