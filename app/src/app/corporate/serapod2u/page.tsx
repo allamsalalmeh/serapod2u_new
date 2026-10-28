@@ -16,7 +16,7 @@ async function storeProducts(): Promise<LandingProduct[]> {
   try {
     const { products } = await listProducts({ sort: 'newest', limit: 16 })
     return products
-      .filter((p) => p.image_url && p.media_type === 'image')
+      .filter((p) => p.image_url && p.media_type === 'image' && !/\btest\b/i.test(p.product_name))
       .map((p) => ({
         id: p.id,
         name: p.product_name,

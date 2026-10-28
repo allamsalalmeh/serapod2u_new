@@ -457,7 +457,7 @@ function ProductCard({ product }: { product: LandingProduct }) {
     <a href={`/store/products/${product.id}`} className="block w-[230px] shrink-0 sm:w-[260px]">
       <TiltCard max={8} className="h-full">
         <div className="group h-full overflow-hidden rounded-3xl border border-white/10 bg-white shadow-[0_24px_50px_-28px_rgba(0,0,0,0.8)]">
-          <div className="relative aspect-square overflow-hidden bg-[#f3f4f6]">
+          <div className="relative aspect-square overflow-hidden bg-white">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={product.image}
@@ -507,11 +507,12 @@ function LiveProducts({ products }: { products: LandingProduct[] }) {
 
       <div className="mt-12 space-y-6">
         {rows.map((row, r) => {
-          const loop = row.length >= 4 ? [...row, ...row] : row
+          const moving = row.length >= 4
+          const loop = moving ? [...row, ...row] : row
           return (
-            <div key={r} className="s2u-marquee overflow-hidden py-3">
+            <div key={r} className={moving ? 's2u-marquee overflow-hidden py-3' : 'overflow-x-auto py-3'}>
               <div
-                className={`s2u-marquee-track gap-6 px-3 ${r === 1 ? 's2u-marquee-track--reverse' : ''} ${row.length < 4 ? 'mx-auto' : ''}`}
+                className={`s2u-marquee-track gap-6 px-5 sm:px-8 ${r === 1 ? 's2u-marquee-track--reverse' : ''} ${moving ? '' : 'lg:mx-auto'}`}
                 style={{
                   ['--s2u-marquee-duration' as string]: `${Math.max(30, row.length * 7)}s`,
                   ...(row.length < 4 ? { animation: 'none' } : {}),
@@ -617,8 +618,8 @@ function OutdoorColourways({ outdoorUrl }: { outdoorUrl: string }) {
           </Reveal>
         </div>
 
-        <div className="relative h-[520px] sm:h-[620px]">
-          <motion.div style={{ y: y1 }} className="absolute left-0 top-6 w-[55%]">
+        <div className="relative h-[540px] sm:h-[720px]">
+          <motion.div style={{ y: y1 }} className="absolute left-0 top-[12%] w-[54%]">
             <TiltCard max={6}>
               <div className="relative aspect-[3/4] overflow-hidden rounded-3xl shadow-[0_40px_80px_-40px_rgba(18,20,23,0.6)]">
                 <Image src="/outdoor/brand/photos/artboard-2.jpg" alt="Serapod Outdoor moonchair and tumbler" fill sizes="(min-width: 1024px) 340px, 55vw" className="object-cover" />
@@ -632,10 +633,10 @@ function OutdoorColourways({ outdoorUrl }: { outdoorUrl: string }) {
               </div>
             </TiltCard>
           </motion.div>
-          <motion.div style={{ y: y3 }} className="absolute bottom-0 right-[8%] w-[46%]">
+          <motion.div style={{ y: y3 }} className="absolute bottom-0 right-0 w-[42%]">
             <TiltCard max={6}>
               <div className="relative aspect-[3/4] overflow-hidden rounded-3xl shadow-[0_40px_80px_-40px_rgba(18,20,23,0.6)]">
-                <Image src="/outdoor/brand/photos/artboard-5.jpg" alt="Serapod Outdoor tumbler and camping mat" fill sizes="(min-width: 1024px) 280px, 46vw" className="object-cover" />
+                <Image src="/outdoor/brand/photos/artboard-5.jpg" alt="Serapod Outdoor tumbler and camping mat" fill sizes="(min-width: 1024px) 260px, 42vw" className="object-cover" />
               </div>
             </TiltCard>
           </motion.div>
