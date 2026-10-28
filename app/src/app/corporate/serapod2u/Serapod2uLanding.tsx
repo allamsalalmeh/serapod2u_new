@@ -11,7 +11,7 @@ import {
   useSpring,
   useTransform,
 } from 'framer-motion'
-import { ArrowRight, ArrowUpRight, LogIn, ShoppingBag } from 'lucide-react'
+import { ArrowRight, ArrowUpRight } from 'lucide-react'
 import './serapod2u.css'
 
 export interface LandingProduct {
@@ -25,7 +25,6 @@ export interface LandingProduct {
 /** Store, login and product links are relative: the middleware sends each to its own address. */
 const STORE_HREF = '/store'
 const LOGIN_HREF = '/login'
-const CUSTOMER_LOGIN_HREF = '/login?mode=store'
 
 const EASE = [0.22, 1, 0.36, 1] as const
 
@@ -47,15 +46,14 @@ function brands(outdoorUrl: string): Brand[] {
       href: STORE_HREF,
       cta: 'Shop the store',
       mark: (
-        <span className="flex h-full w-full items-center justify-center rounded-2xl bg-[var(--s2u-orange)] text-white">
-          <ShoppingBag className="h-6 w-6" />
-        </span>
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src="/icons/icon-192x192.png" alt="" className="h-full w-full rounded-2xl bg-white object-contain" />
       ),
     },
     {
       id: 'outdoor',
       name: 'Serapod Outdoor',
-      line: 'Moonchairs, camping mats and tumblers in Serapod Outdoor colourways.',
+      line: 'Moonchairs, camping mats and tumblers.',
       href: outdoorUrl,
       cta: 'Explore Outdoor',
       mark: (
@@ -151,18 +149,11 @@ function Header({ outdoorUrl }: { outdoorUrl: string }) {
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/brand/serapod-wordmark-light.png" alt="Serapod" className="h-7 w-auto sm:h-8" width={160} height={44} />
         <nav className="flex items-center gap-1 sm:gap-2">
-          <a href={STORE_HREF} className="hidden rounded-full px-3 py-2 text-sm font-medium text-white/75 transition-colors hover:text-white sm:inline-flex">
+          <a href={STORE_HREF} className="rounded-full px-3 py-2 text-sm font-medium text-white/75 transition-colors hover:text-white">
             Store
           </a>
-          <a href={outdoorUrl} className="hidden rounded-full px-3 py-2 text-sm font-medium text-white/75 transition-colors hover:text-white sm:inline-flex">
+          <a href={outdoorUrl} className="rounded-full px-3 py-2 text-sm font-medium text-white/75 transition-colors hover:text-white">
             Outdoor
-          </a>
-          <a
-            href={LOGIN_HREF}
-            className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white backdrop-blur transition-colors hover:border-[var(--s2u-orange)] hover:bg-[var(--s2u-orange)]"
-          >
-            <LogIn className="h-4 w-4" />
-            Business Login
           </a>
         </nav>
       </div>
@@ -238,27 +229,18 @@ function HeroStage() {
 }
 
 function Hero({ outdoorUrl }: { outdoorUrl: string }) {
-  const words = ['One', 'house.', 'Many', 'brands.']
+  const words = ['Shop', 'Serapod', 'online.']
   return (
     <section className="relative isolate overflow-hidden bg-[var(--s2u-ink)] pb-16 pt-28 text-white sm:pt-32 lg:min-h-[100svh] lg:pb-0">
       <div className="s2u-aurora" aria-hidden="true" />
       <div className="s2u-grid" aria-hidden="true" />
       <div className="mx-auto grid max-w-7xl items-center gap-10 px-5 sm:px-8 lg:min-h-[calc(100svh-8rem)] lg:grid-cols-[1.05fr_1fr]">
         <div>
-          <motion.p
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, ease: EASE }}
-            className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.2em] text-white/70"
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-[var(--s2u-orange)]" />
-            Serapod · Malaysia
-          </motion.p>
-          <h1 className="font-display mt-6 text-[3.1rem] font-semibold leading-[0.95] tracking-tight sm:text-7xl lg:text-[5.6rem]">
+          <h1 className="font-display text-[3.1rem] font-semibold leading-[0.95] tracking-tight sm:text-7xl lg:text-[5.6rem]">
             {words.map((word, i) => (
               <span key={word} className="mr-[0.22em] inline-block overflow-hidden pb-2 align-bottom">
                 <motion.span
-                  className={`inline-block ${i >= 2 ? 'text-[var(--s2u-orange)]' : ''}`}
+                  className={`inline-block ${i === words.length - 1 ? 'text-[var(--s2u-orange)]' : ''}`}
                   initial={{ y: '110%' }}
                   animate={{ y: 0 }}
                   transition={{ duration: 0.9, ease: EASE, delay: 0.15 + i * 0.09 }}
@@ -274,7 +256,7 @@ function Hero({ outdoorUrl }: { outdoorUrl: string }) {
             transition={{ duration: 0.8, ease: EASE, delay: 0.55 }}
             className="mt-6 max-w-xl text-base leading-relaxed text-white/70 sm:text-lg"
           >
-            A Malaysian brand family built on trust, quality, and modern commerce — each business with its own identity under one Serapod house.
+            Serapod devices, electronics, pet food and outdoor gear.
           </motion.p>
           <motion.div
             initial={{ opacity: 0, y: 16 }}
@@ -336,8 +318,7 @@ function BrandHub({ list }: { list: Brand[] }) {
       <div className="pointer-events-none absolute -right-40 top-10 h-[480px] w-[480px] rounded-full bg-[radial-gradient(circle,rgba(232,93,4,0.12),transparent_65%)]" />
       <div className="mx-auto max-w-7xl px-5 sm:px-8">
         <Reveal className="max-w-2xl">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--s2u-orange)]">The Serapod house</p>
-          <h2 className="font-display mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">Every brand, its own identity.</h2>
+          <h2 className="font-display text-4xl font-semibold tracking-tight sm:text-5xl">Our brands</h2>
           <p className="mt-4 text-[var(--s2u-muted)] sm:text-lg">Choose a brand to see where to find it.</p>
         </Reveal>
 
@@ -452,79 +433,111 @@ function BrandHub({ list }: { list: Brand[] }) {
 
 /* ── Live products from the store ──────────────────────────────────────── */
 
-function ProductCard({ product }: { product: LandingProduct }) {
-  return (
-    <a href={`/store/products/${product.id}`} className="block w-[230px] shrink-0 sm:w-[260px]">
-      <TiltCard max={8} className="h-full">
-        <div className="group h-full overflow-hidden rounded-3xl border border-white/10 bg-white shadow-[0_24px_50px_-28px_rgba(0,0,0,0.8)]">
-          <div className="relative aspect-square overflow-hidden bg-white">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={product.image}
-              alt={product.name}
-              loading="lazy"
-              className="h-full w-full object-contain p-5 transition-transform duration-700 group-hover:scale-110"
-            />
-            <div className="s2u-sheen pointer-events-none absolute inset-0 opacity-0 transition-opacity group-hover:opacity-100" />
-          </div>
-          <div className="p-4">
-            {product.category && (
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--s2u-orange)]">{product.category}</p>
-            )}
-            <p className="mt-1 line-clamp-2 min-h-[2.5rem] text-sm font-semibold leading-snug text-[var(--s2u-ink)]">{product.name}</p>
-            {product.price != null && product.price > 0 && (
-              <p className="mt-2 text-sm text-[var(--s2u-muted)]">
-                From <span className="font-semibold text-[var(--s2u-ink)]">{money(product.price)}</span>
-              </p>
-            )}
-          </div>
-        </div>
-      </TiltCard>
-    </a>
-  )
-}
-
-function LiveProducts({ products }: { products: LandingProduct[] }) {
+/** Mirrors the Outdoor section: products on the left, details on the right. */
+function StoreShowcase({ products }: { products: LandingProduct[] }) {
+  const [index, setIndex] = useState(0)
   if (products.length === 0) return null
-  const half = Math.ceil(products.length / 2)
-  const rows = products.length >= 8 ? [products.slice(0, half), products.slice(half)] : [products]
+  const shown = products.slice(0, 6)
+  const current = shown[Math.min(index, shown.length - 1)]
 
   return (
-    <section className="relative overflow-hidden bg-[var(--s2u-ink)] py-24 text-white sm:py-28">
-      <div className="pointer-events-none absolute left-1/2 top-0 h-px w-2/3 -translate-x-1/2 bg-gradient-to-r from-transparent via-[var(--s2u-orange)]/60 to-transparent" />
-      <div className="mx-auto flex max-w-7xl flex-wrap items-end justify-between gap-6 px-5 sm:px-8">
-        <Reveal>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--s2u-orange)]">Serapod2U Store</p>
-          <h2 className="font-display mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">New in the store.</h2>
-        </Reveal>
-        <Reveal delay={0.1}>
-          <a href="/store/products" className="group inline-flex items-center gap-2 text-sm font-semibold text-white/80 hover:text-white">
-            View all products
-            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-          </a>
-        </Reveal>
-      </div>
-
-      <div className="mt-12 space-y-6">
-        {rows.map((row, r) => {
-          const moving = row.length >= 4
-          const loop = moving ? [...row, ...row] : row
-          return (
-            <div key={r} className={moving ? 's2u-marquee overflow-hidden py-3' : 'overflow-x-auto py-3'}>
-              <div
-                className={`s2u-marquee-track gap-6 px-5 sm:px-8 ${r === 1 ? 's2u-marquee-track--reverse' : ''} ${moving ? '' : 'lg:mx-auto'}`}
-                style={{
-                  ['--s2u-marquee-duration' as string]: `${Math.max(30, row.length * 7)}s`,
-                  ...(row.length < 4 ? { animation: 'none' } : {}),
-                }}
+    <section className="relative overflow-hidden bg-white py-24 sm:py-32">
+      <div className="pointer-events-none absolute -left-40 bottom-0 h-[460px] w-[460px] rounded-full bg-[radial-gradient(circle,rgba(232,93,4,0.10),transparent_65%)]" />
+      <div className="mx-auto grid max-w-7xl items-center gap-14 px-5 sm:px-8 lg:grid-cols-2">
+        <div className="order-2 lg:order-1">
+          <Reveal>
+            <TiltCard max={7}>
+              <a
+                href={`/store/products/${current.id}`}
+                className="relative block aspect-[4/3] overflow-hidden rounded-[2rem] border border-[var(--s2u-line)] bg-white shadow-[0_40px_80px_-44px_rgba(18,20,23,0.55)]"
               >
-                {loop.map((p, i) => (
-                  <ProductCard key={`${p.id}-${i}`} product={p} />
-                ))}
-              </div>
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={current.id}
+                    initial={{ opacity: 0, rotateY: 30, scale: 0.92 }}
+                    animate={{ opacity: 1, rotateY: 0, scale: 1 }}
+                    exit={{ opacity: 0, rotateY: -30, scale: 0.92 }}
+                    transition={{ duration: 0.45, ease: EASE }}
+                    className="absolute inset-0"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={current.image} alt={current.name} className="h-full w-full object-contain p-8 sm:p-10" />
+                  </motion.div>
+                </AnimatePresence>
+                {current.category && (
+                  <span className="absolute left-4 top-4 rounded-full bg-[var(--s2u-ink)]/85 px-3 py-1 text-[11px] font-semibold text-white">
+                    {current.category}
+                  </span>
+                )}
+              </a>
+            </TiltCard>
+          </Reveal>
+
+          {shown.length > 1 && (
+            <div className="mt-5 grid grid-cols-3 gap-3 sm:grid-cols-6">
+              {shown.map((p, i) => {
+                const on = p.id === current.id
+                return (
+                  <motion.button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setIndex(i)}
+                    onMouseEnter={() => setIndex(i)}
+                    whileHover={{ y: -4 }}
+                    aria-label={p.name}
+                    className={`relative aspect-square overflow-hidden rounded-2xl border bg-white transition-shadow ${on ? 'border-[var(--s2u-orange)] shadow-[0_14px_30px_-16px_rgba(232,93,4,0.8)]' : 'border-[var(--s2u-line)] hover:shadow-md'}`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={p.image} alt="" loading="lazy" className="h-full w-full object-contain p-2" />
+                  </motion.button>
+                )
+              })}
             </div>
-          )
-        })}
+          )}
+        </div>
+
+        <div className="order-1 lg:order-2">
+          <Reveal>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--s2u-orange)]">Serapod2U Store</p>
+            <h2 className="font-display mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">Products in the store</h2>
+          </Reveal>
+          <Reveal delay={0.1}>
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={current.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.3, ease: EASE }}
+                className="mt-8 border-l-2 border-[var(--s2u-orange)] pl-5"
+              >
+                <p className="text-xl font-semibold text-[var(--s2u-ink)] sm:text-2xl">{current.name}</p>
+                {current.price != null && current.price > 0 && (
+                  <p className="mt-2 text-[var(--s2u-muted)]">
+                    From <span className="font-semibold text-[var(--s2u-ink)]">{money(current.price)}</span>
+                  </p>
+                )}
+              </motion.div>
+            </AnimatePresence>
+          </Reveal>
+          <Reveal delay={0.2}>
+            <div className="mt-9 flex flex-wrap gap-3">
+              <a
+                href={`/store/products/${current.id}`}
+                className="group inline-flex h-12 items-center gap-2 rounded-full bg-[var(--s2u-ink)] px-6 text-sm font-semibold text-white transition-colors hover:bg-[var(--s2u-orange)]"
+              >
+                View product
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+              </a>
+              <a
+                href="/store/products"
+                className="inline-flex h-12 items-center rounded-full border border-[var(--s2u-line)] px-6 text-sm font-semibold text-[var(--s2u-ink)] transition-colors hover:border-[var(--s2u-ink)]"
+              >
+                View all products
+              </a>
+            </div>
+          </Reveal>
+        </div>
       </div>
     </section>
   )
@@ -552,8 +565,8 @@ function OutdoorColourways({ outdoorUrl }: { outdoorUrl: string }) {
         <div>
           <Reveal>
             <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--s2u-orange)]">Serapod Outdoor</p>
-            <h2 className="font-display mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">Pick your colourway.</h2>
-            <p className="mt-4 max-w-md text-[var(--s2u-muted)] sm:text-lg">Tumblers and camping mats in burgundy, grey and pink.</p>
+            <h2 className="font-display mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">Tumblers and camping mats</h2>
+            <p className="mt-4 max-w-md text-[var(--s2u-muted)] sm:text-lg">Available in burgundy, grey and pink.</p>
           </Reveal>
 
           <Reveal delay={0.1}>
@@ -646,63 +659,19 @@ function OutdoorColourways({ outdoorUrl }: { outdoorUrl: string }) {
   )
 }
 
-/* ── Staff and partners ────────────────────────────────────────────────── */
-
-function BusinessBand() {
-  return (
-    <section className="bg-[var(--s2u-paper)] px-5 pb-24 sm:px-8">
-      <Reveal className="mx-auto max-w-7xl">
-        <div className="relative isolate overflow-hidden rounded-[2rem] bg-[var(--s2u-ink)] px-7 py-12 text-white sm:px-14 sm:py-16">
-          <div className="absolute -right-24 -top-24 -z-10 h-80 w-80 rounded-full bg-[radial-gradient(circle,rgba(232,93,4,0.55),transparent_65%)] blur-2xl" />
-          <div className="absolute -bottom-32 left-1/3 -z-10 h-72 w-72 rounded-full bg-[radial-gradient(circle,rgba(255,138,61,0.25),transparent_65%)] blur-2xl" />
-          <div className="flex flex-col items-start justify-between gap-8 lg:flex-row lg:items-center">
-            <div className="max-w-xl">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--s2u-orange-soft)]">Staff, distributors and partners</p>
-              <h2 className="font-display mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">Sign in to the Serapod business portal.</h2>
-            </div>
-            <div className="flex flex-wrap gap-3">
-              <a
-                href={LOGIN_HREF}
-                className="group inline-flex h-12 items-center gap-2 rounded-full bg-[var(--s2u-orange)] px-6 text-sm font-semibold text-white transition-colors hover:bg-[var(--s2u-orange-deep)]"
-              >
-                <LogIn className="h-4 w-4" />
-                Business Login
-              </a>
-              <a
-                href={CUSTOMER_LOGIN_HREF}
-                className="inline-flex h-12 items-center rounded-full border border-white/20 px-6 text-sm font-semibold text-white/85 transition-colors hover:border-white/50 hover:text-white"
-              >
-                Customer sign in
-              </a>
-            </div>
-          </div>
-        </div>
-      </Reveal>
-    </section>
-  )
-}
-
 function Footer({ outdoorUrl }: { outdoorUrl: string }) {
   return (
     <footer className="bg-[var(--s2u-ink)] text-white/70">
-      <div className="mx-auto grid max-w-7xl gap-10 px-5 py-14 sm:grid-cols-2 sm:px-8 lg:grid-cols-4">
+      <div className="mx-auto grid max-w-7xl gap-10 px-5 py-14 sm:grid-cols-3 sm:px-8">
         <div>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/brand/serapod-wordmark-light.png" alt="Serapod" className="h-8 w-auto" width={160} height={44} />
-          <p className="mt-4 max-w-xs text-sm leading-relaxed">A Malaysian brand family under one Serapod house.</p>
         </div>
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white">Shop</p>
           <ul className="mt-4 space-y-2.5 text-sm">
             <li><a href={STORE_HREF} className="hover:text-white">Serapod2U Store</a></li>
             <li><a href={outdoorUrl} className="hover:text-white">Serapod Outdoor</a></li>
-          </ul>
-        </div>
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white">Sign in</p>
-          <ul className="mt-4 space-y-2.5 text-sm">
-            <li><a href={LOGIN_HREF} className="hover:text-white">Business Login</a></li>
-            <li><a href={CUSTOMER_LOGIN_HREF} className="hover:text-white">Customer sign in</a></li>
           </ul>
         </div>
         <div>
@@ -713,8 +682,9 @@ function Footer({ outdoorUrl }: { outdoorUrl: string }) {
           </ul>
         </div>
       </div>
-      <div className="border-t border-white/10 px-5 py-6 text-center text-xs text-white/45 sm:px-8">
-        © {new Date().getFullYear()} Serapod. All rights reserved.
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 border-t border-white/10 px-5 py-6 text-xs text-white/45 sm:px-8">
+        <span>© {new Date().getFullYear()} Serapod. All rights reserved.</span>
+        <a href={LOGIN_HREF} className="hover:text-white/80">Staff login</a>
       </div>
     </footer>
   )
@@ -728,9 +698,8 @@ export default function Serapod2uLanding({ products, outdoorUrl }: { products: L
       <main>
         <Hero outdoorUrl={outdoorUrl} />
         <BrandHub list={list} />
-        <LiveProducts products={products} />
+        <StoreShowcase products={products} />
         <OutdoorColourways outdoorUrl={outdoorUrl} />
-        <BusinessBand />
       </main>
       <Footer outdoorUrl={outdoorUrl} />
     </div>
