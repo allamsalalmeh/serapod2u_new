@@ -143,16 +143,16 @@ function Header({ outdoorUrl }: { outdoorUrl: string }) {
   }, [])
   return (
     <header
-      className={`fixed inset-x-0 top-0 z-50 transition-all duration-500 ${solid ? 'bg-[#121417]/85 backdrop-blur-xl border-b border-white/10' : 'bg-transparent'}`}
+      className={`fixed inset-x-0 top-0 z-50 transition-all duration-500 ${solid ? 'bg-white/85 backdrop-blur-xl border-b border-[var(--s2u-line)]' : 'bg-transparent'}`}
     >
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/brand/serapod-wordmark-light.png" alt="Serapod" className="h-7 w-auto sm:h-8" width={160} height={44} />
+        <img src="/brand/serapod-wordmark.png" alt="Serapod" className="h-7 w-auto sm:h-8" width={160} height={44} />
         <nav className="flex items-center gap-1 sm:gap-2">
-          <a href={STORE_HREF} className="rounded-full px-3 py-2 text-sm font-medium text-white/75 transition-colors hover:text-white">
+          <a href={STORE_HREF} className="rounded-full px-3 py-2 text-sm font-medium text-[var(--s2u-muted)] transition-colors hover:text-[var(--s2u-ink)]">
             Store
           </a>
-          <a href={outdoorUrl} className="rounded-full px-3 py-2 text-sm font-medium text-white/75 transition-colors hover:text-white">
+          <a href={outdoorUrl} className="rounded-full px-3 py-2 text-sm font-medium text-[var(--s2u-muted)] transition-colors hover:text-[var(--s2u-ink)]">
             Outdoor
           </a>
         </nav>
@@ -205,7 +205,7 @@ function HeroStage({ products }: { products: LandingProduct[] }) {
       onPointerMove={onMove}
       onPointerLeave={() => { px.set(0); py.set(0) }}
     >
-      <div className="absolute inset-[14%] rounded-full bg-[radial-gradient(circle,rgba(232,93,4,0.4),rgba(232,93,4,0.08)_45%,transparent_70%)] blur-2xl" />
+      <div className="absolute inset-[14%] rounded-full bg-[radial-gradient(circle,rgba(232,93,4,0.22),rgba(232,93,4,0.05)_45%,transparent_70%)] blur-2xl" />
       <div className="s2u-ring s2u-ring--1" style={{ top: '62%' }}><span className="s2u-ring-dot" /></div>
       <div className="s2u-ring s2u-ring--2" style={{ top: '62%' }} />
 
@@ -216,7 +216,7 @@ function HeroStage({ products }: { products: LandingProduct[] }) {
         <div className="s2u-carousel-spin">
           {items.map((item, i) => (
             <div key={`${item.image}-${i}`} className="s2u-carousel-card" style={{ ['--a' as string]: `${i * step}deg` }}>
-              <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-[0_30px_60px_-24px_rgba(0,0,0,0.75)] ring-1 ring-white/20">
+              <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-[0_28px_50px_-26px_rgba(18,20,23,0.35)] ring-1 ring-black/5">
                 <div className="relative flex-1">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={item.image} alt="" className="absolute inset-0 h-full w-full object-contain p-3" loading={i < 4 ? 'eager' : 'lazy'} />
@@ -227,7 +227,7 @@ function HeroStage({ products }: { products: LandingProduct[] }) {
           ))}
         </div>
       </motion.div>
-      <div className="absolute bottom-[10%] left-1/2 h-8 w-2/3 -translate-x-1/2 rounded-[50%] bg-black/60 blur-2xl" />
+      <div className="absolute bottom-[10%] left-1/2 h-8 w-2/3 -translate-x-1/2 rounded-[50%] bg-[rgba(18,20,23,0.12)] blur-2xl" />
     </div>
   )
 }
@@ -235,7 +235,7 @@ function HeroStage({ products }: { products: LandingProduct[] }) {
 function Hero({ outdoorUrl, products }: { outdoorUrl: string; products: LandingProduct[] }) {
   const words = ['Shop', 'Serapod', 'online.']
   return (
-    <section className="relative isolate overflow-hidden bg-[var(--s2u-ink)] pb-16 pt-28 text-white sm:pt-32 lg:min-h-[100svh] lg:pb-0">
+    <section className="relative isolate overflow-hidden bg-[linear-gradient(180deg,#fff6ef_0%,#fbfaf8_55%,var(--s2u-paper)_100%)] pb-16 pt-28 text-[var(--s2u-ink)] sm:pt-32 lg:min-h-[100svh] lg:pb-0">
       <div className="s2u-aurora" aria-hidden="true" />
       <div className="s2u-grid" aria-hidden="true" />
       <div className="mx-auto grid max-w-7xl items-center gap-10 px-5 sm:px-8 lg:min-h-[calc(100svh-8rem)] lg:grid-cols-[1.05fr_1fr]">
@@ -258,7 +258,7 @@ function Hero({ outdoorUrl, products }: { outdoorUrl: string; products: LandingP
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, ease: EASE, delay: 0.55 }}
-            className="mt-6 max-w-xl text-base leading-relaxed text-white/70 sm:text-lg"
+            className="mt-6 max-w-xl text-base leading-relaxed text-[var(--s2u-muted)] sm:text-lg"
           >
             Serapod devices, electronics, pet food and outdoor gear.
           </motion.p>
@@ -270,14 +270,14 @@ function Hero({ outdoorUrl, products }: { outdoorUrl: string; products: LandingP
           >
             <a
               href={STORE_HREF}
-              className="group inline-flex h-12 items-center gap-2 rounded-full bg-[var(--s2u-orange)] px-6 text-sm font-semibold text-white shadow-[0_18px_40px_-14px_rgba(232,93,4,0.9)] transition-all hover:bg-[var(--s2u-orange-deep)]"
+              className="group inline-flex h-12 items-center gap-2 rounded-full bg-[var(--s2u-orange)] px-6 text-sm font-semibold text-white shadow-[0_18px_40px_-16px_rgba(232,93,4,0.7)] transition-all hover:bg-[var(--s2u-orange-deep)]"
             >
               Shop Serapod Store
               <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
             </a>
             <a
               href={outdoorUrl}
-              className="group inline-flex h-12 items-center gap-2 rounded-full border border-white/20 px-6 text-sm font-semibold text-white transition-colors hover:border-white/50 hover:bg-white/5"
+              className="group inline-flex h-12 items-center gap-2 rounded-full border border-[var(--s2u-line)] bg-white px-6 text-sm font-semibold text-[var(--s2u-ink)] transition-colors hover:border-[var(--s2u-ink)]"
             >
               Explore Serapod Outdoor
               <ArrowUpRight className="h-4 w-4 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
@@ -670,30 +670,30 @@ function OutdoorColourways({ outdoorUrl }: { outdoorUrl: string }) {
 
 function Footer({ outdoorUrl }: { outdoorUrl: string }) {
   return (
-    <footer className="bg-[var(--s2u-ink)] text-white/70">
+    <footer className="border-t border-[var(--s2u-line)] bg-white text-[var(--s2u-muted)]">
       <div className="mx-auto grid max-w-7xl gap-10 px-5 py-14 sm:grid-cols-3 sm:px-8">
         <div>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/brand/serapod-wordmark-light.png" alt="Serapod" className="h-8 w-auto" width={160} height={44} />
+          <img src="/brand/serapod-wordmark.png" alt="Serapod" className="h-8 w-auto" width={160} height={44} />
         </div>
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white">Shop</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--s2u-ink)]">Shop</p>
           <ul className="mt-4 space-y-2.5 text-sm">
-            <li><a href={STORE_HREF} className="hover:text-white">Serapod Store</a></li>
-            <li><a href={outdoorUrl} className="hover:text-white">Serapod Outdoor</a></li>
+            <li><a href={STORE_HREF} className="hover:text-[var(--s2u-ink)]">Serapod Store</a></li>
+            <li><a href={outdoorUrl} className="hover:text-[var(--s2u-ink)]">Serapod Outdoor</a></li>
           </ul>
         </div>
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white">Legal</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--s2u-ink)]">Legal</p>
           <ul className="mt-4 space-y-2.5 text-sm">
-            <li><a href="/privacy-policy" className="hover:text-white">Privacy Policy</a></li>
-            <li><a href="/terms-of-service" className="hover:text-white">Terms of Service</a></li>
+            <li><a href="/privacy-policy" className="hover:text-[var(--s2u-ink)]">Privacy Policy</a></li>
+            <li><a href="/terms-of-service" className="hover:text-[var(--s2u-ink)]">Terms of Service</a></li>
           </ul>
         </div>
       </div>
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 border-t border-white/10 px-5 py-6 text-xs text-white/45 sm:px-8">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 border-t border-[var(--s2u-line)] px-5 py-6 text-xs sm:px-8">
         <span>© {new Date().getFullYear()} Serapod. All rights reserved.</span>
-        <a href={LOGIN_HREF} className="hover:text-white/80">Staff login</a>
+        <a href={LOGIN_HREF} className="hover:text-[var(--s2u-ink)]">Staff login</a>
       </div>
     </footer>
   )
