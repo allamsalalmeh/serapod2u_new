@@ -36,7 +36,7 @@ export async function GET() {
             return NextResponse.json({ error: ctx.error }, { status: ctx.status })
         }
         if (!(await hrCan({ userId: ctx.user.id, organizationId: ctx.userData.organization_id, roleCode: null, roleLevel: ctx.roleLevel },
-            'finance.payroll_integration.manage', () => true))) {
+            'finance.payroll_integration.manage'))) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
         }
 

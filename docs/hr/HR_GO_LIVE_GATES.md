@@ -1,14 +1,14 @@
 # Serapod2U HR — Go-Live Gates (HR Core)
 
-Last verified: 2026-10-24 · HEAD `1e0830c6` (B0 evidence reconciliation) · back to [HR_MASTER_INDEX.md](HR_MASTER_INDEX.md)
+Last verified: 2026-10-24 · HEAD `b6b78002` (B2A/B2B implementation) · back to [HR_MASTER_INDEX.md](HR_MASTER_INDEX.md)
 
 HR Core goes live per organization only when **all seven gates PASS**, each with recorded evidence. A gate is **FAIL** if any criterion fails or lacks evidence. Payroll and Finance posting have their **own later gates** (D-003); Gate 7 checks only contract/data readiness.
 
 Evidence rules: evidence is stored or referenced in [HR_PROGRESS_TRACKER.md](HR_PROGRESS_TRACKER.md) with date, environment, HEAD and who ran it. Automated test results alone never pass a gate that requires UAT.
 
-Current state of every gate: **NOT ASSESSED** (2026-10-24).
+Current state of every gate: **NOT ASSESSED** (2026-10-25). **Wave 3 note (2026-10-25):** Gate 4 criteria 4.1–4.5, 4.7 and 4.10 have **replica evidence only** (tracker §11: 405/362 checks) — migrations `20261222100000`/`20261223100000` not applied, no UAT; 4.6 (no client writes to `hr_leave_*`) still FAIL by design (B2A keeps client-direct leave inserts/decisions under the guard; ledger/balances are database-written); 4.8 (statutory minima) not implemented (PD-LV-01); 4.9 HR sign-off pending. 1.7 cross-organization isolation covered for Wave 3 functions by replica tests (M7, O7, X14). **Wave 2 note (2026-10-25):** 1.4 — `() => true` count in HR routes = **0** at the working tree (test `b3-legacy-evaluators.test.ts`); inline role-level legacy evaluators remain (14). 1.6 — B2A **staging effects verified** (KVM2 12/12), UAT pending. 2.4 — no new duplicate (test). 2.7 — superseded by E-13 (the listed files have staging effects; not re-stamped). 3.2/3.3 — tooling ready (reporting-line check; staging baseline: 2 employees report to inactive/archived managers). 3.6/7.3 — schema ready (Wave 2, not applied). 7.4/7.5 — slots/capture ready, data not yet filled. No gate passes without environment evidence and UAT.
 
-Status note (2026-10-24 handover sync): still **NOT ASSESSED**. B0 live verification is **PENDING** for staging and production (B0 deliverables restored and verified; BL-8 resolved), so no live evidence exists yet for 1.1–1.3, 2.1–2.2 or 3.x. Criteria 1.6, 2.3, 4.6 and 7.7 depend on B2A/B2B, which are **NOT IMPLEMENTED**.
+Status note (2026-10-24 handover sync): still **NOT ASSESSED**. B0 live verification is **PENDING** for staging and production (B0 deliverables restored and verified; BL-8 resolved), so no live evidence exists yet for 1.1–1.3, 2.1–2.2 or 3.x. B2A/B2B are now **implemented in code with isolated tests** (not applied/deployed): 1.6 has replica evidence only (staging evidence still required); 2.3 and 2.4 have local tests (`schema-contract.test.ts`, `migration-versions.test.ts`, run locally — no CI change, D-031); 7.7 implemented in code. No gate is PASS without environment evidence.
 
 ---
 
@@ -26,6 +26,8 @@ Status note (2026-10-24 handover sync): still **NOT ASSESSED**. B0 live verifica
 | 1.8 | Role walkthrough (HR admin, HR manager, line manager, employee, payroll preparer, payroll approver, Finance user) shows only permitted destinations and APIs | UAT record per role |
 | 1.9 | Break-glass `hr.employee.delete` assigned to nobody at go-live (or explicitly time-boxed) | Assignment query |
 | 1.10 | No `hr.*` permission is held solely through a legacy compatibility policy in staging **and** production; HR leave authority never via compat (P-R12). Baseline: 25 staging users compat-only (2026-10-23) | v2 diagnostic §D per environment *(proposed by B0 report §9; criterion added 2026-10-24, not owner-approved)* |
+
+> **Wave 1 status (2026-10-24):** 1.6 — replica evidence PASS (re-run 172/172/195/195); live staging NOT VERIFIED; UAT NOT PERFORMED. 1.10 — NOT VERIFIED (live coverage query packaged, BL-18). No Gate 1 criterion is passed.
 
 ## Gate 2 — Database & Migration Integrity
 
@@ -66,6 +68,10 @@ Status note (2026-10-24 handover sync): still **NOT ASSESSED**. B0 live verifica
 | 4.9 | Public holidays loaded for the go-live year for each relevant state, reviewed by HR | HR sign-off |
 | 4.10 | Leave cancel, half day, holiday exclusion, year-end carry-forward scenarios pass | UAT records |
 | 4.11 | Correction review and timesheet generation succeed end-to-end; correction self-review refused | Route tests + UAT *(proposed, B0 report §9)* |
+
+> **2026-10-26 (staging, read-only verification):** 4.7 **met on staging** (0 projection mismatches after the Wave 3B opening balance); 2.5 replica suites PASS (Wave 3 411/411); 2.1 staging part: Wave 2 + Wave 3 applied and verified (PMS rows to be added by the owner); 4.9 **not met** (14 national + 1 `WP` holiday, E-47); 4.1–4.5, 4.10–4.11 await owner UAT (not performed).
+
+> **Wave 1 note:** 4.6 ("no client-side writes to `hr_leave_*`") is **not met** by B2A by design — leave is still written from the client and contained by RLS + the database guard; meeting 4.6 requires the server workflow of B6.
 
 ## Gate 5 — UAT & Data Validation
 

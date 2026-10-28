@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { timeInventoryOperation, type InventoryTrace } from '@/lib/inventory/inventory-timing'
 import { createClient } from '@/lib/supabase/client'
 
 /**
@@ -6,7 +7,7 @@ import { createClient } from '@/lib/supabase/client'
  * This prevents auth.uid() from being NULL in RLS policies and handles
  * session refresh to prevent unexpected logouts
  */
-export function useSupabaseAuth() {
+export function useSupabaseAuth(timingTrace?: InventoryTrace, timingOperation = 'auth.inventory.getUser') {
   const [isReady, setIsReady] = useState(false)
   const [user, setUser] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
@@ -21,7 +22,7 @@ export function useSupabaseAuth() {
     const initializeAuth = async () => {
       try {
         // Check current auth state
-        const { data: { user: currentUser }, error: authError } = await supabase.auth.getUser()
+        const { data: { user: currentUser }, error: authError } = await timeInventoryOperation(timingTrace, timingOperation, () => supabase.auth.getUser())
         
         if (!mounted) return
 
@@ -111,7 +112,7 @@ export function useSupabaseAuth() {
       mounted = false
       authSubscription?.unsubscribe()
     }
-  }, [supabase])
+  }, [supabase, timingTrace, timingOperation])
 
   return { isReady, user, error, supabase }
 }

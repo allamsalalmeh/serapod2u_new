@@ -50,7 +50,9 @@ export default async function HrMobileLayout({
 
   // Manager/administrator affordances come from Security & Access, never from a legacy role level.
   const [leaveApproval, hrAdministration, orgChart] = await Promise.all([
-    resolveDestinationAccess(actor, 'hr/leave/requests'),
+    // Leave decisions: explicit HR (hr/leave/requests) OR Manager Self-Service team leave (hr/team-leave). The database
+    // (B2A) still decides each request: managers only for their direct reports, never their own.
+    resolveDestinationAccess(actor, ['hr/leave/requests', 'hr/team-leave']),
     resolveDestinationAccess(actor, 'hr'),
     resolveDestinationAccess(actor, ['hr/people/org-chart', 'hr/people/org-chart/staff']),
   ])

@@ -1,10 +1,10 @@
 # Serapod2U HR — Implementation Roadmap
 
-Last verified: 2026-10-24 · HEAD `1e0830c6` (B0 evidence reconciliation) · back to [HR_MASTER_INDEX.md](HR_MASTER_INDEX.md)
+Last verified: 2026-10-24 · HEAD `b6b78002` (B2A/B2B implementation) · back to [HR_MASTER_INDEX.md](HR_MASTER_INDEX.md)
 
 This roadmap is **authoritative** for sequencing. It consolidates the remediation phases P0–P7 ([HR_IMPLEMENTATION_SEQUENCE.md](assessments/remediation-2026-10-24/HR_IMPLEMENTATION_SEQUENCE.md)), the operational HR Core enhancements ([HR_MASTER_SCOPE.md](HR_MASTER_SCOPE.md)), and Finance-readiness Phases A–D ([HR_CORE_FINANCE_READY_IMPLEMENTATION_ROADMAP.md](architecture/finance-integration-2026-10-24/HR_CORE_FINANCE_READY_IMPLEMENTATION_ROADMAP.md)).
 
-**No batch is approved for implementation.** Approval is recorded per batch in the "Owner approval" row before work starts (rule 6).
+**2026-10-26:** Wave 2 + Wave 3 (B4a–B5, B6 part) applied to staging by the owner 2026-10-25 and **verified read-only** (tracker §12). Next: owner HR configuration + explicit grants → localhost UAT → commit → deploy (BL-28). No new batch. **2026-10-25 (Wave 3):** owner directive "HR CORE MASTER HANDOVER & WAVE 3 CONTINUOUS DEVELOPMENT" authorized Wave 3 implementation, isolated testing and documentation (B4a–B5, B6 part) — not staging/production application, deployment, commit or UAT. **2026-10-25:** the owner directive "CONTINUOUS EXECUTION: complete Wave 1 and develop Wave 2" authorized implementation, isolated testing and documentation of Wave 2 (B1 lifecycle compatibility, B7a, parts of B7b/B7c/B7d readiness, HR-owned B3) — **not** staging/production application, deployment or UAT. Before that: **No batch is approved for implementation.** Approval is recorded per batch in the "Owner approval" row before work starts (rule 6).
 
 Common delivery rules for every batch with database impact: migration stamped after `20261218100000` with a unique version (P-R01), idempotent, prerequisites asserted, rollback SQL in the header, replica test suite under `supabase/tests/security/<name>/`, owner-applied staging first (D-018), recorded in `PRODUCTION_MIGRATION_STATUS.md` in the same commit. Every batch updates the master documents on completion (rule 7).
 
@@ -15,20 +15,20 @@ Common delivery rules for every batch with database impact: migration stamped af
 | Batch | Name | Maps to | Depends on | Approval |
 |---|---|---|---|---|
 | **B0** | Environment & migration verification (read-only) | P0 | — | Code/schema assessment **completed** at `1e0830c6` ([B0 report](assessments/HR_B0_ENVIRONMENT_VERIFICATION.md)); staging & production live diagnostics **PENDING** (owner-run v2) |
-| **B1** | Apply pending lifecycle & S&A migrations (owner) | P1 | B0 | Not approved |
+| **B1** | Apply pending lifecycle & S&A migrations (owner) | P1 | B0 | Effects present on staging (KVM2 2026-10-25); production NV; Wave 2 builds on them |
 | **B2** | Critical containment: leave security, ESS leave fix, payroll fail-closed, disable second payroll GL route, hide mock screen, OT API repair | P2, A8 | B0 | Not approved — proposed split into B2A + B2B (P-R11), see §2a |
-| ↳ **B2A** | Leave Security Containment (migration `20261219100000`) | P2 (leave) | OD-B2A-1…7, PD-B2-10; staging apply after explicit grants + v2 on staging; **not** B1 | **Planned · Not approved · NOT IMPLEMENTED** |
-| ↳ **B2B** | Operational Repairs (no migration) | P2 (payroll/attendance/OT/nav), A8 | OD-B2B-1…3; BL-9 | **Planned · Not approved · NOT IMPLEMENTED** |
+| ↳ **B2A** | Leave Security Containment (migration `20261219100000`) | P2 (leave) | D-021…D-028; staging apply after explicit grants + v2 on staging; **not** B1 | **Code + isolated tests: approved (OWN-IMPL) and DONE** · staging/production application **not approved** |
+| ↳ **B2B** | Operational Repairs (no migration) | P2 (payroll/attendance/OT/nav), A8 | D-029…D-031 | **Code + tests: approved (OWN-IMPL) and DONE** · deployment **not approved** |
 | **B3** | Canonical S&A consolidation for HR | P3 | B1, B2 | Not approved |
-| **B4a** | Hybrid Attendance foundation: auto-validation, exception detection & review, mobile clock hardening | Owner WS-06/07/10 | B2, B3, PD-ATT-01/02/03/06/07/08 | Not approved |
-| **B4b** | HR manual attendance & controlled corrections | Owner WS-08 | B4a, PD-ATT-04 | Not approved |
-| **B4c** | Excel bulk attendance import | Owner WS-09 | B4a, B4b, PD-ATT-05 | Not approved |
-| **B5** | Overtime approval workflow | Owner WS-11 | B2 (API repair), B3, B4a, PD-OT-01/02/03 | Not approved |
-| **B6** | Leave backend & ledger | P4, A5 | B2, B3, PD-LV-*, PD-SA-01 | Not approved |
-| **B7a** | Reporting-line reconciliation | P5a | B1 | Not approved |
-| **B7b** | Offboarding completion (archive hardening, separation data) | P5b, A6 | B1, B6, PD-LC-* | Not approved |
-| **B7c** | Employment history, compensation integrity, statutory profile | P5c, A1, A2, A4 | B1 | Not approved |
-| **B7d** | Allowance/deduction → payroll component link; final-status vocabulary | A3, A7 | B7c, P-F03 decision | Not approved |
+| **B4a** | Hybrid Attendance foundation: auto-validation, exception detection & review, mobile clock hardening | Owner WS-06/07/10 | B2, B3, PD-ATT-01/02/03/06/07/08 | **Code + isolated tests DONE (Wave 3, 2026-10-25)** with engineering defaults E-25…E-28 (PD-ATT-* open); `20261222100000` prepared, not applied |
+| **B4b** | HR manual attendance & controlled corrections | Owner WS-08 | B4a, PD-ATT-04 | **Code + isolated tests DONE (Wave 3)** — E-29/E-30; not applied |
+| **B4c** | Excel bulk attendance import | Owner WS-09 | B4a, B4b, PD-ATT-05 | **Code + isolated tests DONE (Wave 3)** — E-31; not applied |
+| **B5** | Overtime approval workflow | Owner WS-11 | B2 (API repair), B3, B4a, PD-OT-01/02/03 | **Code + isolated tests DONE (Wave 3)** — E-33/E-34 (MSS approval needs SA-R7); not applied |
+| **B6** | Leave backend & ledger | P4, A5 | B2, B3, PD-LV-*, PD-SA-01 | **Partial (Wave 3)**: ledger/projection, working days, entitlement admin, carry-forward (E-35…E-41); chains/delegation/encashment open; `20261223100000` prepared, not applied |
+| **B7a** | Reporting-line reconciliation | P5a | B1 | **Code + isolated tests DONE (Wave 2, 2026-10-25)**; staging not applied |
+| **B7b** | Offboarding completion (archive hardening, separation data) | P5b, A6 | B1, B6, PD-LC-* | **Partial (Wave 2)**: employment-end effects + reassign tool; scheduled separation, archive-forced reassignment, leave reassignment, former-employee documents open (PD-LC-01…03, B6) |
+| **B7c** | Employment history, compensation integrity, statutory profile | P5c, A1, A2, A4 | B1 | **Code + isolated tests DONE (Wave 2)**; `hr.employee.view_sensitive` pending (SA-R2) |
+| **B7d** | Allowance/deduction → payroll component link; final-status vocabulary | A3, A7 | B7c, P-F03 decision | Slot only (Wave 2: nullable, format-checked `payroll_component_code`); mapping/A7 wait for P-F03 |
 | **B8** | Navigation & HR reporting | P7 | B2 (quick wins in B2), B4a, B6 | Not approved |
 | **B9** | HR Core UAT, data validation & controlled activation | Gates 1–7 | all above | Not approved |
 | Phase B | Payroll integration preparation & payroll rebuild | P6, B1–B8 (finance) | HR Core go-live, PD-FIN-08 | Future |
@@ -128,6 +128,26 @@ Recommended first approval: **B0 + B2** (small, reversible, closes live exposure
 | Database impact | None expected (app routes only) |
 | S&A impact | None |
 | Owner approval | **Not approved** |
+
+### 2b. B2A/B2B implementation record and staging plan (2026-10-24)
+
+**Implemented (uncommitted, HEAD `b6b78002`):** see [HR_PROGRESS_TRACKER.md](HR_PROGRESS_TRACKER.md) §7 for every file and test result.
+
+**Wave 1 closure (2026-10-24):** local engineering complete; next phase = owner actions R1–R9 in the release package, then Wave 2 (B1 lifecycle migrations, B3 S&A consolidation) per §1 — not started. **Wave 1 status (2026-10-24):** the owner reports S3 (apply) executed on staging **before** S0–S2; effects NOT VERIFIED (KVM2 unreachable from the AI session, BL-18). The executable release/UAT package replacing S0–S8 is [release/b2a-staging-2026-10-24/README.md](release/b2a-staging-2026-10-24/README.md) (R1–R9, U1–U13). Production remains **not authorized**.
+
+**Exact staging migration / UAT plan (owner-run; original plan, kept for history):**
+
+| Step | Action | Evidence to record |
+|---|---|---|
+| S0 | On the Mac: `cd app && npm test` (full Vitest incl. jsdom suites) and `npx tsc --noEmit`; review the diff; commit with `git add -f` for tests (BL-16). Optionally re-run `supabase/tests/security/hr_leave_containment/run.sh` (all four modes) on a local PostgreSQL | Test output + commit hash |
+| S1 | Run `docs/hr/assessments/hr_b0_environment_readonly_v2.sql` on **staging** (tracker §5) | Output file; record suspicious leave rows, compat-only holders |
+| S2 | People & Access on staging: grant `hr-leave-attendance-administrator` (or `hr-payroll-full-access`) to the real HR approvers and `manager-self-service` to line managers, **organization-scoped to their HQ** | Assignment list (who, policy, scope) |
+| S3 | Backup staging; apply `20261219100000_hr_leave_containment_guard.sql` with `psql -X -1 -v ON_ERROR_STOP=1`; record in `PRODUCTION_MIGRATION_STATUS.md` | PMS row (date, method, verifier) |
+| S4 | Post-apply read-only checks: 6 `b2a` policies only; triggers `hr_leave_requests_guard` + `hr_leave_requests_record_event`; `hr_leave_request_events` exists with no FKs; `hr_reset_scope` row; run `select * from hr_leave_containment_review('<org>')` as HR | Query output |
+| S5 | Deploy the B2A/B2B app build to staging (owner) | Deployed revision id |
+| S6 | UAT with dedicated test accounts (E1, E2, M1 with MSS, M2 without, H1 explicit HR, L1 legacy-only), announced to other workstreams (BL-12): B0-PLAN §4.5 scenarios 1–14 + payroll approve blocked message + correction self-review refused + timesheet regenerate-after-approve refused + OT self-approval refused + holiday template national-only | UAT log per scenario |
+| S7 | Rollback rehearsal on staging only if S6 fails: SAFE rollback from the migration header (never the full revert) | Result |
+| S8 | Production: separate owner approval after S6 passes; repeat S1–S6 with production specifics | — |
 
 ### B3 — Canonical S&A consolidation for HR
 
@@ -311,6 +331,18 @@ Recommended first approval: **B0 + B2** (small, reversible, closes live exposure
 
 ---
 
+### 2c. Wave 2 implementation record (2026-10-25)
+
+Migration `20261221100000_hr_employment_foundation.sql` (prepared, **not applied**), replica suite `supabase/tests/security/hr_employment_foundation/`, application routes `/api/hr/employees/[id]/history`, `/api/hr/employees/[id]/employment`, `/api/hr/reporting-lines`, repaired `/api/hr/employees/profile` (GET/PUT), HR People History tab and Reporting-line check, B3 HR-owned evaluator clean-up. Owner sequence W-1…W-7 and rollback: [Wave 2 release README](release/wave2-employment-foundation-2026-10-25/README.md). UAT: [uat/HR_WAVE1_WAVE2_COMPREHENSIVE_UAT.md](uat/HR_WAVE1_WAVE2_COMPREHENSIVE_UAT.md).
+
+**Next toward Wave 3:** (1) owner W-1…W-7; (2) answers to PD-ATT-01…08 (B4a hybrid attendance) and PD-LV-01…04 (B6 leave backend & ledger) and PD-LC-01…03 (remaining B7b); (3) S&A owner SA-R1…SA-R3 (explicit grants, new keys, production modes); then B4a and B6 in parallel, B5 after B4a.
+
+### 2d. Wave 3 implementation record (2026-10-25)
+
+Migrations (prepared, **not applied**): `20261222100000_hr_hybrid_attendance_overtime.sql` (B4a/B4b/B4c/B5) and `20261223100000_hr_leave_ledger.sql` (B6 part); replica suite `supabase/tests/security/hr_attendance_overtime/` (405 / 362 checks, negative control). Application: 11 new HR routes, 4 rewritten, HR "Attendance operations" screen (board, exceptions, corrections, manual entry, Excel import, overtime, report), leave balances panel, mobile attendance (history, corrections, OT, approvals) and mobile leave quote. Decisions E-25…E-46; interim defaults for open PD items in the register §3.4. Owner sequence X-1…X-9 and rollback: [Wave 3 release README](release/wave3-attendance-overtime-leave-2026-10-25/README.md). UAT: [uat/HR_WAVE3_UAT.md](uat/HR_WAVE3_UAT.md).
+
+**Next:** X-1 (verifies the owner-reported Wave 2 staging application read-only and runs the Wave 3 preflight) → X-2…X-9; S&A SA-R6…SA-R11; owner answers to the §3.4 items; then B7b remainder, B8 (navigation entries, HR reporting group), remaining B6 (approval chains, delegation, encashment with Phase B), B9.
+
 ## 3. Future phases (separate go-lives)
 
 | Phase | Content | Source | Gate |
@@ -337,6 +369,10 @@ Recommended first approval: **B0 + B2** (small, reversible, closes live exposure
 
 | Date | Change |
 |---|---|
+| 2026-10-25 | **Wave 3**: B4a/B4b/B4c/B5 code + isolated tests done, B6 partial; §2d. Not applied, not deployed, no UAT. |
+| 2026-10-25 | Wave 1 closure + Wave 2: §2c; batch approvals for B1/B7a/B7b/B7c/B7d updated (code + isolated tests only). |
+| 2026-10-24 | Wave 1: §2b status note and link to the release/UAT package; S3 owner-reported executed on staging (unverified). |
+| 2026-10-24 | B2A/B2B code + isolated tests done (OWN-IMPL); §2b implementation record and exact staging plan added; B1 note: re-stamp `20261214100000_hr_employee_controlled_delete` and `20261215100000_sa_payment_gateway_restriction` (collisions with applied origin/main files, BL-14). |
 | 2026-10-24 | B0 evidence reconciliation: B0 status from the restored report; §2a now references B0-PLAN as design reference with sequencing; B2A independent of B1 (B0 report §4 corrected); rollback posture PD-B2-10; dependencies use OD-B2A/B IDs. |
 | 2026-10-24 | Handover sync at `1e0830c6`: B0 status recorded (repo assessment reported completed; live verification PENDING); B0 diagnostic reference corrected; §2a B2A/B2B split added as PROPOSED (P-R11); both NOT IMPLEMENTED, not approved. |
 | 2026-10-24 | Roadmap created; all batches "Not approved". |

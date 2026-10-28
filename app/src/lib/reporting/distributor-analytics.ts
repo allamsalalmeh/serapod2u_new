@@ -321,6 +321,40 @@ export interface DistributorAnalyticsAggregate {
   statusBreakdown: StatusTotals[]
   topProducts: ProductTotals[]
   recentOrders: OrderRecordTotals[]
+  /**
+   * Approved-stage orders only (approved, warehouse_packed, shipped_distributor, closed) for both
+   * windows. Read alongside the aggregate (distributor-analytics-source.ts) because the RPC reports
+   * the comparison window for ACTIVE orders only. Absent when that read was not available: the
+   * current window then falls back to `statusBreakdown` and no comparison is shown.
+   */
+  approved?: { current: ApprovedWindowTotals; previous: ApprovedWindowTotals }
+}
+
+/** Approved-stage orders of one window. */
+export interface ApprovedWindowTotals {
+  orders: number
+  orderValue: number
+  /** Distinct distributors with at least one approved-stage order. */
+  distributors: number
+  /** Approved-stage orders per status, e.g. { approved: 6, warehouse_packed: 1 }. */
+  byStatus: Record<string, number>
+}
+
+/** Fold approved-stage orders into window totals. Pure: shared by the source and the tests. */
+export function summarizeApprovedWindow(orders: readonly { status: string | null; distributorId: string; orderValue: number }[]): ApprovedWindowTotals {
+  const distributors = new Set<string>()
+  const byStatus: Record<string, number> = {}
+  let orderValue = 0
+  let count = 0
+  for (const order of orders) {
+    const status = String(order.status ?? '')
+    if (!APPROVED_STATUSES.includes(status)) continue
+    count += 1
+    orderValue += Number(order.orderValue) || 0
+    distributors.add(order.distributorId)
+    byStatus[status] = (byStatus[status] ?? 0) + 1
+  }
+  return { orders: count, orderValue: round2(orderValue), distributors: distributors.size, byStatus }
 }
 
 // ── Display DTO ────────────────────────────────────────────────────────────
@@ -447,7 +481,13 @@ export interface DistributorAnalyticsReport {
     avgOrdersPerDay: number
     avgValuePerDay: number
   }
+  /** Active-order comparison (Active Orders / Active Order Value / Avg Order Value …) — PDF and distributor drawer. */
   comparison: ComparisonRow[]
+  /**
+   * The dashboard's "This Period vs Previous Period": Approved Orders, Approved Sales and Average
+   * Approved Order Value (approved-stage orders only), then the remaining rows of `comparison`.
+   */
+  approvedComparison: ComparisonRow[]
   insights: InsightCard[]
   dailyTrend: { date: string; label: string; shortLabel: string; orders: number; orderValue: number }[]
   leaderboard: LeaderboardRow[]
@@ -498,6 +538,30 @@ export interface DistributorAnalyticsReport {
     cancelledValue: number
   }
   recentOrders: OrderRecordTotals[]
+  /**
+   * Overview headline: approved-stage orders (Approved Sales) first, with the submitted orders
+   * awaiting approval alongside. Draft and cancelled orders are never part of it.
+   */
+  approvedSales: {
+    value: number
+    orders: number
+    /** Distinct distributors with at least one approved-stage order; `null` when the approved read was unavailable. */
+    distributors: number | null
+    avgOrderValue: number | null
+    /** Approved-stage orders per status in display order, e.g. 6 Approved, 1 Packed. */
+    statuses: { status: string; label: string; orders: number }[]
+    /** Approved-stage figures of the comparison window; `null` when not available. */
+    previous: { value: number; orders: number; distributors: number; avgOrderValue: number | null } | null
+    valueChangePct: number | null
+    ordersChangePct: number | null
+    avgOrderValueChangePct: number | null
+    /** Submitted orders awaiting approval (pipeline). */
+    submittedOrders: number
+    submittedValue: number
+    submittedAvgOrderValue: number | null
+    /** Whether the approved figures reproduce Order Processing Health's approved-stage totals. */
+    reconciled: boolean
+  }
   meta: {
     orderType: string
     buyerOrgType: string
@@ -919,6 +983,57 @@ export function buildDistributorRows(
 
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
+/** Approved-stage statuses in their display order (Approved → Packed → Shipped → Closed). */
+const APPROVED_STATUS_ORDER = ['approved', 'warehouse_packed', 'shipped_distributor', 'closed']
+
+function buildApprovedSales(
+  aggregate: DistributorAnalyticsAggregate,
+  health: { approvedOrders: number; approvedSalesValue: number; pipelineOrders: number; pipelineValue: number },
+): DistributorAnalyticsReport['approvedSales'] {
+  const avg = (value: number, orders: number) => (orders > 0 ? round2(value / orders) : null)
+  const fromBreakdown: Record<string, number> = {}
+  for (const row of aggregate.statusBreakdown) {
+    if (APPROVED_STATUSES.includes(row.status)) fromBreakdown[row.status] = (fromBreakdown[row.status] ?? 0) + row.orders
+  }
+  const current = aggregate.approved?.current
+  const value = current ? round2(current.orderValue) : health.approvedSalesValue
+  const orders = current ? current.orders : health.approvedOrders
+  const byStatus = current ? current.byStatus : fromBreakdown
+  // Without the approved read, distributors with an approved order cannot be told apart from
+  // distributors with only submitted orders: unknown, never guessed (0 only when nothing was approved).
+  const distributors = current ? current.distributors : (orders === 0 ? 0 : null)
+  const previousTotals = aggregate.approved?.previous
+  const previous = previousTotals
+    ? {
+      value: round2(previousTotals.orderValue),
+      orders: previousTotals.orders,
+      distributors: previousTotals.distributors,
+      avgOrderValue: avg(previousTotals.orderValue, previousTotals.orders),
+    }
+    : null
+  const avgOrderValue = avg(value, orders)
+  const statuses = [...APPROVED_STATUS_ORDER, ...Object.keys(byStatus).filter((key) => !APPROVED_STATUS_ORDER.includes(key))]
+    .filter((status) => (byStatus[status] ?? 0) > 0)
+    .map((status) => ({ status, label: statusLabel(status), orders: byStatus[status] }))
+  return {
+    value,
+    orders,
+    distributors,
+    avgOrderValue,
+    statuses,
+    previous,
+    valueChangePct: previous ? metricDelta(value, previous.value).changePct : null,
+    ordersChangePct: previous ? metricDelta(orders, previous.orders).changePct : null,
+    avgOrderValueChangePct: previous && avgOrderValue !== null && previous.avgOrderValue !== null
+      ? metricDelta(avgOrderValue, previous.avgOrderValue).changePct
+      : null,
+    submittedOrders: health.pipelineOrders,
+    submittedValue: health.pipelineValue,
+    submittedAvgOrderValue: avg(health.pipelineValue, health.pipelineOrders),
+    reconciled: !current || (current.orders === health.approvedOrders && Math.abs(current.orderValue - health.approvedSalesValue) < 0.01),
+  }
+}
+
 export function buildDistributorAnalyticsReport(
   aggregate: DistributorAnalyticsAggregate,
   now: Date = new Date(),
@@ -1052,6 +1167,16 @@ export function buildDistributorAnalyticsReport(
     },
     { key: 'activeDistributors', label: 'Active Distributors', format: 'count', current: activeDistributors, previous: previousActive, changePct: activeDelta.changePct, changePoints: activeDistributors - previousActive },
     { key: 'returningRate', label: 'Returning Rate', format: 'percent', current: returningRatePct, previous: previousReturningRate, changePct: null, changePoints: returningDelta.changePoints },
+  ]
+
+  // ── Approved-first comparison (the dashboard's "This Period vs Previous Period") ──
+  const approvedSales = buildApprovedSales(aggregate, { approvedOrders, approvedSalesValue, pipelineOrders, pipelineValue })
+  const approvedPrev = approvedSales.previous
+  const approvedComparison: ComparisonRow[] = [
+    { key: 'approvedOrders', label: 'Approved Orders', format: 'count', current: approvedSales.orders, previous: approvedPrev?.orders ?? null, changePct: approvedSales.ordersChangePct, changePoints: null },
+    { key: 'approvedSalesValue', label: 'Approved Sales', format: 'currency', current: approvedSales.value, previous: approvedPrev?.value ?? null, changePct: approvedSales.valueChangePct, changePoints: null },
+    { key: 'avgApprovedOrderValue', label: 'Average Approved Order Value', format: 'currency', current: approvedSales.avgOrderValue, previous: approvedPrev?.avgOrderValue ?? null, changePct: approvedSales.avgOrderValueChangePct, changePoints: null },
+    ...comparison.filter((row) => row.key !== 'activeOrders' && row.key !== 'activeOrderValue' && row.key !== 'avgOrderValue'),
   ]
 
   // ── Insights ────────────────────────────────────────────────────────────
@@ -1217,6 +1342,8 @@ export function buildDistributorAnalyticsReport(
       cancelledValue,
     },
     recentOrders: aggregate.recentOrders.slice(0, RECENT_ORDERS_LIMIT),
+    approvedSales,
+    approvedComparison,
     meta: {
       orderType: ELIGIBLE_ORDER_TYPE,
       buyerOrgType: DISTRIBUTOR_ORG_TYPE,

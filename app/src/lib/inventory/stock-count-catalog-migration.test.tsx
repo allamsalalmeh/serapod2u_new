@@ -32,7 +32,11 @@ describe('Stock Count configuration scope migration', () => {
   it('wires Full Count, Partial Count, Excel export, and import to the same eligible catalog', () => {
     expect(stockAdjustmentView).toContain(".from('inventory_stock_configurations')")
     expect(stockAdjustmentView).toContain('buildStockCountCatalogRows(configurationResult.data || [], balanceResult.data || [])')
-    expect(stockAdjustmentView).toContain('const scoped = selectedGroupId === ALL_GROUP_ID ? visibleRows')
+    // The screen, export and import all read the same `visibleRows` catalog. The
+    // Product Groups side filter was removed, so the table narrows that one set
+    // by search / row filters only and never re-scopes it by group.
+    expect(stockAdjustmentView).toContain('return visibleRows.filter(row => {')
+    expect(stockAdjustmentView).not.toContain('selectedGroupId')
     expect(stockAdjustmentView).toContain('buildStockCountWorksheet(workbook, visibleRows.map')
     expect(stockAdjustmentView).toContain('parseStockCountWorksheet(sheet, visibleRows.map')
   })

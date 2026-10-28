@@ -12,6 +12,7 @@ import {
   buildDistributorAnalyticsReport,
   emptyAggregate,
   resolveDistributorReportPeriod,
+  summarizeApprovedWindow,
   type DistributorAggregate,
   type DistributorAnalyticsAggregate,
 } from '@/lib/reporting/distributor-analytics'
@@ -69,6 +70,14 @@ function aggregateFor(month: string, distributorId = ALL_DISTRIBUTORS, status = 
     current: { orders: sum('currentOrders'), orderValue: sum('currentValue'), activeDistributors: rows.filter((r) => r.currentOrders > 0).length },
     previous: { orders: sum('previousOrders'), orderValue: sum('previousValue'), activeDistributors: rows.filter((r) => r.previousOrders > 0).length },
     distributors: rows,
+    // Every fixture order is 'approved': the status mix and the approved-stage windows follow from them.
+    statusBreakdown: [{ status: 'approved', orders: sum('currentOrders'), orderValue: sum('currentValue') }],
+    approved: {
+      current: summarizeApprovedWindow(DATA[month].orders
+        .filter((o) => rows.some((r) => r.distributorId === o.distributorId))
+        .map((o) => ({ status: o.status, distributorId: o.distributorId, orderValue: o.orderValue }))),
+      previous: summarizeApprovedWindow([]),
+    },
   }
 }
 
@@ -113,9 +122,9 @@ const drawer = () => screen.findByTestId('metric-drilldown')
 const rowsIn = (el: HTMLElement) => within(within(el).getByTestId('drilldown-table')).getAllByRole('row').slice(1)
 
 describe('clickable dashboard metrics', () => {
-  it('6. Active Orders and Active Distributors cards are interactive; Concentration and At Risk are not', async () => {
+  it('6. Approved Orders and Active Distributors cards are interactive; Concentration and At Risk are not', async () => {
     await renderTab()
-    for (const label of ['Active Orders', 'Active Distributors', 'New Distributors', 'Inactive This Period', 'Returning Distributors']) {
+    for (const label of ['Approved Orders', 'Active Distributors', 'New Distributors', 'Inactive This Period', 'Returning Distributors']) {
       const card = screen.getByRole('button', { name: `View ${label} details` })
       expect(card.getAttribute('tabindex')).toBe('0')
       expect(card.className).toContain('cursor-pointer')
@@ -124,18 +133,18 @@ describe('clickable dashboard metrics', () => {
     expect(screen.getByTestId('insight-at_risk').getAttribute('role')).toBeNull()
   })
 
-  it('7. Active Orders opens exactly the 7 counted orders for the current scope', async () => {
+  it('7. Approved Orders opens exactly the 7 counted approved orders for the current scope', async () => {
     await renderTab()
-    fireEvent.click(screen.getByRole('button', { name: 'View Active Orders details' }))
+    fireEvent.click(screen.getByRole('button', { name: 'View Approved Orders details' }))
     const panel = await drawer()
-    await waitFor(() => expect(within(panel).getByText('Active Orders — September 2026')).toBeTruthy())
+    await waitFor(() => expect(within(panel).getByText('Approved Orders — September 2026')).toBeTruthy())
     await waitFor(() => expect(rowsIn(panel)).toHaveLength(7))
-    expect(within(panel).getByTestId('drilldown-summary').textContent).toContain('Active Orders: 7')
-    expect(within(panel).getByTestId('drilldown-summary').textContent).toContain('Active Order Value: RM36.9K')
+    expect(within(panel).getByTestId('drilldown-summary').textContent).toContain('Approved Orders: 7')
+    expect(within(panel).getByTestId('drilldown-summary').textContent).toContain('Approved Sales: RM36.9K')
     expect(within(panel).queryByRole('alert')).toBeNull()
     const link = within(panel).getAllByRole('link')[0] as HTMLAnchorElement
     expect(link.getAttribute('href')).toMatch(/^\/supply-chain\/orders\//)
-    expect(Object.fromEntries(drillRequests[0])).toEqual({ metric: 'total_orders', month: '2026-09', distributor: 'all', status: 'all' })
+    expect(Object.fromEntries(drillRequests[0])).toEqual({ metric: 'approved_orders', month: '2026-09', distributor: 'all', status: 'all' })
   })
 
   it('8. Active Distributors opens the 3 active distributors', async () => {

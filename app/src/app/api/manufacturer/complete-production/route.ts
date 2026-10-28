@@ -271,6 +271,7 @@ export async function POST(request: NextRequest) {
       const customerName = customerMatch?.[1]?.trim() || 'N/A'
 
       const payload = {
+        order_id: orderInfo.id,
         order_no: displayOrderNo,
         batch_id: batch.id,
         total_master_codes: totalMasters?.toString() || '0',

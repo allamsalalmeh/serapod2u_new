@@ -6,10 +6,10 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, Building2,
+  AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, Building2, DollarSign, Info,
   ChevronLeft, ChevronRight, ClipboardList, Download, FileSpreadsheet, HeartPulse,
   Loader2, Minus, Package, PieChart as PieIcon, RefreshCw, Search, ShoppingCart,
-  Target, TrendingUp, Users, X,
+  TrendingUp, Users, X,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -252,6 +252,73 @@ function KpiCard({ label, icon: Icon, accent, value, delta, caption, onClick }: 
       </CardContent>
     </Card>
   )
+}
+
+/**
+ * Overview headline KPI: the approved figure, its growth against the comparison window, and a
+ * footer line (submitted orders awaiting approval, or a supporting breakdown) under a divider.
+ */
+function HeadlineKpiCard({ label, info, icon: Icon, accent, value, changePct, versus, footer, onClick, testId }: {
+  label: string
+  /** Definition shown on the ⓘ hint. */
+  info: string
+  icon: typeof Package
+  accent: string
+  value: string
+  changePct: number | null
+  /** e.g. "vs 01 Jul 2026 – 31 Jul 2026". */
+  versus: string
+  footer?: { label: string; value?: string | null; note?: string | null } | null
+  onClick?: () => void
+  testId?: string
+}) {
+  return (
+    <Card
+      className={cn(REPORTING_PANEL_CLASS, 'flex h-full flex-col transition-all hover:border-[var(--sera-orange)]/35', onClick && INTERACTIVE_CARD_CLASS)}
+      data-testid={testId}
+      {...interactiveProps(onClick, label)}
+    >
+      <CardContent className="flex flex-1 flex-col px-4 pb-4 pt-4 sm:px-5 sm:pt-5">
+        <div className="flex items-start gap-3">
+          <span className="shrink-0 rounded-xl p-2 sm:p-2.5" style={{ backgroundColor: `${accent}15` }}>
+            <Icon className="h-5 w-5" style={{ color: accent }} strokeWidth={1.75} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-1 text-xs font-medium text-[var(--sera-muted)] sm:text-sm">
+              <span>{label}</span>
+              <span title={info} aria-label={`${label}: ${info}`} role="img" className="inline-flex shrink-0 cursor-help">
+                <Info className="h-3.5 w-3.5" aria-hidden />
+              </span>
+            </p>
+            <ExecutiveKpiValue>{value}</ExecutiveKpiValue>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <GrowthBadge value={changePct} nullLabel="No baseline" />
+              <span className="text-[10px] text-[var(--sera-muted)] sm:text-[11px]">{versus}</span>
+            </div>
+          </div>
+        </div>
+        {footer ? (
+          <div className="mt-auto pt-3" data-testid={testId ? `${testId}-footer` : undefined}>
+            <div className="border-t border-[var(--sera-line)] pt-3">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-xs font-medium text-[var(--sera-ink)] sm:text-sm">{footer.label}</span>
+                {footer.value ? <span className="shrink-0 text-sm font-semibold tabular-nums text-[var(--sera-ink)]">{footer.value}</span> : null}
+              </div>
+              {footer.note ? <p className="mt-0.5 text-[10px] text-[var(--sera-muted)] sm:text-[11px]">{footer.note}</p> : null}
+            </div>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  )
+}
+
+/** "6 approved + 1 packed order" — approved-stage orders by status, lower-case, singular when the last count is 1. */
+function approvedStageNote(statuses: { status: string; orders: number }[]): string | null {
+  if (statuses.length === 0) return null
+  const word: Record<string, string> = { approved: 'approved', warehouse_packed: 'packed', shipped_distributor: 'shipped', closed: 'closed' }
+  const parts = statuses.map((row) => `${formatCount(row.orders)} ${word[row.status] ?? statusLabel(row.status).toLowerCase()}`)
+  return `${parts.join(' + ')} ${statuses[statuses.length - 1].orders === 1 ? 'order' : 'orders'}`
 }
 
 function SectionCard({ title, description, icon: Icon, action, children, className }: {
@@ -717,8 +784,13 @@ export default function DistributorReportsTab({
 
   const { period, summary, comparison } = report
   const findComparison = (key: string) => comparison.find((row) => row.key === key)
-  const activeChange = findComparison('activeDistributors')?.changePoints ?? null
-  const returningChange = findComparison('returningRate')?.changePoints ?? null
+  const approved = report.approvedSales
+  const approvedComparison = report.approvedComparison
+  const versus = `vs ${period.comparisonRangeLabel}`
+  const activeDistributorsRow = findComparison('activeDistributors')
+  const activeDistributorsChangePct = activeDistributorsRow && typeof activeDistributorsRow.previous === 'number' && activeDistributorsRow.previous > 0
+    ? Math.round(((Number(activeDistributorsRow.current) - activeDistributorsRow.previous) / activeDistributorsRow.previous) * 1000) / 10
+    : null
 
   const comparisonCell = (row: ComparisonRow, side: 'current' | 'previous') => {
     const value = row[side]
@@ -785,57 +857,77 @@ export default function DistributorReportsTab({
 
         {/* ══ OVERVIEW ══════════════════════════════════════════════════ */}
         <TabsContent value="overview" className="space-y-5">
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-5">
-            {/* Active = submitted + approved-stage, whatever the Status filter;
-                draft and cancelled orders are only in Orders Created. */}
-            <KpiCard
-              label="Active Orders"
+          {/* Headline = APPROVED-stage orders (approved, warehouse packed, shipped, closed). Submitted orders
+              awaiting approval are shown beneath each card, only when there are any. Draft and cancelled
+              orders are not part of these KPIs; they remain in Order Processing Health and Recent Orders. */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4" data-testid="distributor-headline-kpis">
+            <HeadlineKpiCard
+              testId="kpi-approved-sales"
+              label="Approved Sales"
+              info="Order value of approved, warehouse packed, shipped and closed D2H orders by SO date. Submitted, draft and cancelled orders are excluded."
+              icon={DollarSign}
+              accent={REPORTING_COLORS.success}
+              value={formatRMCompact(approved.value)}
+              changePct={approved.valueChangePct}
+              versus={versus}
+              footer={approved.submittedOrders > 0
+                ? { label: 'Submitted', value: formatRMCompact(approved.submittedValue), note: approvedStageNote(approved.statuses) }
+                : approvedStageNote(approved.statuses) ? { label: 'Approved stages', note: approvedStageNote(approved.statuses) } : null}
+            />
+            <HeadlineKpiCard
+              testId="kpi-approved-orders"
+              label="Approved Orders"
+              info="Number of approved, warehouse packed, shipped and closed D2H orders by SO date."
               icon={ShoppingCart}
               accent={REPORTING_COLORS.primary}
-              value={formatCount(summary.activeOrders)}
-              delta={<GrowthBadge value={findComparison('activeOrders')?.changePct ?? null} />}
-              caption={`${formatCount(summary.ordersCreated)} created · ${formatCount(report.orderProcessing.cancelledOrders)} cancelled`}
-              onClick={() => openMetric('total_orders')}
+              value={formatCount(approved.orders)}
+              changePct={approved.ordersChangePct}
+              versus={versus}
+              footer={approved.submittedOrders > 0
+                ? { label: 'Submitted Orders', value: formatCount(approved.submittedOrders), note: `${formatCount(approved.orders)} approved-stage ${approved.orders === 1 ? 'order' : 'orders'}` }
+                : null}
+              onClick={() => openMetric('approved_orders')}
             />
-            <KpiCard
-              label="Active Order Value"
-              icon={Target}
-              accent={REPORTING_COLORS.success}
-              value={formatRMCompact(summary.activeOrderValue)}
-              delta={<GrowthBadge value={findComparison('activeOrderValue')?.changePct ?? null} />}
-              caption={`Approved Sales ${formatRMCompact(report.orderProcessing.approvedSalesValue)}`}
-            />
-            <KpiCard
-              label="Avg Order Value"
-              icon={BarChart3}
-              accent={REPORTING_COLORS.violet}
-              value={summary.avgOrderValue === null ? '—' : formatRMCompact(summary.avgOrderValue)}
-              delta={<GrowthBadge value={findComparison('avgOrderValue')?.changePct ?? null} />}
-              caption={`Comparison ${findComparison('avgOrderValue')?.previous === null ? '—' : formatRMCompact(findComparison('avgOrderValue')!.previous!)}`}
-            />
-            <KpiCard
+            <HeadlineKpiCard
+              testId="kpi-active-distributors"
               label="Active Distributors"
+              info="Distributors with at least one submitted or approved-stage order in the period."
               icon={Users}
-              accent={REPORTING_COLORS.warning}
+              accent={REPORTING_COLORS.violet}
               value={formatCount(summary.activeDistributors)}
-              delta={<GrowthBadge value={activeChange} suffix="" decimals={0} nullLabel="No baseline" />}
-              caption={`${formatCount(summary.multipleOrderDistributors)} placed more than one order`}
+              changePct={activeDistributorsChangePct}
+              versus={versus}
+              footer={approved.distributors === null ? null : {
+                label: 'With Approved Orders',
+                value: formatCount(approved.distributors),
+                note: 'Distributors with ≥ 1 approved order',
+              }}
               onClick={() => openMetric('active')}
             />
-            <KpiCard
-              label="Returning Rate"
-              icon={RefreshCw}
-              accent={REPORTING_COLORS.cyan}
-              value={formatPct(summary.returningRatePct)}
-              delta={<GrowthBadge value={returningChange} suffix="pp" nullLabel="No baseline" />}
-              caption={`${formatCount(summary.returningDistributors)} of ${formatCount(summary.activeDistributors)} active traded before`}
+            <HeadlineKpiCard
+              testId="kpi-avg-approved-order-value"
+              label="Average Approved Order Value"
+              info="Approved Sales ÷ Approved Orders."
+              icon={BarChart3}
+              accent={REPORTING_COLORS.slate}
+              value={approved.avgOrderValue === null ? '—' : formatRMCompact(approved.avgOrderValue)}
+              changePct={approved.avgOrderValueChangePct}
+              versus={versus}
+              footer={approved.submittedAvgOrderValue !== null
+                ? { label: 'Submitted Avg. Order Value', value: formatRMCompact(approved.submittedAvgOrderValue), note: 'Based on submitted orders' }
+                : null}
             />
           </div>
           <p className="-mt-2 text-[11px] text-[var(--sera-muted)]" data-testid="active-kpi-definition">
-            Active = Submitted, Approved, Warehouse Packed, Shipped and Closed orders. Draft and cancelled orders never count toward
-            Active Orders, Active Order Value or Approved Sales under any Status filter; they remain in Orders Created, Order
-            Processing Health and Recent Orders.
+            Approved = Approved, Warehouse Packed, Shipped and Closed orders. Submitted orders awaiting approval are shown under each
+            card. Draft and cancelled orders never count toward these KPIs under any Status filter; they remain in Order Processing
+            Health and Recent Orders. Active Distributors counts submitted and approved-stage orders.
           </p>
+          {!approved.reconciled ? (
+            <p role="alert" className="-mt-2 text-[11px] text-amber-700">
+              Approved figures do not reconcile with Order Processing Health — please report this.
+            </p>
+          ) : null}
 
           {report.isEmpty ? (
             <Card className={REPORTING_PANEL_CLASS}>
@@ -850,6 +942,7 @@ export default function DistributorReportsTab({
             description={`${period.rangeLabel} compared with ${period.comparisonRangeLabel}`}
             icon={TrendingUp}
           >
+            {/* Approved-stage orders lead, like the headline cards; submitted, draft and cancelled orders are not in these rows. */}
             <div className="hidden md:block">
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[560px] text-sm">
@@ -862,7 +955,7 @@ export default function DistributorReportsTab({
                     </tr>
                   </thead>
                   <tbody>
-                    {comparison.map((row) => (
+                    {approvedComparison.map((row) => (
                       <tr key={row.key} className="border-b border-[var(--sera-line)]/60 last:border-0">
                         <td className="px-2 py-2.5 font-medium text-[var(--sera-ink)]">{row.label}</td>
                         <td className="px-2 py-2.5 text-right tabular-nums">{comparisonCell(row, 'current')}</td>
@@ -875,7 +968,7 @@ export default function DistributorReportsTab({
               </div>
             </div>
             <div className="space-y-2.5 md:hidden">
-              {comparison.map((row) => (
+              {approvedComparison.map((row) => (
                 <div key={row.key} className="rounded-xl border border-[var(--sera-line)] p-3">
                   <div className="mb-1.5 flex items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-[var(--sera-ink)]">{row.label}</span>
@@ -1628,6 +1721,7 @@ const INSIGHT_DRILLDOWN: Partial<Record<string, DrilldownMetric>> = {
 
 const METRIC_TITLE: Record<DrilldownMetric, string> = {
   total_orders: 'Active Orders',
+  approved_orders: 'Approved Orders',
   active: 'Active Distributors',
   new: 'New Distributors',
   inactive: 'Inactive Distributors',
@@ -1666,7 +1760,7 @@ function MetricDrilldownPanel({ metric, data, loading, error, periodLabel }: {
   const [page, setPage] = useState(0)
   useEffect(() => { setQuery(''); setPage(0) }, [metric, data])
 
-  const isOrders = metric === 'total_orders'
+  const isOrders = metric === 'total_orders' || metric === 'approved_orders'
   const allRows = data ? (isOrders ? data.orders : data.distributors) : []
   const needle = query.trim().toLowerCase()
   const rows = needle
@@ -1700,7 +1794,12 @@ function MetricDrilldownPanel({ metric, data, loading, error, periodLabel }: {
             {!isOrders ? (
               <Badge variant="secondary" className="px-2 py-1 text-xs">{METRIC_TITLE[metric]}: {formatCount(data.headline.count)}</Badge>
             ) : null}
-            {isOrders || metric === 'active' ? (
+            {metric === 'approved_orders' ? (
+              <>
+                <Badge variant="secondary" className="px-2 py-1 text-xs">Approved Orders: {formatCount(data.headline.approvedOrders)}</Badge>
+                <Badge variant="secondary" className="px-2 py-1 text-xs">Approved Sales: {formatRMCompact(data.headline.approvedSalesValue)}</Badge>
+              </>
+            ) : isOrders || metric === 'active' ? (
               <>
                 <Badge variant="secondary" className="px-2 py-1 text-xs">Active Orders: {formatCount(data.headline.activeOrders)}</Badge>
                 <Badge variant="secondary" className="px-2 py-1 text-xs">Active Order Value: {formatRMCompact(data.headline.activeOrderValue)}</Badge>

@@ -52,6 +52,34 @@ import {
 } from '@/lib/inventory/variant-display-label'
 import { withStockStrengthUnit } from '@/lib/inventory/stock-config-unit-label'
 import { shouldShowConfigurationColumn } from '@/lib/inventory/canonical-stock-config'
+import StockQuantityDisplay from '@/components/inventory/StockQuantityDisplay'
+import { formatStockQuantity, resolveStockUnit, stockUnitForProduct } from '@/lib/inventory/stock-count-quantity'
+
+/**
+ * Unit the balance is stored in: cartridges are integer CASES, everything else
+ * integer PIECES. Manual additions post in this unit, so the row says which one
+ * is in play instead of leaving the operator to guess.
+ */
+const stockUnitLabel = (productName: string): string => stockUnitForProduct(productName)
+
+/**
+ * A catalog row's balance as a labelled pair. The unit is resolved from the
+ * product line (shared rule), so a missing/defaulted pcs_per_case can never
+ * relabel a Cellera case balance as pieces. Loose pieces carry through a
+ * whole-unit addition unchanged.
+ */
+const rowBalanceQuantity = (
+  row: { productName: string; pcsPerCase?: number | null; currentPcsOnHand?: number },
+  cases: number,
+) => {
+  const resolved = resolveStockUnit({ productName: row.productName, balancePcsPerCase: row.pcsPerCase })
+  return {
+    cases,
+    pcs: row.currentPcsOnHand ?? 0,
+    pcsPerCase: resolved.pcsPerCase,
+    unit: resolved.unit,
+  }
+}
 
 interface WarehouseLocation {
   id: string
@@ -88,6 +116,9 @@ export default function AddStockView({ userProfile, onViewChange }: AddStockView
 
   const [catalogRows, setCatalogRows] = useState<ManualStockCatalogRow[]>([])
   const [quantities, setQuantities] = useState<Record<string, string>>({})
+  // Loose pieces added on top of the whole units: "add 2 pcs" is a real stock
+  // change, not a rounding detail, so it gets its own input and its own value.
+  const [pcsQuantities, setPcsQuantities] = useState<Record<string, string>>({})
   const [unitCosts, setUnitCosts] = useState<Record<string, string>>({})
   const [rowNotes, setRowNotes] = useState<Record<string, string>>({})
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
@@ -210,16 +241,25 @@ export default function AddStockView({ userProfile, onViewChange }: AddStockView
 
       const { data: inventory, error: inventoryError } = await supabase
         .from('product_inventory')
-        .select('variant_id, stock_config_id, quantity_on_hand, average_cost')
+        .select('variant_id, stock_config_id, quantity_on_hand, pcs_on_hand, pcs_per_case, average_cost')
         .eq('organization_id', warehouseId)
         .eq('is_active', true)
       if (inventoryError) throw inventoryError
 
-      const balanceByKey = new Map<string, { quantity_on_hand: number; average_cost: number | null }>()
-      for (const row of inventory || []) {
+      const balanceByKey = new Map<string, {
+        quantity_on_hand: number
+        pcs_on_hand: number
+        pcs_per_case: number | null
+        average_cost: number | null
+      }>()
+      for (const row of (inventory || []) as any[]) {
         if (!row.stock_config_id) continue
         balanceByKey.set(catalogRowKey(row.variant_id, row.stock_config_id), {
           quantity_on_hand: Number(row.quantity_on_hand ?? 0),
+          pcs_on_hand: Number(row.pcs_on_hand ?? 0) || 0,
+          pcs_per_case: row.pcs_per_case === null || row.pcs_per_case === undefined
+            ? null
+            : Number(row.pcs_per_case),
           average_cost: row.average_cost === null || row.average_cost === undefined
             ? null
             : Number(row.average_cost),
@@ -240,6 +280,8 @@ export default function AddStockView({ userProfile, onViewChange }: AddStockView
         rows.push({
           ...mapped,
           currentOnHand: balance?.quantity_on_hand ?? 0,
+          currentPcsOnHand: balance?.pcs_on_hand ?? 0,
+          pcsPerCase: balance?.pcs_per_case ?? null,
           averageCost: balance?.average_cost ?? null,
         })
       }
@@ -327,7 +369,7 @@ export default function AddStockView({ userProfile, onViewChange }: AddStockView
 
   const reviewLines = useMemo(() => {
     try {
-      return buildManualStockRpcItems(catalogRows, selectedKeys, quantities, unitCosts, rowNotes)
+      return buildManualStockRpcItems(catalogRows, selectedKeys, quantities, unitCosts, rowNotes, pcsQuantities)
         .map((item) => {
           const row = catalogRows.find((entry) => entry.rowKey === catalogRowKey(item.variantId, item.stockConfigId))!
           return { item, row }
@@ -481,7 +523,7 @@ export default function AddStockView({ userProfile, onViewChange }: AddStockView
       return
     }
     try {
-      buildManualStockRpcItems(catalogRows, selectedKeys, quantities, unitCosts, rowNotes)
+      buildManualStockRpcItems(catalogRows, selectedKeys, quantities, unitCosts, rowNotes, pcsQuantities)
     } catch (error: any) {
       toast({ title: 'Validation error', description: error.message, variant: 'destructive' })
       return
@@ -502,7 +544,7 @@ export default function AddStockView({ userProfile, onViewChange }: AddStockView
     postingLockRef.current = true
     setPosting(true)
     try {
-      const items = buildManualStockRpcItems(catalogRows, selectedKeys, quantities, unitCosts, rowNotes)
+      const items = buildManualStockRpcItems(catalogRows, selectedKeys, quantities, unitCosts, rowNotes, pcsQuantities)
       const params = buildPostManualStockAdditionParams({
         requestId,
         warehouseId: selectedWarehouse,
@@ -674,6 +716,8 @@ export default function AddStockView({ userProfile, onViewChange }: AddStockView
           </CardTitle>
           <CardDescription>
             Exact stock configurations as individual rows. Legacy/Unclassified is never selectable. STD products still post their exact stock_config_id.
+            Quantities are entered in each row&apos;s stock unit — <span className="font-medium">cases</span> for cartridges,
+            {' '}<span className="font-medium">pcs</span> for everything else — and are never converted between the two.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -822,15 +866,45 @@ export default function AddStockView({ userProfile, onViewChange }: AddStockView
                               </Badge>
                             </TableCell>
                           )}
-                          <TableCell className="text-right tabular-nums">{row.currentOnHand.toLocaleString()}</TableCell>
-                          <TableCell className="text-right">
-                            <Input
-                              className="w-24 ml-auto text-right"
-                              inputMode="numeric"
-                              value={quantities[row.rowKey] || ''}
-                              onChange={(e) => setQuantity(row.rowKey, e.target.value)}
-                              placeholder="0"
+                          <TableCell className="text-right tabular-nums">
+                            <StockQuantityDisplay
+                              quantity={rowBalanceQuantity(row, row.currentOnHand)}
+                              note={resolveStockUnit({ productName: row.productName, balancePcsPerCase: row.pcsPerCase }).conflict}
+                              className="items-end"
                             />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-end justify-end gap-1.5">
+                              <label className="flex flex-col items-end gap-0.5">
+                                <span className="text-[10px] font-semibold uppercase tracking-wide text-blue-800">
+                                  {stockUnitLabel(row.productName) === 'cases' ? 'Cases' : 'Pcs'}
+                                </span>
+                                <Input
+                                  className="w-24 text-right"
+                                  inputMode="numeric"
+                                  aria-label={`Add quantity in ${stockUnitLabel(row.productName)} for ${row.variantName || row.productName}`}
+                                  value={quantities[row.rowKey] || ''}
+                                  onChange={(e) => setQuantity(row.rowKey, e.target.value)}
+                                  placeholder="0"
+                                />
+                              </label>
+                              {stockUnitLabel(row.productName) === 'cases' && (
+                                <label className="flex flex-col items-end gap-0.5">
+                                  <span className="text-[10px] font-semibold uppercase tracking-wide text-teal-600">Pcs</span>
+                                  <Input
+                                    className="w-16 text-right"
+                                    inputMode="numeric"
+                                    aria-label={`Add extra pieces for ${row.variantName || row.productName}`}
+                                    value={pcsQuantities[row.rowKey] || ''}
+                                    onChange={(e) => setPcsQuantities((prev) => ({
+                                      ...prev,
+                                      [row.rowKey]: e.target.value.replace(/[^\d]/g, ''),
+                                    }))}
+                                    placeholder="0"
+                                  />
+                                </label>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell className="text-right">
                             <Input
@@ -842,7 +916,12 @@ export default function AddStockView({ userProfile, onViewChange }: AddStockView
                             />
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
-                            {addQty > 0 ? newBalance(row.currentOnHand, addQty).toLocaleString() : '—'}
+                            {addQty > 0 ? (
+                              <StockQuantityDisplay
+                                quantity={rowBalanceQuantity(row, newBalance(row.currentOnHand, addQty))}
+                                className="items-end"
+                              />
+                            ) : '—'}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
                             {value == null ? '—' : value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -890,7 +969,7 @@ export default function AddStockView({ userProfile, onViewChange }: AddStockView
           <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 text-sm">
             <div><div className="text-slate-500">Selected flavours</div><div className="font-semibold">{summary.selectedFlavours}</div></div>
             <div><div className="text-slate-500">Selected configurations</div><div className="font-semibold">{summary.selectedConfigurations}</div></div>
-            <div><div className="text-slate-500">Total units added</div><div className="font-semibold">{summary.totalUnits.toLocaleString()}</div></div>
+            <div><div className="text-slate-500">Quantity added (per row&apos;s stock unit)</div><div className="font-semibold">{summary.totalUnits.toLocaleString()}</div></div>
             <div><div className="text-slate-500">Total addition value</div><div className="font-semibold">{summary.totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div>
             <div><div className="text-slate-500">Warehouse</div><div className="font-semibold truncate max-w-[10rem]">{warehouseName}</div></div>
             <div><div className="text-slate-500">Reason</div><div className="font-semibold truncate max-w-[10rem]">{reason || '—'}</div></div>
@@ -947,7 +1026,7 @@ export default function AddStockView({ userProfile, onViewChange }: AddStockView
                       {showConfiguration && <TableCell>{withStockStrengthUnit(row.configLabel)}</TableCell>}
                       <TableCell className="text-right">{item.quantity}</TableCell>
                       <TableCell className="text-right">
-                        {row.currentOnHand.toLocaleString()} → {newBalance(row.currentOnHand, item.quantity).toLocaleString()}
+                        {formatStockQuantity(rowBalanceQuantity(row, row.currentOnHand)).text} → {formatStockQuantity(rowBalanceQuantity(row, newBalance(row.currentOnHand, item.quantity))).text}
                       </TableCell>
                       <TableCell className="text-right">{item.unitCost ?? '—'}</TableCell>
                       <TableCell className="text-right">

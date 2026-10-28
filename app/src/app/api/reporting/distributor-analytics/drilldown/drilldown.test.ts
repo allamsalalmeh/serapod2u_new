@@ -344,3 +344,50 @@ describe('backdated SO: web report, drill-down and CSV agree on the business dat
     expect(report.meta.dateField).toBe('orders.order_date')
   })
 })
+
+describe('approved-first headline (Approved Sales / Approved Orders)', () => {
+  it('18. August approved figures: approved-stage D2H orders of DIST buyers only, reconciled with Order Processing Health', async () => {
+    const report = await headline(AUG)
+    const a = report.approvedSales
+    // Alpha's approved RM2,500 + closed RM4,000. Not Beta's submitted, Delta's cancelled, the HQ buyer or the H2M order.
+    expect(a).toMatchObject({ value: 6500, orders: 2, distributors: 1, avgOrderValue: 3250, reconciled: true })
+    expect(a.statuses).toEqual([{ status: 'approved', label: 'Approved', orders: 1 }, { status: 'closed', label: 'Closed', orders: 1 }])
+    expect(a.value).toBe(report.orderProcessing.approvedSalesValue)
+    expect(a.orders).toBe(report.orderProcessing.approvedOrders)
+    expect(a).toMatchObject({ submittedOrders: 1, submittedValue: 1500, submittedAvgOrderValue: 1500 })
+  })
+
+  it('19. compares approved with approved: July approved RM6,200 over 3 orders (Alpha, Cahaya, Ekor)', async () => {
+    const a = (await headline(AUG)).approvedSales
+    expect(a.previous).toEqual({ value: 6200, orders: 3, distributors: 3, avgOrderValue: 2066.67 })
+    expect(a.valueChangePct).toBe(4.8)
+    expect(a.ordersChangePct).toBe(-33.3)
+  })
+
+  it('20. honours the Distributor and Status filters', async () => {
+    expect((await headline({ ...AUG, distributor: B })).approvedSales).toMatchObject({ value: 0, orders: 0, submittedOrders: 1 })
+    expect((await headline({ ...AUG, status: 'closed' })).approvedSales).toMatchObject({ value: 4000, orders: 1 })
+    expect((await headline({ ...AUG, status: 'submitted' })).approvedSales).toMatchObject({ value: 0, orders: 0, submittedOrders: 1 })
+    expect((await headline({ ...AUG, status: 'cancelled' })).approvedSales).toMatchObject({ value: 0, orders: 0, submittedOrders: 0 })
+  })
+
+  it('21. Approved Orders drill-down lists exactly the approved-stage orders and reconciles', async () => {
+    const { body } = await drill('approved_orders', AUG)
+    const d = body.drilldown
+    expect(d.title).toBe('Approved Orders')
+    expect(d.orders.map((o: any) => o.orderNo).sort()).toEqual(['SO26000110', 'SO26000120'])
+    expect(d.headline).toMatchObject({ count: 2, approvedOrders: 2, approvedSalesValue: 6500 })
+    expect(d.reconciled).toBe(true)
+  })
+
+  it('22. the period comparison leads with approved rows; active rows stay in report.comparison for the PDF and drawer', async () => {
+    const report = await headline(AUG)
+    expect(report.approvedComparison.slice(0, 3)).toEqual([
+      { key: 'approvedOrders', label: 'Approved Orders', format: 'count', current: 2, previous: 3, changePct: -33.3, changePoints: null },
+      { key: 'approvedSalesValue', label: 'Approved Sales', format: 'currency', current: 6500, previous: 6200, changePct: 4.8, changePoints: null },
+      { key: 'avgApprovedOrderValue', label: 'Average Approved Order Value', format: 'currency', current: 3250, previous: 2066.67, changePct: 57.3, changePoints: null },
+    ])
+    expect(report.approvedComparison.map((r: any) => r.key)).not.toContain('activeOrderValue')
+    expect(report.comparison.find((r: any) => r.key === 'activeOrderValue')).toMatchObject({ current: 8000 })
+  })
+})

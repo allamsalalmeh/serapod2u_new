@@ -50,12 +50,7 @@ export async function GET(request: NextRequest) {
         type: string
     }> = []
 
-    // Org type codes per dynamic target
-    const ORG_TYPE_CODES: Record<string, string[]> = {
-        warehouse: ['WH', 'WAREHOUSE'],
-        distributor: ['DIST', 'DISTRIBUTOR'],
-        manufacturer: ['MFG', 'MANUFACTURER', 'MFR'],
-    }
+    const notes: string[] = []
 
     try {
         // 1. Resolve by roles — search system-wide (not restricted to one org)
@@ -88,39 +83,13 @@ export async function GET(request: NextRequest) {
             }
         }
 
-        // 2. Resolve by dynamic target — find all orgs of the target type, then their users
-        if (dynamicTarget && ORG_TYPE_CODES[dynamicTarget]) {
-            const typeCodes = ORG_TYPE_CODES[dynamicTarget]
-            const label = dynamicTarget.charAt(0).toUpperCase() + dynamicTarget.slice(1)
-
-            // Find all organisations matching the target type
-            const { data: orgs } = await supabase
-                .from('organizations')
-                .select('id, org_name')
-                .in('org_type_code', typeCodes)
-
-            if (orgs && orgs.length > 0) {
-                const orgIds = orgs.map(o => o.id)
-
-                const { data: users } = await supabase
-                    .from('users')
-                    .select('id, full_name, email, phone, organization_id')
-                    .in('organization_id', orgIds)
-                    .order('full_name')
-
-                if (users) {
-                    // Build a map for org name lookup
-                    const orgNameMap = Object.fromEntries(orgs.map(o => [o.id, o.org_name]))
-                    recipients.push(...users.map(u => ({
-                        user_id: u.id,
-                        full_name: u.full_name || u.email || 'Unknown',
-                        email: u.email,
-                        phone: u.phone,
-                        type: `Dynamic: ${label} (${(u.organization_id && orgNameMap[u.organization_id]) || label})`
-                    })))
-                }
-            }
-            // If no orgs found for this type, return empty (handled by UI "No recipients found")
+        // 2. Related organization ("dynamic target") depends on the transaction: the
+        //    distributor or manufacturer on one order. Without an order there is no
+        //    single organization, and listing every organization of a type would
+        //    show people who never receive the notification. Use the Configure
+        //    drawer's "Find recipients" with a real order instead.
+        if (dynamicTarget) {
+            notes.push('Related organization is resolved per transaction (the distributor or manufacturer on that order). Use Test notification → Find recipients with a real order to see it.')
         }
 
         // 3. Resolve specific users by ID
@@ -156,6 +125,7 @@ export async function GET(request: NextRequest) {
             total: unique.length,
             hasPhone: unique.filter(r => !!r.phone).length,
             missingPhone: unique.filter(r => !r.phone).length,
+            notes,
         })
     } catch (error: any) {
         console.error('Recipients preview error:', error)

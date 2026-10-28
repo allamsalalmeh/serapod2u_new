@@ -93,7 +93,7 @@ describe('previewNotificationRecipients', () => {
     expect(recipients).toEqual([{ address: '+60128888888', source: 'event_address', name: null, userId: null }])
   })
 
-  it('reports Related organization as unused rather than resolving it', () => {
-    expect(sourcesNotUsedWhenSending({ recipient_targets: { dynamic_org: true } })).toEqual(['dynamic_org'])
+  it('no longer reports Related organization as unused: the worker resolves it', () => {
+    expect(sourcesNotUsedWhenSending({ recipient_targets: { dynamic_org: true } })).toEqual([])
   })
 })

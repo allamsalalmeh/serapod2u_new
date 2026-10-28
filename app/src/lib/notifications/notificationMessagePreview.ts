@@ -298,4 +298,9 @@ export const PRESET_CHANNELS: Record<NotificationRoutingPreset, NotificationChan
     sms_only: ['sms'],
     whatsapp_email_fallback: ['whatsapp', 'email'],
     whatsapp_sms_email_fallback: ['whatsapp', 'sms', 'email'],
+    // Independent channels: all are sent, none is a fallback.
+    whatsapp_sms: ['whatsapp', 'sms'],
+    whatsapp_email: ['whatsapp', 'email'],
+    sms_email: ['sms', 'email'],
+    whatsapp_sms_email: ['whatsapp', 'sms', 'email'],
 }

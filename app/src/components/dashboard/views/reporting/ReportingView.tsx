@@ -49,6 +49,7 @@ import OperationsTab from './OperationsTab'
 import ProductsTab from './ProductsTab'
 import ShopReportsTab from './ShopReportsTab'
 import ReportingMonthSelector from './ReportingMonthSelector'
+import ExecutiveOverviewDrilldownDialog, { type OverviewDrilldownTarget } from './ExecutiveOverviewDrilldownDialog'
 import CommissionReportingTab from '@/components/reporting/commission/CommissionReportingTab'
 import { currentReportingMonthKey, parseReportingMonthParam } from '@/lib/reporting/consumer-analytics'
 import { resolveExecutiveOverviewPeriod, type ExecutiveOverviewReport } from '@/lib/reporting/executive-overview'
@@ -56,6 +57,7 @@ import { formatReportDate } from '@/lib/reporting/product-analytics'
 import { useCommissionAccess } from '@/lib/hr/commission/use-commission-access'
 import ModuleLightHeader from '@/components/layout/ModuleLightHeader'
 import { SeraLoader, SeraLoadingState } from '@/components/ui/SeraLoader'
+import { cn } from '@/lib/utils'
 
 interface ReportingViewProps {
     userProfile: any
@@ -142,7 +144,7 @@ const AnimatedCounter = ({ value, duration = 1000, prefix = '', suffix = '', dec
 
 // Metric Card — light Serapod paper chrome. The icon sits beside the title so the value gets the
 // card's full width; `primary` is the larger headline treatment used for the Overview's first row.
-const MetricCard = ({ title, value, change, changeType, noBaseline, icon: Icon, color, subtitle, loading, currency, variant = 'standard', tag, accent }: {
+const MetricCard = ({ title, value, change, changeType, noBaseline, icon: Icon, color, subtitle, loading, currency, variant = 'standard', tag, accent, onClick, className }: {
     title: string
     /** Render as RM with 2 decimals (defaults to titles containing Revenue/Value). */
     currency?: boolean
@@ -160,6 +162,10 @@ const MetricCard = ({ title, value, change, changeType, noBaseline, icon: Icon, 
     tag?: string
     /** Colour bar along the card's top edge. */
     accent?: string
+    /** Opens a drill-down of the records behind the figure. */
+    onClick?: () => void
+    /** Grid placement (column spans). */
+    className?: string
 }) => {
     const isPositive = changeType === 'increase'
     const isNegative = changeType === 'decrease'
@@ -168,7 +174,28 @@ const MetricCard = ({ title, value, change, changeType, noBaseline, icon: Icon, 
         `${isPositive ? 'Up' : isNegative ? 'Down' : 'No change'} ${Math.abs(change).toFixed(1)}% ${subtitle ?? ''}`.trim()
 
     return (
-        <div className={`group relative flex h-full min-w-0 flex-col overflow-hidden rounded-xl border border-[var(--sera-line,#e8eaed)] bg-white transition-colors hover:border-[var(--sera-orange)]/35 ${isPrimary ? 'p-5 sm:p-6' : 'p-4 sm:p-5'}`}>
+        <div
+            className={cn(
+                'group relative flex h-full min-w-0 flex-col overflow-hidden rounded-xl border border-[var(--sera-line,#e8eaed)] bg-white transition-colors hover:border-[var(--sera-orange)]/35',
+                isPrimary ? 'p-5 sm:p-6' : 'p-4 sm:p-5',
+                onClick && !loading && 'cursor-pointer transition-all hover:-translate-y-0.5 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--sera-orange)]/40',
+                className,
+            )}
+            {...(onClick && !loading ? {
+                role: 'button' as const,
+                tabIndex: 0,
+                'aria-haspopup': 'dialog' as const,
+                'aria-label': `View ${title} details`,
+                'data-drilldown': 'true',
+                onClick,
+                onKeyDown: (event: React.KeyboardEvent) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        onClick()
+                    }
+                },
+            } : {})}
+        >
             {accent ? <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: accent }} /> : null}
             <div className="flex items-start gap-3">
                 <div
@@ -228,6 +255,9 @@ const MetricCard = ({ title, value, change, changeType, noBaseline, icon: Icon, 
                     </Badge>
                 )}
                 {subtitle && <span className="min-w-0 text-xs leading-snug text-[var(--sera-muted)]">{subtitle}</span>}
+                {onClick && !loading ? (
+                    <span aria-hidden className="ml-auto text-xs font-medium text-[var(--sera-orange-deep,#c2410c)] opacity-70 transition-opacity group-hover:opacity-100">View details →</span>
+                ) : null}
             </div>
         </div>
     )
@@ -294,6 +324,8 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
     const [error, setError] = useState<string | null>(null)
     const [downloading, setDownloading] = useState(false)
     const [financeDocs, setFinanceDocs] = useState<FinanceDocs | null>(null)
+    /** Open Executive Overview drill-down; it always reads the month selected now. */
+    const [drilldown, setDrilldown] = useState<OverviewDrilldownTarget | null>(null)
     const overviewRequest = useRef(0)
     const financeRequest = useRef(0)
 
@@ -551,28 +583,27 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                         {showLoader ? <SeraLoadingState variant="page" label="Loading executive overview" /> : (
                         <>
                         {emptyBanner}
-                        {/* KPI Cards. Approved Sales = approved, warehouse packed, shipped to distributor and closed
-                            D2H/S2D orders by SO date; submitted orders are pipeline, cancelled orders are reported
+                        {/* KPI Cards. Confirmed (approved) sales = approved, warehouse packed, shipped to distributor and
+                            closed D2H/S2D orders by SO date; submitted orders are pipeline, cancelled orders are reported
                             apart and H2M purchases are never sales (lib/reporting/executive-overview.ts). */}
-                        {/* Headline figures: H2M purchases first (kept visibly apart from sales), then
-                            distributor (D2H) and shop (S2D) sales; their combined Approved Sales Value leads the
-                            secondary section. */}
+                        {/* Headline figures: H2M purchases (kept visibly apart from sales) and distributor (D2H) sales.
+                            The Shop Sales (S2D) and combined Approved Sales Value cards are not shown on the Overview —
+                            S2D is not used operationally today. Only the presentation changed: S2D data, its share of
+                            every sales figure and the Finance tab are untouched. */}
                         <section aria-labelledby="overview-headline-kpis" className="space-y-3">
                         <h3 id="overview-headline-kpis" className="text-xs font-semibold uppercase tracking-wide text-[var(--sera-muted)]">Headline figures</h3>
-                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                            <div className="min-w-0 sm:col-span-2 xl:col-span-1">
-                                <MetricCard
-                                    variant="primary"
-                                    title="H2M Purchases Value"
-                                    tag="Purchases — not sales"
-                                    accent={COLORS.slate}
-                                    value={summary?.purchaseValue ?? 0}
-                                    icon={Truck}
-                                    color={COLORS.slate}
-                                    subtitle={`${summary?.purchaseOrders ?? 0} approved manufacturer orders (not sales)`}
-                                    loading={loading}
-                                />
-                            </div>
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2" data-testid="overview-headline-grid">
+                            <MetricCard
+                                variant="primary"
+                                title="H2M Purchases Value"
+                                tag="Purchases — not sales"
+                                accent={COLORS.slate}
+                                value={summary?.purchaseValue ?? 0}
+                                icon={Truck}
+                                color={COLORS.slate}
+                                subtitle={`${summary?.purchaseOrders ?? 0} approved manufacturer orders (not sales)`}
+                                loading={loading}
+                            />
                             <MetricCard
                                 variant="primary"
                                 title="Distributor Sales (D2H)"
@@ -585,43 +616,26 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                                 loading={loading}
                                 {...changeProps(comparison?.distributorSalesValue)}
                             />
-                            <MetricCard
-                                variant="primary"
-                                title="Shop Sales (S2D)"
-                                accent={COLORS.success}
-                                value={summary?.shopSalesValue ?? 0}
-                                currency
-                                icon={Store}
-                                color={COLORS.success}
-                                subtitle={`${summary?.shopSalesOrders ?? 0} approved orders`}
-                                loading={loading}
-                                {...changeProps(comparison?.shopSalesValue)}
-                            />
                         </div>
                         </section>
                         <section aria-labelledby="overview-detail-kpis" className="space-y-3">
                         <h3 id="overview-detail-kpis" className="text-xs font-semibold uppercase tracking-wide text-[var(--sera-muted)]">Sales, orders &amp; pipeline</h3>
-                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                        {/* Five cards: three across, then two across on wide screens; two columns with the last card
+                            full width on tablets — no empty grid cell at any breakpoint. */}
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-6" data-testid="overview-detail-grid">
                             <MetricCard
-                                title="Approved Sales Value"
-                                tag="D2H + S2D"
-                                value={summary?.approvedSalesValue ?? 0}
-                                icon={DollarSign}
-                                color={COLORS.success}
-                                subtitle={versus}
-                                loading={loading}
-                                {...changeProps(comparison?.approvedSalesValue)}
-                            />
-                            <MetricCard
+                                className="xl:col-span-2"
                                 title="Confirmed Sales Orders"
                                 value={summary?.approvedSalesOrders ?? 0}
                                 icon={ShoppingCart}
                                 color={COLORS.primary}
                                 subtitle="approved, packed, shipped or closed"
                                 loading={loading}
+                                onClick={report ? () => setDrilldown({ metric: 'confirmed_orders' }) : undefined}
                                 {...changeProps(comparison?.approvedSalesOrders)}
                             />
                             <MetricCard
+                                className="xl:col-span-2"
                                 title="Total Units Sold"
                                 value={summary?.unitsSold ?? 0}
                                 icon={Package}
@@ -631,15 +645,18 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                                 {...changeProps(comparison?.unitsSold)}
                             />
                             <MetricCard
+                                className="xl:col-span-2"
                                 title="Active Buyers"
                                 value={summary?.activeBuyers ?? 0}
                                 icon={Users}
                                 color={COLORS.warning}
                                 subtitle={`${summary?.activeDistributorBuyers ?? 0} distributors · ${summary?.activeShopBuyers ?? 0} shops`}
                                 loading={loading}
+                                onClick={report ? () => setDrilldown({ metric: 'active_buyers' }) : undefined}
                                 {...changeProps(comparison?.activeBuyers)}
                             />
                             <MetricCard
+                                className="xl:col-span-3"
                                 title="Sales Pipeline Value"
                                 value={summary?.pipelineValue ?? 0}
                                 icon={Clock}
@@ -648,6 +665,7 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                                 loading={loading}
                             />
                             <MetricCard
+                                className="sm:col-span-2 xl:col-span-3"
                                 title="Cancelled Orders"
                                 value={summary?.cancelledOrders ?? 0}
                                 currency={false}
@@ -819,6 +837,7 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                         </Card>
                         </>
                         )}
+                        <ExecutiveOverviewDrilldownDialog target={drilldown} month={month} onTargetChange={setDrilldown} />
                     </TabsContent>
 
                     {/* Operations Tab */}

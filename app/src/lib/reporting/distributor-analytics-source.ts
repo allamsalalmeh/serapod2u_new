@@ -34,6 +34,7 @@ import {
   ALL_DISTRIBUTORS,
   ALL_DISTRIBUTORS_LABEL,
   ALL_STATUS,
+  APPROVED_STATUSES,
   DISTRIBUTOR_ORG_TYPE,
   ELIGIBLE_ORDER_TYPE,
   emptyAggregate,
@@ -42,6 +43,8 @@ import {
   REPORT_DATE_FIELD,
   reportDateWindows,
   resolveDistributorReportPeriod,
+  summarizeApprovedWindow,
+  type ApprovedWindowTotals,
   type DistributorAggregate,
   type DistributorAnalyticsAggregate,
   type DistributorReportPeriod,
@@ -605,6 +608,76 @@ export async function fetchDistributorOrderPeriods(supabase: any): Promise<Repor
 // ── Main entry point ───────────────────────────────────────────────────────
 
 export async function fetchDistributorAnalyticsAggregate(
+  supabase: any,
+  month: string,
+  distributorId: string = ALL_DISTRIBUTORS,
+  status: string = ALL_STATUS,
+  now: Date = new Date(),
+): Promise<DistributorAnalyticsSourceResult> {
+  const result = await fetchActiveAggregate(supabase, month, distributorId, status, now)
+  const period = resolveDistributorReportPeriod(month, now)
+  if (period.dayCount === 0) return result
+  try {
+    const approved = await fetchApprovedWindows(supabase, { distributorId, status, period, source: result.source })
+    if (approved) result.aggregate = { ...result.aggregate, approved }
+  } catch (error) {
+    // The headline still has the current window's approved figures from the status mix; only the
+    // approved-to-approved comparison is unavailable. Logged, never silently invented.
+    console.error('[Distributor Analytics] approved-sales read failed:', error)
+  }
+  return result
+}
+
+/**
+ * Approved-stage orders (approved, warehouse_packed, shipped_distributor, closed) of the report
+ * window and its comparison window, for the SAME scope as the report: D2H orders of the selected
+ * DIST buyers, narrowed by the Status filter, bucketed on the business date. Read with the caller's
+ * own client, so row-level security applies exactly as it does to the report itself.
+ */
+export async function fetchApprovedWindows(
+  supabase: any,
+  input: { distributorId: string; status: string; period: DistributorReportPeriod; source: 'rpc' | 'fallback'; dateColumn?: OrderDateColumn },
+): Promise<{ current: ApprovedWindowTotals; previous: ApprovedWindowTotals } | null> {
+  const { distributorId, status, period, source } = input
+  const empty = summarizeApprovedWindow([])
+  // A status filter outside the approved stages has no approved orders at all.
+  if (status !== ALL_STATUS && !APPROVED_STATUSES.includes(status)) return { current: empty, previous: empty }
+  const all = await fetchReportingDistributors(supabase)
+  const ids = (distributorId === ALL_DISTRIBUTORS ? all : all.filter((row) => row.id === distributorId)).map((row) => row.id)
+  if (ids.length === 0) return { current: empty, previous: empty }
+  const dateColumn = input.dateColumn ?? await resolveOrderDateColumn(supabase)
+  const windows = reportDateWindows(period)
+  const rows = await readPages<any>(
+    (from, to) => orderByBusinessDate(
+      filterBusinessDateRange(
+        scopeEligibleDistributorOrders(
+          supabase.from('orders').select(`id, buyer_org_id, ${orderDateSelect(dateColumn)}, status, order_items(qty, unit_price, line_total)`),
+          ids,
+          status,
+        ).in('status', APPROVED_STATUSES),
+        dateColumn,
+        windows.comparisonStart,
+        windows.end,
+      ),
+      dateColumn,
+      true,
+    ).range(from, to),
+    { remaining: MAX_FALLBACK_ROWS },
+    'approved orders',
+  )
+  const current: { status: string; distributorId: string; orderValue: number }[] = []
+  const previous: typeof current = []
+  for (const row of rows) {
+    const date = orderBusinessDate(row)
+    if (!date) continue
+    const entry = { status: row.status, distributorId: row.buyer_org_id, orderValue: reportOrderValue((row.order_items || []) as OrderItemRecord[], source) }
+    if (date >= windows.start && date < windows.end) current.push(entry)
+    else if (date >= windows.comparisonStart && date < windows.comparisonEnd) previous.push(entry)
+  }
+  return { current: summarizeApprovedWindow(current), previous: summarizeApprovedWindow(previous) }
+}
+
+async function fetchActiveAggregate(
   supabase: any,
   month: string,
   distributorId: string = ALL_DISTRIBUTORS,

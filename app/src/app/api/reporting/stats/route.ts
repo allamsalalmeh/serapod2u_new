@@ -3,9 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { orderBusinessDate } from '@/lib/orders/order-date'
 import {
-  filterBusinessDateRange,
   legacyOrderDateNotice,
-  orderByBusinessDate,
   orderDateSelect,
   resolveOrderDateColumn,
   type OrderDateColumn,
@@ -18,13 +16,10 @@ import {
   resolveExecutiveOverviewPeriod,
   type OverviewOrderInput,
 } from '@/lib/reporting/executive-overview'
-import { APPROVED_SALES_STATUSES, CANCELLED_STATUS, PIPELINE_STATUSES, SALES_ORDER_TYPES } from '@/lib/reporting/sales-kpi'
+import { readOverviewOrders, toOverviewOrderInput } from '@/lib/reporting/executive-overview-source'
+import { SALES_ORDER_TYPES } from '@/lib/reporting/sales-kpi'
 
 export const dynamic = 'force-dynamic'
-
-/** Orders per page. Every page is requested explicitly so the PostgREST row cap can never truncate a month. */
-const PAGE_SIZE = 500
-const MAX_PAGES = 400
 
 /**
  * Executive Overview monthly report: `GET /api/reporting/stats?month=YYYY-MM`.
@@ -57,25 +52,8 @@ export async function GET(request: Request) {
     const dateColumn = await resolveOrderDateColumn(supabase)
     const window = overviewReadWindow(period)
 
-    const rows = await readOrders(supabase, dateColumn, window.start, window.end)
-    const orders: OverviewOrderInput[] = rows.map((order: any) => ({
-      id: order.id,
-      orderNo: order.display_doc_no || order.order_no,
-      orderType: order.order_type ?? null,
-      status: order.status,
-      // Business date (Malaysia calendar day) — never the UTC day of created_at.
-      orderDate: orderBusinessDate(order) ?? '',
-      createdAt: order.created_at ?? null,
-      buyerId: order.buyer?.id ?? order.buyer_org_id ?? null,
-      buyerName: order.buyer?.org_name ?? null,
-      buyerType: order.buyer?.org_type_code ?? null,
-      items: (order.order_items ?? []).map((item: any) => ({
-        variantId: item.variant_id ?? null,
-        qty: Number(item.qty) || 0,
-        // Generated line_total, falling back to qty × price exactly like the analytics RPCs.
-        lineTotal: item.line_total != null ? Number(item.line_total) || 0 : (Number(item.qty) || 0) * (Number(item.unit_price) || 0),
-      })),
-    }))
+    const rows = await readOverviewOrders(supabase, dateColumn, window.start, window.end)
+    const orders: OverviewOrderInput[] = rows.map(toOverviewOrderInput)
 
     const report = buildExecutiveOverviewReport({
       month,
@@ -92,34 +70,6 @@ export async function GET(request: Request) {
     console.error('[Reporting API] Executive overview failed:', error)
     return NextResponse.json({ error: error?.message || 'Unable to load the executive overview' }, { status: 500 })
   }
-}
-
-/**
- * Sales-side and purchase orders in the read window. Drafts are not
- * commitments and are never read; H2M is read only so it can be reported apart.
- */
-async function readOrders(supabase: any, dateColumn: OrderDateColumn, start: string, end: string) {
-  const out: any[] = []
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const from = page * PAGE_SIZE
-    let query = supabase
-      .from('orders')
-      .select(`
-        id, order_no, display_doc_no, order_type, status, buyer_org_id,
-        ${orderDateSelect(dateColumn)},
-        buyer:organizations!orders_buyer_org_id_fkey ( id, org_name, org_type_code ),
-        order_items ( variant_id, qty, unit_price, line_total )
-      `)
-      .in('status', [...APPROVED_SALES_STATUSES, ...PIPELINE_STATUSES, CANCELLED_STATUS])
-    query = filterBusinessDateRange(query, dateColumn, start, end)
-    query = orderByBusinessDate(query, dateColumn, true).range(from, from + PAGE_SIZE - 1)
-    const { data, error } = await query
-    if (error) throw error
-    const pageRows = data ?? []
-    out.push(...pageRows)
-    if (pageRows.length < PAGE_SIZE) return out
-  }
-  throw new Error('Executive overview exceeded its read limit; narrow the reporting month.')
 }
 
 async function readProductNames(supabase: any, orders: OverviewOrderInput[]): Promise<Record<string, string>> {

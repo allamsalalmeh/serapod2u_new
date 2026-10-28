@@ -1,5 +1,6 @@
 'use client'
 
+import { createInventoryTrace, inventoryEvent, observeInventoryResources, type InventoryTrace } from '@/lib/inventory/inventory-timing'
 import { useState, useEffect, type ReactNode } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Sidebar from '@/components/layout/Sidebar'
@@ -178,6 +179,7 @@ import UserProfileWrapper from '@/components/users/UserProfileWrapper'
 import { NavAccessProvider, useNavAccess } from '@/hooks/useNavAccess'
 import { useOrderCreateAccess } from '@/modules/supply-chain/useOrderCreateAccess'
 import { productCatalogHome, supplyChainViewVisible } from '@/lib/security-access/nav-access'
+import { shouldSwitchViewInMemory } from '@/lib/navigation/view-navigation'
 import HrMyWorkspaceView from '@/components/hr/workspace/HrMyWorkspaceView'
 import MarketingPage from '@/app/loyalty/marketing/page'
 import { AdminSupportInboxV2 } from '@/components/support/AdminSupportInboxV2'
@@ -263,6 +265,8 @@ interface UserProfile {
 }
 
 interface DashboardContentProps {
+  inventoryTimingId?: string
+  inventoryTiming?: InventoryTrace
   userProfile: UserProfileInput
   initialView?: string
   initialOrderId?: string
@@ -274,7 +278,7 @@ interface DashboardContentProps {
   children?: ReactNode
 }
 
-function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId, initialTargetId, initialOrgId, initialProductId, children }: DashboardContentProps) {
+function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId, initialTargetId, initialOrgId, initialProductId, children, inventoryTiming }: DashboardContentProps) {
   // Authenticated accounts always have an organization; the child views treat it as non-null.
   const userProfile = inputProfile as unknown as UserProfile
   const router = useRouter()
@@ -282,11 +286,13 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
   const { hasPermission } = usePermissions(
     userProfile.roles.role_level,
     userProfile.role_code,
-    (userProfile as any).department_id
+    (userProfile as any).department_id,
+    inventoryTiming
   )
 
   // HR edit controls follow Security & Access (hr.employee.manage with the HR module entry); hidden until answered.
   const navAccess = useNavAccess()
+  useEffect(() => { inventoryEvent(inventoryTiming, 'shell.navigationAccess', 'state', { loading: navAccess.status === 'loading', ready: navAccess.status === 'ready' }) }, [inventoryTiming, navAccess.status])
   // Security & Access answer per Supply Chain view (module entry + the view's destination); not ready = not allowed.
   const supplyChainViewAllowed = (viewId: string) => supplyChainViewVisible(navAccess.snapshot, viewId)
   const canEditHr = navAccess.allows('hr:manage-people')
@@ -415,6 +421,20 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
     }
   }, [initialOrderId])
 
+  /**
+   * Open a view that owns a URL.
+   *
+   * Only the route that arrives may paint such a view. Next.js keys a route segment by its params, so a push that
+   * changes the path recreates the page subtree: shell, view and the view's data effects mount a second time. Painting
+   * the view here first is what makes View Inventory load twice (it appears, resets to its skeleton, appears again).
+   * The destination page renders the view from its own URL (`initialView`), so the in-memory switch is kept only for a
+   * push that leaves the URL unchanged (clicking the view that is already open) — there the push cannot deliver it.
+   */
+  const openView = (view: string, href: string) => {
+    if (shouldSwitchViewInMemory(pathname, href)) setCurrentView(view)
+    router.push(href)
+  }
+
   const handleViewChange = (view: string) => {
     // Don't clear org selection for edit/view flows
     if (view !== 'edit-organization' && view !== 'edit-organization-hq' && view !== 'view-organization') {
@@ -448,53 +468,45 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
 
     // ── Redirect old accounting URLs to Finance module ────────────
     if (view === 'accounting' || view === 'settings-accounting') {
-      setCurrentView(view)
-      router.push('/finance')
+      openView(view, '/finance')
       return
     }
 
     // ── Redirect Customer & Growth breadcrumb to its landing page ──
     if (view === 'customer-growth') {
-      setCurrentView(view)
-      router.push('/customer-growth')
+      openView(view, '/customer-growth')
       return
     }
 
     // ── Redirect Supply Chain to its landing page ──
     if (view === 'supply-chain') {
-      setCurrentView(view)
-      router.push('/supply-chain')
+      openView(view, '/supply-chain')
       return
     }
 
     // ── Redirect Notifications to its landing page ──
     if (view === 'notifications' || view === '/notifications') {
-      setCurrentView('notifications')
-      router.push('/notifications')
+      openView('notifications', '/notifications')
       return
     }
 
     const notificationView = view.startsWith('/') ? view.slice(1) : view
     if (notificationView.startsWith('notifications/')) {
-      setCurrentView(notificationView)
-      router.push(`/${notificationView}`)
+      openView(notificationView, `/${notificationView}`)
       return
     }
     if (notificationView === 'settings/notifications/sms-activity') {
-      setCurrentView('notifications/sms-activity')
-      router.push('/notifications/sms-activity')
+      openView('notifications/sms-activity', '/notifications/sms-activity')
       return
     }
     if (notificationView === 'settings/notifications/email-activity') {
-      setCurrentView('notifications/email-activity')
-      router.push('/notifications/email-activity')
+      openView('notifications/email-activity', '/notifications/email-activity')
       return
     }
 
     const supplyChainPath = supplyChainViewToPath[view]
     if (supplyChainPath) {
-      setCurrentView(view)
-      router.push(`/supply-chain/${supplyChainPath}`)
+      openView(view, `/supply-chain/${supplyChainPath}`)
       return
     }
 
@@ -506,8 +518,7 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
       const orgId = typeof window !== 'undefined' ? sessionStorage.getItem('selectedOrgId') : null
       const orgPath = supplyChainOrganizationPath(view, orgId)
       if (orgPath) {
-        setCurrentView(view)
-        router.push(`/supply-chain/${orgPath}`)
+        openView(view, `/supply-chain/${orgPath}`)
         return
       }
     }
@@ -517,8 +528,7 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
       const productId = typeof window !== 'undefined' ? sessionStorage.getItem('selectedProductId') : null
       const productPath = supplyChainProductPath(view, productId)
       if (productPath) {
-        setCurrentView(view)
-        router.push(`/supply-chain/${productPath}`)
+        openView(view, `/supply-chain/${productPath}`)
         return
       }
     }
@@ -528,31 +538,26 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
       const orderId = typeof window !== 'undefined' ? sessionStorage.getItem('viewOrderId') : null
       const orderPath = supplyChainOrderPath(view, orderId)
       if (orderPath) {
-        setCurrentView(view)
-        router.push(`/supply-chain/${orderPath}`)
+        openView(view, `/supply-chain/${orderPath}`)
         return
       }
     }
 
     // ── Shell secondary pages ──
     if (view === 'reporting') {
-      setCurrentView(view)
-      router.push('/reporting')
+      openView(view, '/reporting')
       return
     }
     if (view === 'my-profile') {
-      setCurrentView(view)
-      router.push('/my-profile')
+      openView(view, '/my-profile')
       return
     }
     if (view === 'users') {
-      setCurrentView(view)
-      router.push('/users')
+      openView(view, '/users')
       return
     }
     if (view === 'security-access') {
-      setCurrentView(view)
-      router.push('/security-access')
+      openView(view, '/security-access')
       return
     }
     // The HR entry is decided on the server (administrative landing, or My Workspace for employees); never rendered
@@ -566,8 +571,7 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
         (typeof window !== 'undefined' ? sessionStorage.getItem('selectedUserId') : null) ||
         initialTargetId ||
         userProfile.id
-      setCurrentView(view)
-      router.push(`/users/${targetId}`)
+      openView(view, `/users/${targetId}`)
       return
     }
 
@@ -584,8 +588,7 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
       ecommerceHrefForView(view)
 
     if (moduleHref) {
-      setCurrentView(view)
-      router.push(moduleHref)
+      openView(view, moduleHref)
       return
     }
 
@@ -770,7 +773,7 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
 
       case 'inventory':
       case 'inventory-list':
-        return <InventoryView userProfile={userProfile} onViewChange={handleViewChange} />
+        return <InventoryView timingTrace={inventoryTiming} userProfile={userProfile} onViewChange={handleViewChange} />
       case 'inventory-settings':
         return <InventorySettingsView userProfile={userProfile} onViewChange={handleViewChange} />
       case 'add-stock':
@@ -984,7 +987,7 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
           />
         )
       case 'hr/my-workspace':
-        return <HrMyWorkspaceView userName={userProfile.full_name} />
+        return <HrMyWorkspaceView userName={userProfile.full_name} userId={userProfile.id} />
       case 'hr':
         return <HrLandingView userName={userProfile.full_name} bannerImageUrl={moduleBannerUrls.hr} />
 
@@ -1228,9 +1231,14 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
  */
 export default function DashboardContent(props: DashboardContentProps) {
   const { userProfile } = props
+  const [inventoryTiming] = useState(() => props.initialView === 'inventory-list' ? createInventoryTrace(props.inventoryTimingId) : undefined)
+  useEffect(() => {
+    inventoryEvent(inventoryTiming, 'shell.mount', 'start')
+    return observeInventoryResources(inventoryTiming)
+  }, [inventoryTiming])
   return (
-    <NavAccessProvider userId={userProfile.id} organizationId={userProfile.organization_id ?? userProfile.organizations?.id ?? null}>
-      <DashboardShell {...props} />
+    <NavAccessProvider timingTrace={inventoryTiming} userId={userProfile.id} organizationId={userProfile.organization_id ?? userProfile.organizations?.id ?? null}>
+      <DashboardShell {...props} inventoryTiming={inventoryTiming} />
     </NavAccessProvider>
   )
 }

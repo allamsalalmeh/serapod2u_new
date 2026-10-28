@@ -59,6 +59,8 @@ export interface OverviewOrderInput {
   buyerId: string | null
   buyerName: string | null
   buyerType: string | null
+  /** Organisation reference (organizations.org_code); used by the drill-down only. */
+  buyerCode?: string | null
   items: { variantId: string | null; qty: number; lineTotal: number }[]
 }
 
@@ -139,8 +141,8 @@ function share(part: number, total: number): number | null {
   return total > 0 ? round1((part / total) * 100) : null
 }
 
-const orderValue = (order: OverviewOrderInput) => order.items.reduce((sum, item) => sum + (Number(item.lineTotal) || 0), 0)
-const orderUnits = (order: OverviewOrderInput) => order.items.reduce((sum, item) => sum + (Number(item.qty) || 0), 0)
+export const orderValue = (order: OverviewOrderInput) => order.items.reduce((sum, item) => sum + (Number(item.lineTotal) || 0), 0)
+export const orderUnits = (order: OverviewOrderInput) => order.items.reduce((sum, item) => sum + (Number(item.qty) || 0), 0)
 
 /** Half-open business-date windows [start, end) of the report and its comparison. */
 export function overviewDateWindows(period: ExecutiveOverviewPeriod) {
@@ -161,7 +163,8 @@ export function overviewReadWindow(period: ExecutiveOverviewPeriod): { start: st
 
 const inWindow = (date: string, start: string, end: string) => date >= start && date < end
 
-function activeBuyerCounts(orders: readonly OverviewOrderInput[]) {
+/** Active Buyers: distinct buyer organisation ids on approved sales orders; an order without a buyer id is not a buyer. */
+export function activeBuyerCounts(orders: readonly OverviewOrderInput[]) {
   const all = new Set<string>()
   const distributors = new Set<string>()
   const shops = new Set<string>()
@@ -175,7 +178,14 @@ function activeBuyerCounts(orders: readonly OverviewOrderInput[]) {
   return { all: all.size, distributors: distributors.size, shops: shops.size }
 }
 
-const isApprovedSale = (order: OverviewOrderInput) => isSalesOrderType(order.orderType) && isApprovedSalesStatus(order.status)
+/** Confirmed Sales Orders population: D2H/S2D in an approved-sales status (sales-kpi.ts). */
+export const isApprovedSale = (order: OverviewOrderInput) => isSalesOrderType(order.orderType) && isApprovedSalesStatus(order.status)
+
+/** Orders whose business date falls in the report window [start, end) — the window every headline card reads. */
+export function ordersInReportWindow(period: ExecutiveOverviewPeriod, orders: readonly OverviewOrderInput[]): OverviewOrderInput[] {
+  const { start, end } = overviewDateWindows(period)
+  return orders.filter((order) => inWindow(order.orderDate, start, end))
+}
 
 export function buildExecutiveOverviewReport(input: {
   month: string
@@ -189,7 +199,7 @@ export function buildExecutiveOverviewReport(input: {
   const windows = overviewDateWindows(period)
   const names = input.productNames ?? {}
 
-  const current = input.orders.filter((order) => inWindow(order.orderDate, windows.start, windows.end))
+  const current = ordersInReportWindow(period, input.orders)
   const previous = input.orders.filter((order) => inWindow(order.orderDate, windows.comparisonStart, windows.comparisonEnd))
   const currentSales = current.filter(isApprovedSale)
   const previousSales = previous.filter(isApprovedSale)

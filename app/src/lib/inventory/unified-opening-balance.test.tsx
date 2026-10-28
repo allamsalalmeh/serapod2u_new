@@ -81,7 +81,7 @@ describe('Unified Inventory Opening Balance flow', () => {
     expect(migration04).toContain('inventory_opening_balance_already_posted')
     expect(migration04).toContain('inventory_opening_balance_count_incomplete')
     expect(migration04).toContain('stock_count_session_scope')
-    expect(stockCountView).toContain('visibleRows.every(row => parseCount(row.physicalCount) !== null)')
+    expect(stockCountView).toContain('visibleRows.every(row => rowIsCounted(row))')
   })
 
   it('uses the official Product Category relationship for immutable draft scope', () => {
@@ -138,7 +138,7 @@ describe('Unified Inventory Opening Balance flow', () => {
   it('round-trips a session-bound Opening Balance workbook using stable IDs', () => {
     const workbook = new ExcelJS.Workbook()
     const sheet = buildStockCountWorksheet(workbook, [excelRow], context)
-    sheet.getRow(2).getCell(12).value = 42
+    sheet.getRow(2).getCell(15).value = 42
 
     const result = parseStockCountWorksheet(sheet, [{
       stockConfigId: excelRow.stockConfigId,

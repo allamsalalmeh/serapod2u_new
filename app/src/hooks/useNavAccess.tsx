@@ -1,6 +1,7 @@
 'use client'
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { timeInventoryOperation, type InventoryTrace } from '@/lib/inventory/inventory-timing'
 import { filterGroupsByDestination, snapshotAllows, snapshotAllowsAny, type NavAccessSnapshot } from '@/lib/security-access/nav-access'
 
 /**
@@ -61,7 +62,7 @@ export function clearNavAccessCache(): void {
   inflight.clear()
 }
 
-async function requestNavAccess(key: string, force: boolean): Promise<Result> {
+async function requestNavAccess(key: string, force: boolean, timingTrace?: InventoryTrace): Promise<Result> {
   if (force) { generation++; inflight.delete(key) }
   const shared = inflight.get(key)
   if (shared) return shared
@@ -70,11 +71,11 @@ async function requestNavAccess(key: string, force: boolean): Promise<Result> {
   const [uid, org] = key.split(':')
   const run = async (): Promise<Result> => {
     try {
-      const res = await fetch('/api/security-access/me/navigation', { cache: 'no-store', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
+      const res = await timeInventoryOperation(timingTrace, 'navigation.http', () => fetch('/api/security-access/me/navigation', { cache: 'no-store', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), ...(timingTrace && process.env.NODE_ENV === 'development' ? { headers: { 'x-inventory-trace-id': timingTrace.id } } : {}) }))
       if (res.status === 401) return { status: 'signed_out', snapshot: null }
       if (res.status === 403) return { status: 'denied', snapshot: null }
       if (!res.ok) return { status: 'unavailable', snapshot: null }
-      const body = await res.json()
+      const body = await timeInventoryOperation(timingTrace, 'navigation.decode', () => res.json())
       const snapshot = body?.snapshot as NavAccessSnapshot | undefined
       // A response that names another identity is discarded, never shown.
       if (body?.status !== 'ready' || !snapshot || snapshot.userId !== uid || (snapshot.organizationId ?? '') !== org) {
@@ -102,7 +103,7 @@ async function requestNavAccess(key: string, force: boolean): Promise<Result> {
  * different account or organization never sees the previous one's answers (it is `loading` until its own answer
  * arrives). Answers are revalidated after a minute when the tab regains focus and whenever access changes in the app.
  */
-export function NavAccessProvider({ userId, organizationId, children }: { userId: string; organizationId: string | null; children: ReactNode }) {
+export function NavAccessProvider({ userId, organizationId, children, timingTrace }: { timingTrace?: InventoryTrace; userId: string; organizationId: string | null; children: ReactNode }) {
   const key = `${userId}:${organizationId ?? ''}`
   const [held, setHeld] = useState<Held | null>(() => remembered(key))
   const keyRef = useRef(key)
@@ -112,11 +113,11 @@ export function NavAccessProvider({ userId, organizationId, children }: { userId
   const load = useCallback(async (force = false) => {
     const id = ++callId.current
     const forKey = keyRef.current
-    const result = await requestNavAccess(forKey, force)
+    const result = await requestNavAccess(forKey, force, timingTrace)
     // Late or superseded answers (another call, another identity) are ignored.
     if (id !== callId.current || forKey !== keyRef.current) return
     setHeld({ ...result, key: forKey, at: Date.now() })
-  }, [])
+  }, [timingTrace])
 
   useEffect(() => {
     // A different identity never inherits the previous answers.

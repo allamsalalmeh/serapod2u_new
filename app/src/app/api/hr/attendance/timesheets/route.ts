@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { getAttendanceAuthContext, canManageAttendance, attendanceCan } from '@/lib/server/attendanceAccess'
+import { summarizeTimesheetEntries, timesheetRegenerationRefusal, timesheetRow, validateTimesheetPeriod } from '@/lib/hr/attendance-repairs'
 
 export async function GET(request: NextRequest) {
     try {
@@ -85,6 +86,11 @@ export async function GET(request: NextRequest) {
     }
 }
 
+/**
+ * POST — generate (or regenerate) the caller's own timesheet for a period from closed attendance entries (B2B repair).
+ * Writes only real columns (total_minutes, overtime_minutes); day/late/early counters are derived and returned, not
+ * stored. A submitted, pending or approved timesheet is never reset to draft (409).
+ */
 export async function POST(request: NextRequest) {
     try {
         const supabase = (await createClient()) as any
@@ -93,12 +99,21 @@ export async function POST(request: NextRequest) {
         const ctx = ctxResult.data
         if (!ctx.organizationId) return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
 
-        const body = await request.json()
-        const { period_start, period_end, period_type } = body
+        const body = await request.json().catch(() => ({}))
+        const { period_start, period_end, period_type } = body ?? {}
+        const invalid = validateTimesheetPeriod(period_start, period_end)
+        if (invalid) return NextResponse.json({ success: false, error: invalid.message }, { status: invalid.status })
 
-        if (!period_start || !period_end) return NextResponse.json({ success: false, error: 'period_start and period_end are required' }, { status: 400 })
+        const { data: existing, error: existingError } = await supabase
+            .from('hr_timesheets')
+            .select('id, status')
+            .eq('user_id', ctx.userId)
+            .eq('period_start', period_start)
+            .maybeSingle()
+        if (existingError) return NextResponse.json({ success: false, error: 'Timesheet could not be read' }, { status: 500 })
+        const locked = timesheetRegenerationRefusal(existing?.status)
+        if (locked) return NextResponse.json({ success: false, error: locked.message, code: locked.code }, { status: locked.status })
 
-        // Aggregate attendance entries for the period
         const { data: entries, error: entryError } = await supabase
             .from('hr_attendance_entries')
             .select('worked_minutes, overtime_minutes, attendance_flag, clock_in_at')
@@ -107,35 +122,21 @@ export async function POST(request: NextRequest) {
             .gte('clock_in_at', `${period_start}T00:00:00`)
             .lte('clock_in_at', `${period_end}T23:59:59`)
             .not('clock_out_at', 'is', null)
+        if (entryError) return NextResponse.json({ success: false, error: 'Attendance entries could not be read' }, { status: 500 })
 
-        if (entryError) return NextResponse.json({ success: false, error: entryError.message }, { status: 500 })
-
-        const totalWorkMinutes = (entries || []).reduce((s: number, e: any) => s + (e.worked_minutes || 0), 0)
-        const totalOvertimeMinutes = (entries || []).reduce((s: number, e: any) => s + (e.overtime_minutes || 0), 0)
-        const totalDays = new Set((entries || []).map((e: any) => new Date(e.clock_in_at).toISOString().split('T')[0])).size
-        const lateCount = (entries || []).filter((e: any) => e.attendance_flag === 'late' || e.attendance_flag === 'late_and_early').length
-        const earlyLeaveCount = (entries || []).filter((e: any) => e.attendance_flag === 'early_leave' || e.attendance_flag === 'late_and_early').length
-
+        const totals = summarizeTimesheetEntries(entries || [])
         const { data, error } = await supabase
             .from('hr_timesheets')
-            .upsert({
-                user_id: ctx.userId,
-                organization_id: ctx.organizationId,
-                period_start, period_end,
-                period_type: period_type || 'monthly',
-                total_days: totalDays,
-                total_work_minutes: totalWorkMinutes,
-                total_overtime_minutes: totalOvertimeMinutes,
-                late_count: lateCount,
-                early_leave_count: earlyLeaveCount,
-                status: 'draft'
-            }, { onConflict: 'user_id,period_start' })
+            .upsert(timesheetRow({
+                userId: ctx.userId, organizationId: ctx.organizationId,
+                periodStart: period_start, periodEnd: period_end, periodType: period_type, totals,
+            }), { onConflict: 'user_id,period_start' })
             .select()
             .single()
 
-        if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-        return NextResponse.json({ success: true, data })
+        if (error) return NextResponse.json({ success: false, error: 'Timesheet could not be saved' }, { status: 500 })
+        return NextResponse.json({ success: true, data, summary: totals.derived })
     } catch (error: any) {
-        return NextResponse.json({ success: false, error: error.message || 'Internal error' }, { status: 500 })
+        return NextResponse.json({ success: false, error: 'Internal error' }, { status: 500 })
     }
 }

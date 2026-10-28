@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { getHrAuthContext, hrCan, hrCanIn } from '@/lib/server/hrAccess'
+import { employmentError } from '@/lib/hr/employment-messages'
 
 const EMPLOYMENT_TYPES = new Set(['Full-time', 'Part-time', 'Contract', 'Intern'])
 const EMPLOYMENT_STATUSES = new Set(['active', 'resigned', 'terminated'])
@@ -125,7 +126,10 @@ export async function PATCH(
             .single()
 
         if (error) {
-            return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+            // The HR lifecycle guard (migration 20261221100000) refuses former-employee edits, archived/inactive,
+            // other-company or cyclic managers and invalid end dates with stable codes: show the reason, not the code.
+            const mapped = employmentError(error, 'Failed to update HR fields')
+            return NextResponse.json({ success: false, error: mapped.message, code: mapped.code }, { status: mapped.status })
         }
 
         return NextResponse.json({ success: true, data })

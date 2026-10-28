@@ -103,7 +103,8 @@ export interface PayrollRun {
     total_deductions: number
     total_net: number
     total_employer_contributions: number
-    employee_count: number
+    /** Not a column: present only in the calculate response. */
+    employee_count?: number
     is_locked: boolean
     notes: string | null
     created_at: string
@@ -114,13 +115,13 @@ export interface PayrollRun {
 export interface PayrollRunItem {
     id: string
     payroll_run_id: string
-    employee_id: string
+    employee_user_id: string
     basic_salary: number
     overtime_amount: number
     allowances_amount: number
     work_minutes: number
     overtime_minutes: number
-    gross_salary: number
+    gross_amount: number
     epf_employee: number
     epf_employer: number
     socso_employee: number
@@ -130,9 +131,9 @@ export interface PayrollRunItem {
     pcb_amount: number
     other_deductions: number
     other_allowances: number
-    deductions: number
+    deductions_amount: number
     employer_contributions: number
-    net_salary: number
+    net_amount: number
     status: string
     employee?: { id: string; full_name: string | null; email: string }
 }
@@ -336,8 +337,12 @@ export const calculatePayrollRun = async (runId: string) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
     })
-    const data = await parseJson<{ success: boolean; data?: PayrollRun; error?: string }>(response)
-    if (!response.ok || !data.success) return { success: false, error: data.error || 'Failed to calculate payroll' }
+    const data = await parseJson<{ success: boolean; data?: PayrollRun; error?: string; message?: string; errors?: Array<{ employee_user_id?: string; step: string; message: string }> }>(response)
+    if (!response.ok || !data.success) {
+        // PAYROLL_CALCULATION_FAILED: nothing was calculated; show the reason and the first problems.
+        const problems = (data.errors || []).slice(0, 3).map((e) => e.message).join('; ')
+        return { success: false, error: [data.message || data.error || 'Failed to calculate payroll', problems].filter(Boolean).join(' — ') }
+    }
     return { success: true, data: data.data }
 }
 
@@ -346,8 +351,9 @@ export const approvePayrollRun = async (runId: string) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
     })
-    const data = await parseJson<{ success: boolean; data?: PayrollRun; error?: string }>(response)
-    if (!response.ok || !data.success) return { success: false, error: data.error || 'Failed to approve payroll run' }
+    const data = await parseJson<{ success: boolean; data?: PayrollRun; error?: string; message?: string }>(response)
+    // PAYROLL_STATUTORY_NOT_CERTIFIED carries a readable message: approval stays blocked until certification.
+    if (!response.ok || !data.success) return { success: false, error: data.message || data.error || 'Failed to approve payroll run' }
     return { success: true, data: data.data }
 }
 

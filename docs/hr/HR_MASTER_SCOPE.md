@@ -1,6 +1,6 @@
 # Serapod2U HR — Master Scope
 
-Last verified: 2026-10-24 · HEAD `5d6c9bcb` · back to [HR_MASTER_INDEX.md](HR_MASTER_INDEX.md)
+Last verified: 2026-10-25 · HEAD `b6b78002` + uncommitted Wave 1/2 (code-status notes marked "Wave 2"). Earlier: 2026-10-24 · HEAD `5d6c9bcb` · back to [HR_MASTER_INDEX.md](HR_MASTER_INDEX.md)
 
 This file lists **every agreed HR Core workstream and enhancement**. Nothing may be removed without an owner decision recorded in [HR_DECISION_REGISTER.md](HR_DECISION_REGISTER.md) (rule 12). Operational HR enhancements are **not** replaced by Finance integration work; Finance readiness is a separate workstream (WS-18).
 
@@ -48,8 +48,10 @@ Conventions
 | S-01.3 | Add Employee reuses existing identity; email/phone resolution via `identity_resolve`; no name matching | same | Implemented |
 | S-01.4 | Operational guard: no attendance/leave/payroll rows for non-onboarded employees | same | Implemented |
 | S-01.5 | HR Data Management pre-go-live reset with snapshot/restore; `hr_mark_go_live` one-way | same | Implemented |
-| S-01.6 | Statutory & personal master data capture (DOB, residency/citizenship, NRIC/passport, EPF/SOCSO/tax refs, marital/children) with column-level grants | Payroll risk assessment P8; Finance readiness A4 | **Missing** |
-| S-01.7 | Employment history (effective-dated versions) | Lifecycle review D6; Finance readiness A1 | **Missing** |
+| S-01.6 | Statutory & personal master data capture (DOB, residency/citizenship, NRIC/passport, EPF/SOCSO/tax refs, marital/children) with column-level grants | Payroll risk assessment P8; Finance readiness A4 | **Wave 2: implemented in code** (`hr_employee_statutory_profiles`, server-only; not applied) |
+| S-01.7 | Employment history (effective-dated versions) | Lifecycle review D6; Finance readiness A1 | **Wave 2: implemented in code** (`hr_employee_versions`; not applied) |
+| S-01.8 | HR Profile sheet (personal, emergency, bank, education) persists | BL-26 (table never existed) | **Wave 2: fixed in code** (`hr_employee_profiles`) |
+| S-01.9 | Lifecycle integrity: former employees locked, rehire only after reactivation, end dates stamped, managers validated | Owner directive 2026-10-25 (C1) | **Wave 2: implemented in code** |
 
 ## WS-02 Employee Delete/Reset and Bulk Removal
 
@@ -65,8 +67,8 @@ Conventions
 |---|---|---|---|
 | S-03.1 | Archive & Revoke Access: end employment, archive identity, revoke login/sessions, optional identifier release; UUID and history kept | D-007, D-008; `IDENTITY_ARCHIVE_AND_IDENTIFIER_RELEASE.md` | Code + migrations `20261217100000`, `20261218100000`; not recorded applied |
 | S-03.2 | Former Employees tab (archived = former; read-only; never offered as manager) | commit `94299cf9` | Implemented (UI) |
-| S-03.3 | Archive must handle direct reports (reassignment) and pending approvals | Lifecycle review D1/D2 | **Missing** (warning only) |
-| S-03.4 | End compensation/allowances/position assignments at employment end; exclude leavers from payroll | Lifecycle review D2 | **Missing** |
+| S-03.3 | Archive must handle direct reports (reassignment) and pending approvals | Lifecycle review D1/D2 | **Partial (Wave 2):** explicit reassign tool + reporting-line check; archive itself still warns only (PD-LC-02) |
+| S-03.4 | End compensation/allowances/position assignments at employment end; exclude leavers from payroll | Lifecycle review D2 | **Wave 2: implemented in code** (end effects); payroll exclusion in B2B |
 | S-03.5 | Scheduled separation with last working date and separation reason (decoupled from immediate access revocation) | Lifecycle review D3; Finance readiness A6 | **Missing** — PD-LC-01 |
 | S-03.6 | Former-employee access to final payslips / Form EA (HR-mediated) | Lifecycle review D4 | **Missing** — PD-LC-03 |
 
@@ -84,68 +86,68 @@ Conventions
 | ID | Requirement | Source | Code status |
 |---|---|---|---|
 | S-05.1 | Transfers/promotions via position change requests | `POSITION_MANAGEMENT_V1.1.md` | Partial |
-| S-05.2 | Employee reporting line (`hr_employees.manager_user_id`) reconciled with position relationships; HR-approved reconciliation | baseline C6; lifecycle D5 | **Missing** |
+| S-05.2 | Employee reporting line (`hr_employees.manager_user_id`) reconciled with position relationships; HR-approved reconciliation | baseline C6; lifecycle D5 | **Wave 2: implemented in code** (review + explicit changes; no automatic apply) |
 | S-05.3 | Additional-manager scoped visibility enforced in RLS | baseline C11 | Missing (API-only) |
-| S-05.4 | Transfers recorded as effective-dated employment versions | S-01.7 | Missing |
+| S-05.4 | Transfers recorded as effective-dated employment versions | S-01.7 | **Wave 2: implemented in code** |
 
 ## WS-06 Hybrid Attendance  *(details pending — PD-ATT-01…08)*
 
 | ID | Requirement | Source | Code status |
 |---|---|---|---|
-| S-06.1 | Hybrid attendance: multiple capture channels feed one attendance record | Owner 2026-10-24 (D-011) | Partial: web/mobile clock exists (`source: 'web'`); no channel model |
-| S-06.2 | **Normal attendance is auto-validated — no daily approval** | Owner 2026-10-24 (D-012) | Policy fields exist (`late_after_minutes`, `early_leave_before_minutes`, `attendance_flag`); no auto-validation rule engine |
+| S-06.1 | Hybrid attendance: multiple capture channels feed one attendance record | Owner 2026-10-24 (D-011) | Partial: web/mobile clock exists (`source: 'web'`); no channel model → **2026-10-25:** **Implemented in code (Wave 3, not applied)**: channels web/mobile/hr_manual/import/correction; database-owned writes |
+| S-06.2 | **Normal attendance is auto-validated — no daily approval** | Owner 2026-10-24 (D-012) | Policy fields exist (`late_after_minutes`, `early_leave_before_minutes`, `attendance_flag`); no auto-validation rule engine → **2026-10-25:** **Implemented in code (Wave 3)**: auto-validation + exception detection from existing policy/shift fields (E-26/E-27) |
 | S-06.3 | Attendance remains operational data: never posts to Finance; only feeds payroll after approval | D-015, Finance readiness §2.3 | Consistent today |
-| S-06.4 | Timesheets (existing) continue as period summaries | baseline | Partial — timesheet **generation broken** (non-existent columns; B0 2026-10-24, BL-10 → B2B); approve/submit/reject aligned |
+| S-06.4 | Timesheets (existing) continue as period summaries | baseline | Repaired in code (B2B, 2026-10-24; not deployed) |
 
 ## WS-07 Mobile Clock In/Out  *(details pending — PD-ATT-02)*
 
 | ID | Requirement | Source | Code status |
 |---|---|---|---|
-| S-07.1 | Mobile clock in/out for ESS users with onboarding gate | baseline | Implemented (`/hr/mobile/attendance`, `/api/hr/attendance/clock`) |
-| S-07.2 | Mobile capture controls (e.g. location/device evidence) | Owner 2026-10-24 (scope title only) | Not implemented; requirements pending |
+| S-07.1 | Mobile clock in/out for ESS users with onboarding gate | baseline | Implemented (`/hr/mobile/attendance`, `/api/hr/attendance/clock`) → **2026-10-25:** Implemented; **rewritten in Wave 3** (server time through the database; history, corrections, OT on mobile) |
+| S-07.2 | Mobile capture controls (e.g. location/device evidence) | Owner 2026-10-24 (scope title only) | Not implemented; requirements pending → **2026-10-25:** Not implemented; PD-ATT-02 open (Wave 3 records server time, channel and device time only) |
 
 ## WS-08 HR Manual Attendance and Corrections
 
 | ID | Requirement | Source | Code status |
 |---|---|---|---|
-| S-08.1 | Employee correction requests with **controlled approval** | Owner 2026-10-24 (D-013) | Partial: `hr_attendance_corrections` + `/attendance/corrections` (requests aligned); **review route broken** (`review_note`, audit columns) and no self-review block — B0 2026-10-24, BL-10 → B2B; approver model to confirm (PD-ATT-04) |
-| S-08.2 | HR manual attendance entry (on behalf of employee) with reason and audit trail | Owner 2026-10-24 | **Missing** |
-| S-08.3 | Corrections never self-approved; original values preserved | Governance principle | Original values stored; self-approval check to verify in B4b |
+| S-08.1 | Employee correction requests with **controlled approval** | Owner 2026-10-24 (D-013) | Partial: requests aligned; review route **repaired in code (B2B, not deployed)** incl. self-review block; approver model to confirm (PD-ATT-04) → **2026-10-25:** **Implemented in code (Wave 3)**: requests, missing day, HR adjustment (maker-checker), independent decision |
+| S-08.2 | HR manual attendance entry (on behalf of employee) with reason and audit trail | Owner 2026-10-24 | **Missing** → **2026-10-25:** **Implemented in code (Wave 3)**: reason, audit, second-HR confirmation |
+| S-08.3 | Corrections never self-approved; original values preserved | Governance principle | Original values stored; self-approval check to verify in B4b → **2026-10-25:** **Implemented in code (Wave 3)**: self-review refused; originals on the correction + audit before/after |
 
 ## WS-09 Excel Bulk Attendance Import  *(details pending — PD-ATT-05)*
 
 | ID | Requirement | Source | Code status |
 |---|---|---|---|
-| S-09.1 | Bulk import of attendance from Excel with validation, dry-run preview and per-row results | Owner 2026-10-24 | **Missing** |
-| S-09.2 | Import is idempotent (file hash / row keys) and auditable | Existing pattern (bank statement import) | Missing |
+| S-09.1 | Bulk import of attendance from Excel with validation, dry-run preview and per-row results | Owner 2026-10-24 | **Missing** → **2026-10-25:** **Implemented in code (Wave 3)**: template, DB preview per row, commit |
+| S-09.2 | Import is idempotent (file hash / row keys) and auditable | Existing pattern (bank statement import) | Missing → **2026-10-25:** **Implemented in code (Wave 3)**: SHA-256 once per company, idempotent commit, audit |
 
 ## WS-10 Exception-based Attendance Review  *(details pending — PD-ATT-03)*
 
 | ID | Requirement | Source | Code status |
 |---|---|---|---|
-| S-10.1 | System detects exceptions (e.g. late, early leave, missing clock-out, absence without leave) and only exceptions are reviewed | Owner 2026-10-24 (D-012) | **Missing** (no detection job) |
-| S-10.2 | Review queue for HR and managers (MSS) with resolution outcomes | Owner 2026-10-24 | Missing |
+| S-10.1 | System detects exceptions (e.g. late, early leave, missing clock-out, absence without leave) and only exceptions are reviewed | Owner 2026-10-24 (D-012) | **Missing** (no detection job) → **2026-10-25:** **Implemented in code (Wave 3)**: 6 exception codes, idempotent detection (no scheduler) |
+| S-10.2 | Review queue for HR and managers (MSS) with resolution outcomes | Owner 2026-10-24 | Missing → **2026-10-25:** **Implemented in code (Wave 3)**: HR queue + resolutions; manager decisions need `hr.mss.attendance_approve` (SA-R6) |
 
 ## WS-11 Overtime Approval
 
 | ID | Requirement | Source | Code status |
 |---|---|---|---|
 | S-11.1 | **OT approval is separate from attendance** | Owner 2026-10-24 (D-014) | Separate table `hr_overtime_requests` exists |
-| S-11.2 | OT request submit/approve API works against the real schema; requester never self-approves | Payroll risk assessment P6 | **Broken** (column drift; requester auto-approval) |
-| S-11.3 | Approved OT (with day type and frozen multiplier) is the sole OT source for payroll | Payroll risk assessment §3 | Not implemented (payroll reads timesheets) — PD-OT-03 |
-| S-11.4 | Manager (MSS) approval of team OT | MSS model | Missing — PD-OT-01 |
+| S-11.2 | OT request submit/approve API works against the real schema; requester never self-approves | Payroll risk assessment P6 | **Broken** (column drift; requester auto-approval) → **2026-10-25:** **Implemented in code (Wave 3)**: database functions, no self-approval, RLS gap closed |
+| S-11.3 | Approved OT (with day type and frozen multiplier) is the sole OT source for payroll | Payroll risk assessment §3 | Not implemented (payroll reads timesheets) — PD-OT-03 → **2026-10-25:** Partial (Wave 3): `approved_minutes` + consumption slot; payroll consumption Phase B (PD-OT-03) |
+| S-11.4 | Manager (MSS) approval of team OT | MSS model | Missing — PD-OT-01 → **2026-10-25:** Partial (Wave 3): path ready, needs `hr.mss.overtime_approve` (SA-R7) |
 
 ## WS-12 Leave Management
 
 | ID | Requirement | Source | Code status |
 |---|---|---|---|
-| S-12.1 | Leave containment: no impersonated insert, no self-approval, narrowed read | Remediation L1–L3 | **Open P0** |
+| S-12.1 | Leave containment: no impersonated insert, no self-approval, narrowed read | Remediation L1–L3 | **Open P0** → **2026-10-25:** Implemented (B2A) — applied & verified on staging 2026-10-25 |
 | S-12.2 | ESS leave form works (leave types load) | Remediation L4 | **Broken** |
-| S-12.3 | Server-side workflow: apply, approve/reject (multi-level, delegation), cancel | Leave design | Missing (client-direct writes; Approval Flow is mock) |
-| S-12.4 | Append-only leave ledger (days only) and balance projection | Leave design; Finance readiness A5 | Missing |
-| S-12.5 | Entitlements (Employment Act minima, service tiers, proration), carry-forward, expiry, year-end close | Leave design §4 | Config JSON only |
-| S-12.6 | Public holidays by state with replacement days | Leave design §3 | Partial (template load broken: `category` column) |
-| S-12.7 | Unpaid leave and encashment exposed to payroll (no money in leave ledger) | Finance readiness §2.5 | Missing |
+| S-12.3 | Server-side workflow: apply, approve/reject (multi-level, delegation), cancel | Leave design | Missing (client-direct writes; Approval Flow is mock) → **2026-10-25:** Partial: B2A transitions; Wave 3 adds DB working days/overlap/balance checks; no chains/delegation |
+| S-12.4 | Append-only leave ledger (days only) and balance projection | Leave design; Finance readiness A5 | Missing → **2026-10-25:** **Implemented in code (Wave 3)**: append-only ledger + projection, opening balance |
+| S-12.5 | Entitlements (Employment Act minima, service tiers, proration), carry-forward, expiry, year-end close | Leave design §4 | Config JSON only → **2026-10-25:** Partial (Wave 3): HR entitlement/adjust, runs from type tiers/pro-rata, carry-forward (no expiry); statutory minima open (PD-LV-01/02) |
+| S-12.6 | Public holidays by state with replacement days | Leave design §3 | Partial (template load broken: `category` column) → **2026-10-25:** Partial (Wave 3): national + work-state holidays used for leave days and absence; replacement days open |
+| S-12.7 | Unpaid leave and encashment exposed to payroll (no money in leave ledger) | Finance readiness §2.5 | Missing → **2026-10-25:** Partial (Wave 3): unpaid days per period readable; encashment open (PD-LV-04) |
 
 ## WS-13 ESS and MSS
 
@@ -153,7 +155,7 @@ Conventions
 |---|---|---|---|
 | S-13.1 | ESS: own profile (hybrid edit), attendance, leave, payslips | baseline | Implemented (leave form broken, S-12.2) |
 | S-13.2 | MSS: team, attendance, leave, requests, performance, compensation viewer — explicit grants, never title-derived | baseline; D-004 | Implemented (read) |
-| S-13.3 | MSS actions: approve team leave, OT, exceptions | Leave design; WS-10/11 | Missing |
+| S-13.3 | MSS actions: approve team leave, OT, exceptions | Leave design; WS-10/11 | Missing → **2026-10-25:** Partial (Wave 3): mobile Approvals for whatever the database allows; MSS OT/attendance keys requested |
 
 ## WS-14 Performance and KPI
 
@@ -185,7 +187,7 @@ Conventions
 |---|---|---|---|
 | S-17.1 | S&A is the single authorization authority | D-004 | Architecture in place |
 | S-17.2 | HR Permissions screen no longer edits the legacy store; points to S&A | S&A plan L-A | Open |
-| S-17.3 | Remove `() => true` and inline role-level evaluators from HR routes | S&A plan L-B | Open (32 + 14 routes) |
+| S-17.3 | Remove `() => true` and inline role-level evaluators from HR routes | S&A plan L-B | **Wave 2: 32 `() => true` removed**; 14 inline role-level legacy evaluators remain (SA-R5) |
 | S-17.4 | Production HR keys moved SHADOW → enforced in waves with parity evidence | S&A plan §5 | Not started; prod modes NOT VERIFIED since 2026-10-02 |
 | S-17.5 | Retire legacy compatibility policies for HR keys after explicit grants | S&A plan L-C | Controls migration `20261215110000` untracked/unapplied |
 | S-17.6 | New keys for leave management/view and sensitive profile | S&A plan §3 | Proposed (PD-SA-01) |
@@ -195,10 +197,11 @@ Conventions
 | ID | Requirement | Source | Code status |
 |---|---|---|---|
 | S-18.1 | HR Core captures complete, reliable, approved/locked financial-source data; ordinary attendance never posts | D-001, D-002, D-015 | Principle |
-| S-18.2 | Employment versions with department and nullable cost-centre slot (A1) | Finance roadmap A1 | Missing |
-| S-18.3 | Compensation non-overlap + change log (A2) | A2 | Missing |
-| S-18.4 | Allowance/deduction type → payroll component link (A3) | A3 | Missing |
-| S-18.5 | Statutory profile capture (A4) = S-01.6 | A4 | Missing |
+| S-18.2 | Employment versions with department and nullable cost-centre slot (A1) | Finance roadmap A1 | **Wave 2: implemented in code** |
+| S-18.3 | Compensation non-overlap + change log (A2) | A2 | **Wave 2: implemented in code** |
+| S-18.4 | Allowance/deduction type → payroll component link (A3) | A3 | **Wave 2: slot only** (P-F03) |
+| S-18.5 | Statutory profile capture (A4) = S-01.6 | A4 | **Wave 2: implemented in code** |
+| S-18.11 | HR → Finance data contract v1 (read-only; no amounts, no statutory numbers) | Owner directive 2026-10-25 (C4) | **Wave 2: implemented in code** (`hr_employment_finance_contract_v1`) |
 | S-18.6 | Leave ledger in days (A5) = S-12.4 | A5 | Missing |
 | S-18.7 | Separation data (A6) = S-03.5 | A6 | Missing |
 | S-18.8 | Final/locked statuses on HR financial sources (A7) | A7 | Partial |

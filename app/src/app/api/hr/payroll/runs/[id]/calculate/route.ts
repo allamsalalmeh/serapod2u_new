@@ -1,7 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { canManageHr, getHrAuthContext, hrCan } from '@/lib/server/hrAccess'
+import { getHrAuthContext, hrCan } from '@/lib/server/hrAccess'
+import {
+    PAYROLL_CALCULATION_FAILED,
+    buildPayrollLine,
+    eligibilityForPeriod,
+    isStatutoryCertified,
+    readStatutoryRates,
+    summarizePayrollLines,
+    validatePayrollLine,
+    type CompensationRow,
+    type EmploymentRow,
+    type PayrollLine,
+} from '@/lib/hr/payroll-calculation'
 
+/**
+ * POST /api/hr/payroll/runs/:id/calculate — PROVISIONAL calculation, fail-closed (B2B).
+ *
+ * Every eligible employee gets a line or the run is NOT calculated: any read or line error returns 422 with the list
+ * of problems, the run stays draft and no header totals are written. Lines use the real hr_payroll_run_items columns.
+ * Leavers (employment ended before the period) and employees not onboarded are excluded and reported.
+ */
 export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
     try {
         const { id: runId } = await params
@@ -12,195 +31,130 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
         if (!ctx.organizationId) return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
         if (!(await hrCan(ctx, 'hr.payroll.prepare'))) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
 
-        // Get the run
         const { data: run, error: runError } = await supabase
             .from('hr_payroll_runs')
             .select('*')
             .eq('id', runId)
             .eq('organization_id', ctx.organizationId)
             .single()
-
         if (runError || !run) return NextResponse.json({ success: false, error: 'Run not found' }, { status: 404 })
         if (run.status !== 'draft') return NextResponse.json({ success: false, error: 'Can only calculate draft runs' }, { status: 400 })
+        const period = { period_start: run.period_start as string, period_end: run.period_end as string }
 
-        // Get statutory config
-        const { data: settingsRow } = await supabase
+        // Statutory rates: one config document per organization (hr_settings has no config_key column).
+        const { data: settingsRow, error: settingsError } = await supabase
             .from('hr_settings')
             .select('config')
             .eq('organization_id', ctx.organizationId)
-            .eq('config_key', 'statutory_rates')
-            .single()
+            .maybeSingle()
+        if (settingsError) return failed([{ step: 'statutory_settings', message: 'Statutory settings could not be read' }])
+        const rates = readStatutoryRates(settingsRow?.config)
 
-        const rates = settingsRow?.config || {
-            epf_employee_rate: 11, epf_employer_rate: 13,
-            socso_employee_rate: 0.5, socso_employer_rate: 1.75,
-            eis_employee_rate: 0.2, eis_employer_rate: 0.2,
-            pcb_enabled: true
-        }
-
-        // Get all active employees with compensation
         const { data: activeComps, error: compError } = await supabase
             .from('hr_employee_compensation')
-            .select('*, salary_band:hr_salary_bands(*)')
+            .select('employee_id, basic_salary, hourly_rate, ot_eligible, effective_date, end_date, salary_band:hr_salary_bands(ot_rate, ot_eligible)')
             .eq('organization_id', ctx.organizationId)
             .eq('status', 'active')
+        if (compError) return failed([{ step: 'compensation', message: 'Compensation could not be read' }])
 
-        if (compError) return NextResponse.json({ success: false, error: compError.message }, { status: 500 })
-
-        // Payroll covers employees HR has onboarded; employment anchors awaiting
-        // onboarding (or reset) have no payroll lines.
-        const { data: onboarded, error: onboardedError } = await supabase
+        const { data: employment, error: employmentError } = await supabase
             .from('hr_employees')
-            .select('user_id')
+            .select('user_id, onboarding_status, status, end_date')
             .eq('organization_id', ctx.organizationId)
-            .eq('onboarding_status', 'completed')
-        if (onboardedError) return NextResponse.json({ success: false, error: onboardedError.message }, { status: 500 })
-        const onboardedIds = new Set((onboarded || []).map((e: any) => e.user_id))
-        const comps = (activeComps || []).filter((comp: any) => onboardedIds.has(comp.employee_id))
-        if (comps.length === 0) return NextResponse.json({ success: false, error: 'No onboarded employees with active compensation found' }, { status: 400 })
+        if (employmentError) return failed([{ step: 'employment', message: 'Employment records could not be read' }])
+        const byUser = new Map<string, EmploymentRow>((employment || []).map((e: EmploymentRow) => [e.user_id, e]))
 
-        // Delete existing items for this run (recalculate)
-        await supabase.from('hr_payroll_run_items').delete().eq('payroll_run_id', runId)
-
-        let totalGross = 0, totalNet = 0, totalDeductions = 0, totalEmployerContrib = 0
-
-        for (const comp of comps) {
-            const basicSalary = comp.basic_salary || 0
-
-            // Get employee allowances
-            const { data: allowances } = await supabase
-                .from('hr_employee_allowances')
-                .select('amount')
-                .eq('employee_id', comp.employee_id)
-                .eq('organization_id', ctx.organizationId)
-                .lte('effective_date', run.period_end)
-                .or(`end_date.is.null,end_date.gte.${run.period_start}`)
-
-            const allowancesAmount = (allowances || []).reduce((s: number, a: any) => s + (a.amount || 0), 0)
-
-            // Get employee deductions (non-statutory)
-            const { data: deductions } = await supabase
-                .from('hr_employee_deductions')
-                .select('amount')
-                .eq('employee_id', comp.employee_id)
-                .eq('organization_id', ctx.organizationId)
-                .lte('effective_date', run.period_end)
-                .or(`end_date.is.null,end_date.gte.${run.period_start}`)
-
-            const otherDeductions = (deductions || []).reduce((s: number, d: any) => s + (d.amount || 0), 0)
-
-            // Get approved timesheet work/OT minutes for period
-            const { data: timesheets } = await supabase
-                .from('hr_timesheets')
-                .select('total_work_minutes, total_overtime_minutes')
-                .eq('user_id', comp.employee_id)
-                .eq('organization_id', ctx.organizationId)
-                .eq('status', 'approved')
-                .gte('period_start', run.period_start)
-                .lte('period_end', run.period_end)
-
-            const workMinutes = (timesheets || []).reduce((s: number, t: any) => s + (t.total_work_minutes || 0), 0)
-            const overtimeMinutes = (timesheets || []).reduce((s: number, t: any) => s + (t.total_overtime_minutes || 0), 0)
-
-            // Calculate OT
-            const otRate = comp.salary_band?.ot_rate || 1.5
-            const otEligible = comp.salary_band?.ot_eligible || false
-            const hourlyRate = comp.hourly_rate || (basicSalary / (22 * 8)) // 22 working days * 8 hours
-            const overtimeAmount = otEligible ? (overtimeMinutes / 60) * hourlyRate * otRate : 0
-
-            const grossSalary = basicSalary + allowancesAmount + overtimeAmount
-
-            // Statutory calculations
-            const epfEmployee = Math.round(grossSalary * (rates.epf_employee_rate || 11) / 100 * 100) / 100
-            const epfEmployer = Math.round(grossSalary * (rates.epf_employer_rate || 13) / 100 * 100) / 100
-            const socsoEmployee = Math.round(grossSalary * (rates.socso_employee_rate || 0.5) / 100 * 100) / 100
-            const socsoEmployer = Math.round(grossSalary * (rates.socso_employer_rate || 1.75) / 100 * 100) / 100
-            const eisEmployee = Math.round(grossSalary * (rates.eis_employee_rate || 0.2) / 100 * 100) / 100
-            const eisEmployer = Math.round(grossSalary * (rates.eis_employer_rate || 0.2) / 100 * 100) / 100
-
-            // Simple PCB approximation (placeholder — real implementation needs LHDN schedule)
-            let pcbAmount = 0
-            if (rates.pcb_enabled) {
-                const annualIncome = grossSalary * 12
-                if (annualIncome > 34000) {
-                    const taxableAfterRelief = annualIncome - 9000 - epfEmployee * 12 // personal + EPF relief
-                    if (taxableAfterRelief > 70000) pcbAmount = Math.round(((taxableAfterRelief - 70000) * 0.21 + 4600) / 12 * 100) / 100
-                    else if (taxableAfterRelief > 50000) pcbAmount = Math.round(((taxableAfterRelief - 50000) * 0.16 + 1600) / 12 * 100) / 100
-                    else if (taxableAfterRelief > 35000) pcbAmount = Math.round(((taxableAfterRelief - 35000) * 0.08 + 600) / 12 * 100) / 100
-                    else if (taxableAfterRelief > 20000) pcbAmount = Math.round(((taxableAfterRelief - 20000) * 0.03 + 150) / 12 * 100) / 100
-                    else if (taxableAfterRelief > 5000) pcbAmount = Math.round((taxableAfterRelief - 5000) * 0.01 / 12 * 100) / 100
-                }
+        const excluded: Array<{ employee_user_id: string; reason: string }> = []
+        const comps: CompensationRow[] = []
+        const seen = new Set<string>()
+        for (const comp of (activeComps || []) as CompensationRow[]) {
+            const decision = eligibilityForPeriod(byUser.get(comp.employee_id), comp, period)
+            if (!decision.eligible) { excluded.push({ employee_user_id: comp.employee_id, reason: decision.reason }); continue }
+            if (seen.has(comp.employee_id)) {
+                return failed([{ employee_user_id: comp.employee_id, step: 'compensation', message: 'More than one active compensation record covers this period' }])
             }
-
-            const totalEmployeeDeductions = epfEmployee + socsoEmployee + eisEmployee + pcbAmount + otherDeductions
-            const netSalary = grossSalary - totalEmployeeDeductions
-            const employerContributions = epfEmployer + socsoEmployer + eisEmployer
-
-            const { error: itemError } = await supabase
-                .from('hr_payroll_run_items')
-                .insert({
-                    payroll_run_id: runId,
-                    employee_id: comp.employee_id,
-                    basic_salary: basicSalary,
-                    overtime_amount: Math.round(overtimeAmount * 100) / 100,
-                    allowances_amount: allowancesAmount,
-                    work_minutes: workMinutes,
-                    overtime_minutes: overtimeMinutes,
-                    gross_salary: Math.round(grossSalary * 100) / 100,
-                    epf_employee: epfEmployee,
-                    epf_employer: epfEmployer,
-                    socso_employee: socsoEmployee,
-                    socso_employer: socsoEmployer,
-                    eis_employee: eisEmployee,
-                    eis_employer: eisEmployer,
-                    pcb_amount: pcbAmount,
-                    other_deductions: otherDeductions,
-                    other_allowances: 0,
-                    deductions: Math.round(totalEmployeeDeductions * 100) / 100,
-                    employer_contributions: Math.round(employerContributions * 100) / 100,
-                    net_salary: Math.round(netSalary * 100) / 100,
-                    status: 'calculated'
-                })
-
-            if (itemError) console.error(`Error computing for employee ${comp.employee_id}:`, itemError.message)
-
-            totalGross += grossSalary
-            totalNet += netSalary
-            totalDeductions += totalEmployeeDeductions
-            totalEmployerContrib += employerContributions
+            seen.add(comp.employee_id)
+            comps.push(comp)
+        }
+        if (comps.length === 0) {
+            return NextResponse.json({ success: false, error: 'No eligible employees (onboarded, employed in the period, with active compensation)', excluded }, { status: 400 })
         }
 
-        // Update run
+        const lines: PayrollLine[] = []
+        const errors: Array<{ employee_user_id?: string; step: string; message: string }> = []
+        for (const comp of comps) {
+            const [allowancesRes, deductionsRes, timesheetsRes] = await Promise.all([
+                supabase.from('hr_employee_allowances').select('amount')
+                    .eq('employee_id', comp.employee_id).eq('organization_id', ctx.organizationId)
+                    .lte('effective_date', period.period_end).or(`end_date.is.null,end_date.gte.${period.period_start}`),
+                supabase.from('hr_employee_deductions').select('amount')
+                    .eq('employee_id', comp.employee_id).eq('organization_id', ctx.organizationId)
+                    .lte('effective_date', period.period_end).or(`end_date.is.null,end_date.gte.${period.period_start}`),
+                supabase.from('hr_timesheets').select('total_minutes, overtime_minutes')
+                    .eq('user_id', comp.employee_id).eq('organization_id', ctx.organizationId).eq('status', 'approved')
+                    .gte('period_start', period.period_start).lte('period_end', period.period_end),
+            ])
+            if (allowancesRes.error) { errors.push({ employee_user_id: comp.employee_id, step: 'allowances', message: 'Allowances could not be read' }); continue }
+            if (deductionsRes.error) { errors.push({ employee_user_id: comp.employee_id, step: 'deductions', message: 'Deductions could not be read' }); continue }
+            if (timesheetsRes.error) { errors.push({ employee_user_id: comp.employee_id, step: 'timesheets', message: 'Approved timesheets could not be read' }); continue }
+            const line = buildPayrollLine({
+                organizationId: ctx.organizationId, runId, compensation: comp, rates,
+                allowances: allowancesRes.data || [], deductions: deductionsRes.data || [], timesheets: timesheetsRes.data || [],
+            })
+            const problem = validatePayrollLine(line)
+            if (problem) { errors.push({ employee_user_id: comp.employee_id, step: 'line', message: problem }); continue }
+            lines.push(line)
+        }
+        if (errors.length > 0) return failed(errors, excluded)
+
+        // Replace the draft's lines in one statement each; a failure leaves the run draft (recalculate to retry).
+        const { error: clearError } = await supabase.from('hr_payroll_run_items').delete()
+            .eq('payroll_run_id', runId).eq('organization_id', ctx.organizationId)
+        if (clearError) return failed([{ step: 'clear_previous_lines', message: 'Previous lines could not be removed' }], excluded)
+        const { data: written, error: insertError } = await supabase.from('hr_payroll_run_items').insert(lines).select('id')
+        if (insertError || (written || []).length !== lines.length) {
+            return failed([{ step: 'write_lines', message: 'Payroll lines could not be written; the run was not calculated' }], excluded)
+        }
+
+        const totals = summarizePayrollLines(lines)
         const { data: updatedRun, error: updateError } = await supabase
             .from('hr_payroll_runs')
-            .update({
-                status: 'calculated',
-                total_gross: Math.round(totalGross * 100) / 100,
-                total_net: Math.round(totalNet * 100) / 100,
-                total_deductions: Math.round(totalDeductions * 100) / 100,
-                total_employer_contributions: Math.round(totalEmployerContrib * 100) / 100,
-                employee_count: comps.length,
-                calculated_at: new Date().toISOString(),
-                calculated_by: ctx.userId
-            })
+            .update({ status: 'calculated', ...totals, calculated_at: new Date().toISOString(), calculated_by: ctx.userId })
             .eq('id', runId)
+            .eq('organization_id', ctx.organizationId)
+            .eq('status', 'draft')
             .select()
             .single()
+        if (updateError || !updatedRun) {
+            return failed([{ step: 'run_status', message: 'The run could not be marked calculated' }], excluded)
+        }
 
-        if (updateError) return NextResponse.json({ success: false, error: updateError.message }, { status: 500 })
-
-        // Audit
-        await supabase.from('hr_payroll_audit').insert({
+        const { error: auditError } = await supabase.from('hr_payroll_audit').insert({
             organization_id: ctx.organizationId,
             payroll_run_id: runId,
+            actor_user_id: ctx.userId,
             action: 'calculate',
-            performed_by: ctx.userId,
-            details: { employee_count: comps.length, total_gross: totalGross, total_net: totalNet }
+            metadata: { employee_count: lines.length, excluded, ...totals, provisional: true, statutory_certified: isStatutoryCertified(settingsRow?.config) },
         })
+        if (auditError) console.error('Payroll audit could not be recorded for run', runId)
 
-        return NextResponse.json({ success: true, data: updatedRun })
+        return NextResponse.json({
+            success: true,
+            data: { ...updatedRun, employee_count: lines.length },
+            provisional: true,
+            statutoryCertified: isStatutoryCertified(settingsRow?.config),
+            excluded,
+            auditRecorded: !auditError,
+        })
     } catch (error: any) {
         console.error('Payroll calculation error:', error)
-        return NextResponse.json({ success: false, error: error.message || 'Internal error' }, { status: 500 })
+        return NextResponse.json({ success: false, error: 'Internal error' }, { status: 500 })
     }
+}
+
+function failed(errors: Array<{ employee_user_id?: string; step: string; message: string }>, excluded: unknown[] = []) {
+    return NextResponse.json(
+        { success: false, error: PAYROLL_CALCULATION_FAILED, message: 'The run was not calculated. Fix the listed problems and calculate again.', errors, excluded },
+        { status: 422 },
+    )
 }

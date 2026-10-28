@@ -33,6 +33,9 @@ import { useCommissionAccess } from '@/lib/hr/commission/use-commission-access'
 import PermanentDeleteDialog from '@/components/identity/PermanentDeleteDialog'
 import ArchiveIdentityDialog, { type ArchiveMode } from '@/components/identity/ArchiveIdentityDialog'
 import BulkRemovalDialog from '@/components/identity/BulkRemovalDialog'
+import EmploymentHistoryPanel from '@/components/hr/people/EmploymentHistoryPanel'
+import ReportingLinesReviewDialog from '@/components/hr/people/ReportingLinesReviewDialog'
+import { WORK_STATES } from '@/lib/hr/employment-messages'
 
 interface HrPeopleViewProps {
     organizationId: string
@@ -146,6 +149,7 @@ interface HrProfileData {
     socso_number?: string | null
     epf_number?: string | null
     eis_number?: string | null
+    work_state?: string | null
     personal_email?: string | null
     personal_phone?: string | null
     address_line1?: string | null
@@ -230,6 +234,9 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     const [profileLoading, setProfileLoading] = useState(false)
     const [profileSaving, setProfileSaving] = useState(false)
     const [profileTab, setProfileTab] = useState('personal')
+    // What the database allows the caller to edit on this profile (Wave 2: explicit HR; statutory details by HR only).
+    const [profilePerms, setProfilePerms] = useState<{ can_edit_statutory?: boolean; can_edit_all_personal?: boolean } | null>(null)
+    const [reportingCheckOpen, setReportingCheckOpen] = useState(false)
     // Sales Commission is compensation data: the tab exists only for people granted commission access (decided by the
     // database, re-checked by every commission API).
     const commissionAccess = useCommissionAccess()
@@ -764,6 +771,12 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         setAddLoading(false)
     }
 
+    const statutoryEditable = profileEditable && profilePerms?.can_edit_statutory !== false
+    const activeManagerOptions = useMemo(
+        () => users.filter(u => u.account_status !== 'ARCHIVED' && u.is_active).map(u => ({ id: u.id, name: u.full_name || u.email })),
+        [users],
+    )
+
     // Open HR profile sheet
     const openProfile = async (user: HrUserRow) => {
         setProfileUser(user)
@@ -773,6 +786,10 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         try {
             const res = await fetch(`/api/hr/employees/profile?user_id=${user.id}`)
             const json = await res.json()
+            setProfilePerms(json.success ? (json.data?.permissions ?? null) : null)
+            if (!json.success) {
+                toast({ title: 'Profile not available', description: json.error || 'The profile could not be loaded.', variant: 'destructive' })
+            }
             if (json.success && json.data?.profile) {
                 setProfileData(json.data.profile)
             } else {
@@ -797,7 +814,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
             if (json.success) {
                 toast({ title: 'Profile saved' })
             } else {
-                toast({ title: 'Error', description: json.error, variant: 'destructive' })
+                toast({ title: 'Profile not saved', description: json.error || 'The profile could not be saved.', variant: 'destructive' })
             }
         } catch (err: any) {
             toast({ title: 'Error', description: err.message, variant: 'destructive' })
@@ -859,9 +876,14 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                         <CardDescription className="text-xs">Employees and reporting lines • {filteredUsers.length === tabTotal ? `${tabTotal} shown` : `${filteredUsers.length} of ${tabTotal} shown (filtered)`}</CardDescription>
                     </div>
                     {canEdit && (
-                        <Button size="sm" className="w-full sm:w-auto shrink-0" onClick={() => { resetAddForm(); setAddDialogOpen(true) }}>
-                            <Plus className="h-4 w-4 mr-1" /> Add Employee
-                        </Button>
+                        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                            <Button size="sm" variant="outline" className="w-full sm:w-auto shrink-0" onClick={() => setReportingCheckOpen(true)}>
+                                <AlertTriangle className="h-4 w-4 mr-1" /> Reporting-line check
+                            </Button>
+                            <Button size="sm" className="w-full sm:w-auto shrink-0" onClick={() => { resetAddForm(); setAddDialogOpen(true) }}>
+                                <Plus className="h-4 w-4 mr-1" /> Add Employee
+                            </Button>
+                        </div>
                     )}
                 </div>
             </CardHeader>
@@ -1376,6 +1398,13 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 />
             )}
 
+            <ReportingLinesReviewDialog
+                open={reportingCheckOpen}
+                onOpenChange={setReportingCheckOpen}
+                managers={activeManagerOptions}
+                onChanged={() => loadUsers()}
+            />
+
             {/* ─── Add Employee Dialog (HR onboarding over one central identity) ──── */}
             <Dialog open={addDialogOpen} onOpenChange={(open) => { setAddDialogOpen(open); if (!open) resetAddForm() }}>
                 <DialogContent className="sm:max-w-[640px] max-h-[90vh] overflow-y-auto">
@@ -1511,7 +1540,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                         <SelectTrigger><SelectValue /></SelectTrigger>
                                         <SelectContent>
                                             <SelectItem value="none">Top leader</SelectItem>
-                                            {users.filter(u => u.id !== candidate?.user_id).map(u => (
+                                            {users.filter(u => u.id !== candidate?.user_id && u.account_status !== 'ARCHIVED').map(u => (
                                                 <SelectItem key={u.id} value={u.id}>{u.full_name || u.email}</SelectItem>
                                             ))}
                                         </SelectContent>
@@ -1641,11 +1670,12 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                     ) : (
                         <div className="mt-4 space-y-4">
                             <Tabs value={profileTab} onValueChange={setProfileTab}>
-                                <TabsList className={`grid w-full ${showCommissionTab ? 'grid-cols-5' : 'grid-cols-4'}`}>
+                                <TabsList className={`grid w-full ${showCommissionTab ? 'grid-cols-6' : 'grid-cols-5'}`}>
                                     <TabsTrigger value="personal" className="text-xs">Personal</TabsTrigger>
                                     <TabsTrigger value="identity" className="text-xs">ID &amp; Tax</TabsTrigger>
                                     <TabsTrigger value="emergency" className="text-xs">Emergency</TabsTrigger>
                                     <TabsTrigger value="bank" className="text-xs">Bank</TabsTrigger>
+                                    <TabsTrigger value="history" className="text-xs">History</TabsTrigger>
                                     {showCommissionTab && <TabsTrigger value="commission" className="text-xs">Commission</TabsTrigger>}
                                 </TabsList>
 
@@ -1765,35 +1795,52 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
 
                                 {/* Identity & Tax */}
                                 <TabsContent value="identity" className="space-y-3 mt-3">
+                                    {profileEditable && !statutoryEditable && (
+                                        <p className="text-xs text-muted-foreground">Statutory details (ID, tax, EPF, SOCSO, EIS) are changed only by HR with explicit authority in this employee's company — never on your own record.</p>
+                                    )}
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">IC Number (NRIC)</Label>
-                                            <Input className="h-9" value={profileData.ic_number || ''} onChange={e => updateProfileField('ic_number', e.target.value || null)} placeholder="e.g. 900101-01-1234" disabled={!profileEditable} />
+                                            <Input className="h-9" value={profileData.ic_number || ''} onChange={e => updateProfileField('ic_number', e.target.value || null)} placeholder="e.g. 900101-01-1234" disabled={!statutoryEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Passport Number</Label>
-                                            <Input className="h-9" value={profileData.passport_number || ''} onChange={e => updateProfileField('passport_number', e.target.value || null)} disabled={!profileEditable} />
+                                            <Input className="h-9" value={profileData.passport_number || ''} onChange={e => updateProfileField('passport_number', e.target.value || null)} disabled={!statutoryEditable} />
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Tax ID (LHDN)</Label>
-                                            <Input className="h-9" value={profileData.tax_id || ''} onChange={e => updateProfileField('tax_id', e.target.value || null)} disabled={!profileEditable} />
+                                            <Input className="h-9" value={profileData.tax_id || ''} onChange={e => updateProfileField('tax_id', e.target.value || null)} disabled={!statutoryEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">SOCSO (PERKESO)</Label>
-                                            <Input className="h-9" value={profileData.socso_number || ''} onChange={e => updateProfileField('socso_number', e.target.value || null)} disabled={!profileEditable} />
+                                            <Input className="h-9" value={profileData.socso_number || ''} onChange={e => updateProfileField('socso_number', e.target.value || null)} disabled={!statutoryEditable} />
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">EPF (KWSP)</Label>
-                                            <Input className="h-9" value={profileData.epf_number || ''} onChange={e => updateProfileField('epf_number', e.target.value || null)} disabled={!profileEditable} />
+                                            <Input className="h-9" value={profileData.epf_number || ''} onChange={e => updateProfileField('epf_number', e.target.value || null)} disabled={!statutoryEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">EIS Number</Label>
-                                            <Input className="h-9" value={profileData.eis_number || ''} onChange={e => updateProfileField('eis_number', e.target.value || null)} disabled={!profileEditable} />
+                                            <Input className="h-9" value={profileData.eis_number || ''} onChange={e => updateProfileField('eis_number', e.target.value || null)} disabled={!statutoryEditable} />
                                         </div>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-xs" htmlFor="hr-work-state">Work state</Label>
+                                        <select
+                                            id="hr-work-state"
+                                            className="h-9 w-full rounded-md border bg-background px-2 text-sm disabled:opacity-60"
+                                            value={profileData.work_state || ''}
+                                            onChange={e => updateProfileField('work_state', e.target.value || null)}
+                                            disabled={!statutoryEditable}
+                                        >
+                                            <option value="">Not recorded (national holidays only)</option>
+                                            {WORK_STATES.map(ws => <option key={ws.code} value={ws.code}>{ws.name}</option>)}
+                                        </select>
+                                        <p className="text-[11px] text-muted-foreground">Decides which state public holidays count for this employee's leave working days, attendance and overtime.</p>
                                     </div>
                                 </TabsContent>
 
@@ -1835,6 +1882,19 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                         <Input className="h-9" value={profileData.bank_holder_name || ''} onChange={e => updateProfileField('bank_holder_name', e.target.value || null)} disabled={!profileEditable} />
                                     </div>
                                 </TabsContent>
+
+                                {/* Employment history (append-only, effective-dated) */}
+                                {profileUser && (
+                                    <TabsContent value="history" className="mt-3">
+                                        {profileTab === 'history' && (
+                                            <EmploymentHistoryPanel
+                                                userId={profileUser.id}
+                                                change={profileEditable ? { departments, positions, managers: activeManagerOptions } : undefined}
+                                                onChanged={() => loadUsers()}
+                                            />
+                                        )}
+                                    </TabsContent>
+                                )}
 
                                 {/* Sales Commission */}
                                 {showCommissionTab && profileUser && (

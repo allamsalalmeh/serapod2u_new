@@ -227,8 +227,8 @@ export default function HrPayrollPayslipsView({ userProfile }: HrPayrollPayslips
             socsoEmpTotal: runItems.reduce((s, i) => s + (i.socso_employee || 0), 0),
             eisEmpTotal: runItems.reduce((s, i) => s + (i.eis_employee || 0), 0),
             pcbTotal: runItems.reduce((s, i) => s + (i.pcb_amount || 0), 0),
-            grossTotal: runItems.reduce((s, i) => s + (i.gross_salary || 0), 0),
-            netTotal: runItems.reduce((s, i) => s + (i.net_salary || 0), 0),
+            grossTotal: runItems.reduce((s, i) => s + Number(i.gross_amount || 0), 0),
+            netTotal: runItems.reduce((s, i) => s + Number(i.net_amount || 0), 0),
             count: runItems.length
         }
     }, [runItems])
@@ -373,16 +373,16 @@ export default function HrPayrollPayslipsView({ userProfile }: HrPayrollPayslips
                                                     <TableBody>
                                                         {runItems.map(item => (
                                                             <TableRow key={item.id}>
-                                                                <TableCell className="text-sm">{item.employee_id.slice(0, 8)}...</TableCell>
+                                                                <TableCell className="text-sm">{item.employee_user_id.slice(0, 8)}...</TableCell>
                                                                 <TableCell className="text-sm">{(item.basic_salary || 0).toLocaleString()}</TableCell>
                                                                 <TableCell className="text-sm">{(item.overtime_amount || 0).toLocaleString()}</TableCell>
                                                                 <TableCell className="text-sm">{(item.allowances_amount || 0).toLocaleString()}</TableCell>
-                                                                <TableCell className="text-sm font-medium">{(item.gross_salary || 0).toLocaleString()}</TableCell>
+                                                                <TableCell className="text-sm font-medium">{Number(item.gross_amount || 0).toLocaleString()}</TableCell>
                                                                 <TableCell className="text-sm text-red-600">-{(item.epf_employee || 0).toLocaleString()}</TableCell>
                                                                 <TableCell className="text-sm text-red-600">-{(item.socso_employee || 0).toLocaleString()}</TableCell>
                                                                 <TableCell className="text-sm text-red-600">-{(item.eis_employee || 0).toLocaleString()}</TableCell>
                                                                 <TableCell className="text-sm text-red-600">-{(item.pcb_amount || 0).toLocaleString()}</TableCell>
-                                                                <TableCell className="text-sm font-semibold text-green-700">{(item.net_salary || 0).toLocaleString()}</TableCell>
+                                                                <TableCell className="text-sm font-semibold text-green-700">{Number(item.net_amount || 0).toLocaleString()}</TableCell>
                                                             </TableRow>
                                                         ))}
                                                     </TableBody>

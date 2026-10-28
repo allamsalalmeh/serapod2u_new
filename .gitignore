@@ -208,6 +208,9 @@ z_*
 
 # HR programme master documentation and frozen assessments (docs/hr/HR_MASTER_INDEX.md)
 !/docs/hr/**/*.md
+# PD-GOV-02: HR evidence SQL (read-only diagnostics kept with the frozen assessments). Only docs/hr is exempted;
+# *.sql stays ignored everywhere else.
+!/docs/hr/**/*.sql
 
 
 # Local reporting audit exports stay private
