@@ -93,7 +93,7 @@ export async function GET(request: Request) {
     type Block = {
       id: string; code: string; name: string; account_type: string
       openingBalance: number
-      lines: { date: string; ref: string; description: string; memo: string | null; debit: number; credit: number; balance: number }[]
+      lines: { journalId: string | null; date: string; ref: string; description: string; memo: string | null; debit: number; credit: number; balance: number }[]
       totalDebit: number; totalCredit: number; closingBalance: number
     }
     const blocks: Record<string, Block> = {}
@@ -124,6 +124,7 @@ export async function GET(request: Request) {
       b.totalDebit += dr
       b.totalCredit += cr
       b.lines.push({
+        journalId: l.journal_id || null,
         date,
         ref: l.journal_number || '',
         description: l.description || l.line_description || '',
@@ -132,6 +133,29 @@ export async function GET(request: Request) {
         credit: cr,
         balance: 0,
       })
+    }
+
+    // 1b) Line descriptions are usually empty; fall back to the journal header's
+    //     description (v_gl_journals.description), e.g. "Supplier Invoice (100%): …".
+    const needJournalDesc = new Set<string>()
+    for (const b of Object.values(blocks)) {
+      for (const ln of b.lines) if (!ln.description && ln.journalId) needJournalDesc.add(ln.journalId)
+    }
+    if (needJournalDesc.size > 0) {
+      const ids = Array.from(needJournalDesc)
+      const journalDesc: Record<string, string> = {}
+      for (let i = 0; i < ids.length; i += 150) {
+        const { data: js } = await db
+          .from('v_gl_journals')
+          .select('id, description')
+          .in('id', ids.slice(i, i + 150))
+        for (const j of (js as any[]) || []) if (j?.id) journalDesc[j.id] = j.description || ''
+      }
+      for (const b of Object.values(blocks)) {
+        for (const ln of b.lines) {
+          if (!ln.description && ln.journalId) ln.description = journalDesc[ln.journalId] || ''
+        }
+      }
     }
 
     // 2) Running balance per account, in date order (stable within a date)
@@ -148,6 +172,7 @@ export async function GET(request: Request) {
     const result = Object.values(blocks)
       .filter((b) => b.lines.length > 0 || Math.abs(b.openingBalance) >= 0.005)
       .sort((x, y) => x.code.localeCompare(y.code))
+      .map((b) => ({ ...b, lines: b.lines.map(({ journalId: _j, ...rest }) => rest) }))
 
     return NextResponse.json({
       company,

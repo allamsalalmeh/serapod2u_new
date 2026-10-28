@@ -167,8 +167,9 @@ export default function GLDetailView({ userProfile: _userProfile }: GLDetailView
           <div className={`space-y-8 ${loading ? 'opacity-50 transition-opacity' : ''}`}>
             {blocks.map((b) => (
               <section key={b.id} style={{ breakInside: 'avoid-page' }}>
-                <p className="mb-2 font-semibold">
-                  ACCOUNT NO. : <span className="font-mono mr-6">{b.code}</span>{b.name.toUpperCase()}
+                <p className="mb-2 font-semibold flex flex-wrap gap-x-8">
+                  <span>ACCOUNT NO. : <span className="font-mono">{b.code}</span></span>
+                  <span>{b.name.toUpperCase()}</span>
                 </p>
                 <table className="w-full border-collapse">
                   <thead>
