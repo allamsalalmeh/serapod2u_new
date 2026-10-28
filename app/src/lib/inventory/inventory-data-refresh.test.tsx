@@ -78,7 +78,12 @@ describe('inventory readers subscribe to the authoritative refresh', () => {
     expect(inventoryView).toContain('subscribeToInventoryDataRefresh')
     const block = inventoryView.slice(inventoryView.indexOf('subscribeToInventoryDataRefresh(() => {'))
     expect(block.slice(0, 200)).toContain('fetchInventory()')
-    expect(block.slice(0, 200)).toContain('fetchIncoming()')
+    // Incoming is now read and published by the same versioned load as balances.
+    // A separate fetchIncoming would duplicate requests and bypass atomic publication.
+    const load = inventoryView.slice(inventoryView.indexOf('const fetchInventory = async () => {'))
+    expect(load).toContain("supabase.from('v_incoming_stock' as any)")
+    expect(load).toContain('const incoming = await incomingResult')
+    expect(load).toContain('setIncomingMap(buildIncomingMap(')
   })
 
   it('Movement Reports reloads movements on the signal', () => {

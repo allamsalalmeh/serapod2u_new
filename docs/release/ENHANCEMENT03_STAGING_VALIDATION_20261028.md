@@ -1,6 +1,6 @@
 # Enhancement03 staging integration follow-up — 2026-10-28
 
-Status: BLOCKED — MIGRATION HISTORY AMBIGUITY. No deployment authorized by passing gates yet.
+Status: LOCAL VALIDATION COMPLETE — pending PR CI and verified staging deployment. The follow-up below supersedes the earlier migration-history blocker.
 
 ## Finance correction
 
@@ -43,3 +43,64 @@ Required resolution: obtain an authoritative owner-confirmed application invento
 Per Phase 2's explicit STOP instruction, inventory/ship-metrics remediation, three-way TypeScript baseline comparison, fresh build/full-suite/CI validation, push, PR, merge and deployment were not performed in this follow-up. Earlier results remain historical failures, not current passes: 266 TypeScript errors, 5 full-suite failures, and isolated-build dependency-resolution failures.
 
 All previous reconciliation is retained. The 36 staging-only commits and prepared Enhancement03 remain ancestors of the current integration history. Temporary local files are untouched. Production, main and database state were not modified.
+
+
+## Code-only release verification follow-up
+
+User clarified that EH records are manually maintained Supabase Studio saved queries for future production cutover; missing execution-ledger provenance is not a code-only staging blocker. No SQL or RPC with write effects was executed in this assessment. No migration contents or filenames changed.
+
+### EH01–EH23 discovery
+
+Read through SSH on the positively verified KVM2 host `mail`, from the staging Studio snippets volume `/var/lib/docker/volumes/serapod-stg-snippets-data/_data`. EH1–EH22 are saved as `EH<n>.sql`; EH23 is `Eh23-Tukar ke Prod then run dekat terminal.sql` (terminal instructions, never executed). Saved text does not itself prove execution. EH4/EH8/EH11 and EH9/EH12 are byte-identical repetitions, not separate required migrations. EH17–EH19 are read-only inventory diagnostic/readiness variants. EH1 explicitly says production-only, not applied, staging already has the correct permission spelling. EH23 references document SQL postchecks and catalog-copy SQL. Wave 3 attendance's separate repository script is not explicitly named by these EH labels; all changed-code RPCs are nevertheless present in live staging metadata.
+
+| EH | Repository mapping / references | Match | SHA-256 prefix |
+|---|---|---|---|
+| EH1 | `Inline production-only MSS permission spelling correction (staging already correct)` | reference / saved variant | `3653094cea73` |
+| EH2 | `supabase/migrations/20261212100000_distributor_analytics_active_orders.sql` | byte-identical | `473f622fde0b` |
+| EH3 | `supabase/migrations/20261213100000_sa_organization_insert_gate.sql` | byte-identical | `fc86be531c83` |
+| EH4 | `supabase/migrations/20261214100000_hr_employee_controlled_delete.sql` | byte-identical | `23fbee6377f6` |
+| EH5 | `supabase/migrations/20261215100000_sa_payment_gateway_restriction.sql` | byte-identical | `69e45d5a9b75` |
+| EH6 | `supabase/migrations/20261215110000_sa_legacy_compat_cutover_controls.sql` | byte-identical | `83c9af8ac37c` |
+| EH7 | `supabase/migrations/20261215120000_sa_hr_employee_delete_mode_retired.sql` | byte-identical | `9976e14ba8c1` |
+| EH8 | `supabase/migrations/20261214100000_hr_employee_controlled_delete.sql` | byte-identical | `23fbee6377f6` |
+| EH9 | `supabase/migrations/20261216100000_identity_permanent_deletion.sql` | byte-identical | `22b065cf3f90` |
+| EH10 | `supabase/migrations/20261216100000_sa_legacy_preview_scope_coverage.sql` | byte-identical | `339c2fb499b2` |
+| EH11 | `supabase/migrations/20261214100000_hr_employee_controlled_delete.sql` | byte-identical | `23fbee6377f6` |
+| EH12 | `supabase/migrations/20261216100000_identity_permanent_deletion.sql` | byte-identical | `22b065cf3f90` |
+| EH13 | `supabase/migrations/20261217100000_identity_archive_identifier_release.sql` | byte-identical | `b323dd9847ee` |
+| EH14 | `supabase/migrations/20261218100000_identity_archive_optional_reason.sql` | byte-identical | `a60f0d1c9418` |
+| EH15 | `supabase/migrations/20261219100000_hr_leave_containment_guard.sql` | byte-identical | `caace5b1f35b` |
+| EH16 | `supabase/migrations/20261221100000_hr_employment_foundation.sql` | byte-identical | `5e8cba8b4518` |
+| EH17 | `20261220100000_inventory_cases_and_pcs.sql` | reference / saved variant | `88b74b915c69` |
+| EH18 | `20261025_inventory_cases_pcs_readiness_sql_editor.sql`; `supabase/migrations/20261220100000_inventory_cases_and_pcs.sql` | reference / saved variant | `1e099a5167f9` |
+| EH19 | `20261025_inventory_cases_pcs_readiness_sql_editor.sql`; `20261025_sql_editor_canary.sql`; `supabase/migrations/20261220100000_inventory_cases_and_pcs.sql` | reference / saved variant | `775b20ebd282` |
+| EH20 | `supabase/migrations/20261223100000_hr_leave_ledger.sql` | byte-identical | `37b3adb46afc` |
+| EH21 | `Inline Inventory cases + loose-pieces migration; saved variant` | reference / saved variant | `1aacb3330472` |
+| EH22 | `supabase/migrations/20261224100000_hr_w3_wp_holiday_alias.sql` | byte-identical | `8bb9767fea02` |
+| EH23 | `supabase/diagnostics/20261027_document_sql_editor_run_verify_readonly.sql`; `supabase/diagnostics/20261030_notification_sql_postcheck_readonly.sql`; `supabase/migrations/20261027160000_notification_types_order_copy.sql` | reference / saved variant | `8e36cb4afe32` |
+
+Evidence: metadata API GET verified **105/105** unique functions declared by these saved records exist in public, including internal trigger helpers not exposed as RPCs. PostgREST OpenAPI GET verified **57/57** literal RPC names in changed application files. These checks prove present objects, not full body equivalence or historical execution order. Previously saved HR and notification application/postcheck evidence remains in the earlier section. Exact production execution order, duplicate records and script editions remain production cutover reconciliation work.
+
+### Staff notification compatibility
+
+Read-only staging REST GET verified one `notification_types` row: `storefront_order_paid`, category `ecommerce`, `default_enabled=false`, channels `sms,whatsapp`. Empty-result schema-contract GETs succeeded for storefront orders with embedded items, settings with recipient configuration, provider configuration, outbox `payload_json`, and the stock movement display view. Live metadata confirms `queue_notification` exists. No queue RPC was invoked, no setting changed, and no message was sent. Delivery still depends on UAT configuration/providers and enabling the event deliberately.
+
+### Deployment configuration
+
+Read-only Coolify model inspection on KVM2 confirms application `ao0gw084g0skgoo0ko4wwsco`, repository `edierwan/serapod2u_new`, branch `staging`, commit selector HEAD, Dockerfile build, base directory `/app`, Dockerfile `/Dockerfile`, auto-deploy enabled, pre/post deployment commands null, health check `/api/health`, running healthy. Existing deployed image and finished deployment both identify staging commit `66d497223299711f0555dbec83880f563282ec62`. Keep that commit/image as rollback reference; no rollback was performed. CI runs npm ci + build; Dockerfile runs npm ci + build and starts node server.js. None executes migrations. No deployment configuration changed.
+
+### Validation fixes
+
+- Retained finance route synchronization through the destination-render guard (commit 3d01f37d).
+- Inventory refresh assertion now follows the unified versioned loader, which reads incoming alongside balances; no application refresh behaviour changed. Existing component tests cover refresh retention, races and failed incoming reads.
+- Schema fixture parser now recognizes pg_dump `CREATE VIEW ... WITH (...) AS`, retaining column checks. The view exists in the original snapshot and in live staging; no database view changed. Added positive/negative parser unit coverage.
+- Recorded the exact duplicate version counts 20261030100000 x2 and 20261216100000 x3 in the existing historical collision test. Negative controls still fail any new collision. This acknowledges code-only release history, not migration reconciliation or permission to execute these files.
+
+### Results
+
+- Full final Vitest: **714 files passed; 6,987 tests passed; 6 skipped**. Finance, payment/email, inventory and ship-metrics included. Log `/tmp/enhancement03-release-final-tests.log`.
+- Focused inventory/ship-metrics checks: **36 tests passed**; parser unit tests: **2 passed**.
+- Clean lockfile install (`npm ci --include=dev`) and `npm run build`: **exit 0** on Node 22.21.1, isolated copy with dead loopback Supabase URLs and disabled cron workers; never deploy this local verification output. Earlier copied-dependency build failure was an environment artifact. Log `/tmp/enhancement03-clean-build.log`.
+- Identical clean TypeScript checks (same lockfile deps, same tsconfig, same generated next-env declarations, no stale .next validators): source **250**, staging **255**, integration **250** diagnostics, all exit 2. Entire normalized diagnostic blocks AND multiplicities on integration match prepared Enhancement03 exactly; **0 integration-introduced diagnostics**. The earlier 266 included 16 generated .next validator errors. No unrelated type refactoring performed. Logs `/tmp/enhancement03-{source,staging,integration}-clean-tsc.log`.
+- No lint script/config in repository tooling. Historical TypeScript failure remains a warning, not a pass; build intentionally ignores types per existing repository configuration.
+- PR CI and final deployed commit/health still require verification after push/merge.

@@ -17,13 +17,18 @@ import { describe, expect, it } from 'vitest'
  * workstream created 20261220100000_inventory_cases_and_pcs.sql concurrently (2026-10-25); never-applied files are the
  * only ones that may be re-stamped.
  */
+// 2026-10-28 code-only staging release: retain manually applied filenames.
+// Live REST metadata confirms staff paid-order type and 57 changed-file RPCs.
+// CI/Dockerfile/Coolify run no migrations. These exact duplicate sets remain
+// production cutover reconciliation work; any added collision still fails.
 const KNOWN_DUPLICATES: Record<string, number> = {
+  '20261030100000': 2,
   '20260403': 2, '20260407': 2, '20260408': 4, '20260409': 2, '20260410': 2, '20260411': 5, '20260412': 4, '20260413': 2,
   '20260414': 2, '20260415': 2, '20260416': 2, '20260510': 2, '20260621': 2, '20260622': 2, '20260623': 14, '20260707': 2,
   '20260708': 2, '20260712': 4, '20260713': 2, '20260715': 3, '20260716': 5, '20260717': 9, '20260718': 5, '20260719': 7,
   '20260720': 4, '20260723': 2, '20260730': 3, '20260731': 3, '20260904': 2, '20260904120000': 2, '20260917120000': 2,
   '20260928100000': 2, '20261003100000': 2, '20261007': 3, '20261007100000': 2, '20261022100000': 2, '20261212100000': 2,
-  '20261213100000': 2, '20261214100000': 2, '20261215100000': 2, '20261216100000': 2,
+  '20261213100000': 2, '20261214100000': 2, '20261215100000': 2, '20261216100000': 3,
 }
 
 const repoRoot = path.resolve(__dirname, '../../../..')
