@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { NextRequest } from 'next/server'
 import { decideSiteRoute, isStoreSiteHost, loginModeForHost, pathOwner, splitSiteOrigin } from './site-split'
 import { sameHostOrigin } from './same-host'
+import { publicOriginFromRequest } from '@/lib/http/public-origin'
 
 const MAIN = 'stg.serapod2u.com'
 const ADMIN = 'stg-admin.serapod2u.com'
@@ -106,6 +108,20 @@ describe('site split: helpers', () => {
     expect(splitSiteOrigin(STORE)).toBe('https://stg-store.serapod2u.com')
     expect(splitSiteOrigin(`${ADMIN}:443`)).toBe('https://stg-admin.serapod2u.com')
     expect(splitSiteOrigin(MAIN)).toBeNull()
+  })
+
+  it('payment and request links built on the store address stay on it; production keeps its origin', () => {
+    const at = (host: string) => new NextRequest(`https://${host}/api/storefront/checkout`, { headers: { host } })
+    expect(publicOriginFromRequest(at(STORE))).toBe('https://stg-store.serapod2u.com')
+    expect(publicOriginFromRequest(at('outdoor.serapod2u.com'))).toBe('https://outdoor.serapod2u.com')
+    const before = process.env.NEXT_PUBLIC_APP_URL
+    process.env.NEXT_PUBLIC_APP_URL = 'https://www.serapod2u.com'
+    try {
+      expect(publicOriginFromRequest(at('www.serapod2u.com'))).toBe('https://www.serapod2u.com')
+      expect(publicOriginFromRequest(at('serapod2u.com'))).toBe('https://www.serapod2u.com')
+    } finally {
+      process.env.NEXT_PUBLIC_APP_URL = before
+    }
   })
 
   it('sign-in returns stay on the store / portal address; other hosts keep the twin rule', () => {
