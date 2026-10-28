@@ -1013,7 +1013,7 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
         return <FinanceCurrencySettingsView userProfile={userProfile} />
       case 'finance/settings/fiscal-year':
         return (
-          <AccountingTab userProfile={userProfile} />
+          <AccountingTab userProfile={userProfile} view="fiscal-year" />
         )
       case 'finance/settings/posting-rules':
         return (

@@ -219,6 +219,8 @@ interface ConfigurationTabProps {
   resetAvailable: boolean
   setResetModalOpen: (open: boolean) => void
   getStatusIcon: (statusType: 'ok' | 'warning' | 'error') => JSX.Element
+  /** Show a single section without the tab strip (e.g. the Fiscal Year & Periods page). */
+  onlyTab?: 'chart-of-accounts' | 'default-accounts' | 'currency' | 'fiscal-year' | 'status'
 }
 
 interface StatusChecklist {
@@ -294,7 +296,8 @@ export default function ConfigurationTab({
   handleSeedAccounts,
   resetAvailable,
   setResetModalOpen,
-  getStatusIcon
+  getStatusIcon,
+  onlyTab
 }: ConfigurationTabProps) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -575,8 +578,11 @@ export default function ConfigurationTab({
 
   return (
     <div className="space-y-6">
-      <Tabs defaultValue="chart-of-accounts" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-5 lg:w-auto lg:inline-flex">
+      <Tabs
+        {...(onlyTab ? { value: onlyTab } : { defaultValue: 'chart-of-accounts' })}
+        className="space-y-4"
+      >
+        <TabsList className={onlyTab ? 'hidden' : 'grid w-full grid-cols-5 lg:w-auto lg:inline-flex'}>
           <TabsTrigger value="chart-of-accounts" className="flex items-center gap-2">
             <BookOpen className="w-4 h-4" />
             Chart of Accounts

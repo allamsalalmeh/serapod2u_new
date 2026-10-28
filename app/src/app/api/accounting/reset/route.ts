@@ -12,19 +12,39 @@ import { NextRequest, NextResponse } from 'next/server'
  * 3. If journals exist: deletes gl_document_postings, gl_journal_lines, gl_journals
  * 
  * SAFETY GUARDS:
- * - Only available when NODE_ENV !== 'production' OR ALLOW_DEV_RESET=true
+ * - Only available when ALLOW_DEV_RESET=true, OR in a development build that
+ *   talks to a LOCAL Supabase (localhost / 127.0.0.1). A dev server pointed at
+ *   staging or production (e.g. `npm run dev` with the stg Supabase URL) can
+ *   no longer wipe that shared database.
  * - Requires HQ Admin role
  * - Requires confirmation token in request body
  */
+
+function isLocalSupabase(): boolean {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+  try {
+    const host = new URL(url).hostname
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]' || host.endsWith('.localhost')
+  } catch {
+    return false
+  }
+}
+
+/** Single source of truth for both the UI check (GET) and the action (POST). */
+function resetAllowed(): { allowed: boolean; reason: string } {
+  if (process.env.ALLOW_DEV_RESET === 'true') return { allowed: true, reason: 'ALLOW_DEV_RESET' }
+  if (process.env.NODE_ENV === 'production') return { allowed: false, reason: 'production build' }
+  if (!isLocalSupabase()) return { allowed: false, reason: 'database is not local' }
+  return { allowed: true, reason: 'local development database' }
+}
+
 export async function POST(request: NextRequest) {
   try {
     // CRITICAL: Check if reset is allowed
-    const isProduction = process.env.NODE_ENV === 'production'
-    const allowDevReset = process.env.ALLOW_DEV_RESET === 'true'
-    
-    if (isProduction && !allowDevReset) {
+    const guard = resetAllowed()
+    if (!guard.allowed) {
       return NextResponse.json(
-        { error: 'Reset not allowed in production environment' },
+        { error: `Reset not allowed (${guard.reason})` },
         { status: 403 }
       )
     }
@@ -215,12 +235,11 @@ export async function POST(request: NextRequest) {
  * GET /api/accounting/reset
  * Check if reset is available (for UI conditional rendering)
  */
-export async function GET(request: NextRequest) {
-  const isProduction = process.env.NODE_ENV === 'production'
-  const allowDevReset = process.env.ALLOW_DEV_RESET === 'true'
-  
+export async function GET(_request: NextRequest) {
+  const guard = resetAllowed()
   return NextResponse.json({
-    resetAvailable: !isProduction || allowDevReset,
+    resetAvailable: guard.allowed,
+    reason: guard.reason,
     environment: process.env.NODE_ENV || 'development'
   })
 }

@@ -41,6 +41,11 @@ interface AccountingTabProps {
       role_level: number
     }
   }
+  /**
+   * 'fiscal-year' renders only the Fiscal Year & Periods section (no GL Journals /
+   * Configuration tabs) — used by Finance Settings > Fiscal Year & Periods.
+   */
+  view?: 'fiscal-year'
 }
 
 interface StatusChecklist {
@@ -63,7 +68,7 @@ interface AccountingStatus {
   }
 }
 
-export default function AccountingTab({ userProfile }: AccountingTabProps) {
+export default function AccountingTab({ userProfile, view }: AccountingTabProps) {
   const [activeSubTab, setActiveSubTab] = useState('gl-journals')
   const [status, setStatus] = useState<AccountingStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -292,6 +297,24 @@ export default function AccountingTab({ userProfile }: AccountingTabProps) {
           )}
         </CardContent>
       </Card>
+    )
+  }
+
+  // Dedicated page: Finance Settings > Fiscal Year & Periods
+  if (view === 'fiscal-year') {
+    return (
+      <ConfigurationTab
+        userProfile={userProfile}
+        status={status}
+        loadStatus={loadStatus}
+        canManage={canManage}
+        seeding={seeding}
+        handleSeedAccounts={handleSeedAccounts}
+        resetAvailable={false}
+        setResetModalOpen={setResetModalOpen}
+        getStatusIcon={getStatusIcon}
+        onlyTab="fiscal-year"
+      />
     )
   }
 
