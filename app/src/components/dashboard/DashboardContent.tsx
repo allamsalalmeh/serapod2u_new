@@ -801,8 +801,8 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
         // For non-HQ orgs, show dedicated edit page
         return <EditOrganizationView userProfile={userProfile} onViewChange={handleViewChange} />
       case 'edit-organization-hq':
-        // For HQ orgs, go to Settings
-        return <SettingsView userProfile={userProfile} />
+        // For HQ orgs, go to Settings > Organization (company details)
+        return <SettingsView userProfile={userProfile} initialTab="organization" />
       case 'view-organization':
         // Navigate back to organizations view
         return <OrganizationsView userProfile={userProfile} onViewChange={handleViewChange} />

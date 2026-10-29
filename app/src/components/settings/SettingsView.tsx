@@ -89,6 +89,8 @@ interface UserSettings {
 interface OrganizationSettings {
   org_name: string
   org_name_short: string
+  /** Company registration no. (SSM), shown in the header of finance reports */
+  registration_no: string
   contact_name: string
   contact_phone: string
   contact_email: string
@@ -143,6 +145,7 @@ const SettingsView = ({ userProfile, initialTab }: SettingsViewProps) => {
   const [orgSettings, setOrgSettings] = useState<OrganizationSettings>({
     org_name: '',
     org_name_short: '',
+    registration_no: '',
     contact_name: '',
     contact_phone: '',
     contact_email: '',
@@ -255,6 +258,7 @@ const SettingsView = ({ userProfile, initialTab }: SettingsViewProps) => {
       setOrgSettings({
         org_name: orgData.org_name || '',
         org_name_short: orgData.org_code || userProfile.organizations.org_code,
+        registration_no: orgData.registration_no || '',
         contact_name: orgData.contact_name || '',
         contact_phone: orgData.contact_phone || '',
         contact_email: orgData.contact_email || '',
@@ -466,6 +470,7 @@ const SettingsView = ({ userProfile, initialTab }: SettingsViewProps) => {
       // Check if signature columns exist before including them
       const updateData: any = {
         org_name: orgSettings.org_name,
+        registration_no: orgSettings.registration_no.trim() || null,
         contact_name: orgSettings.contact_name || null,
         contact_phone: orgSettings.contact_phone || null,
         contact_email: orgSettings.contact_email || null,
@@ -840,6 +845,18 @@ const SettingsView = ({ userProfile, initialTab }: SettingsViewProps) => {
                         disabled={!canEditOrganization}
                         className={!canEditOrganization ? 'bg-gray-50' : ''}
                       />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="registrationNo">Registration No. (SSM)</Label>
+                      <Input
+                        id="registrationNo"
+                        value={orgSettings.registration_no}
+                        onChange={(e) => setOrgSettings({ ...orgSettings, registration_no: e.target.value })}
+                        disabled={!canEditOrganization}
+                        placeholder="e.g. 1511495-X"
+                        className={!canEditOrganization ? 'bg-gray-50 placeholder:text-gray-300' : 'placeholder:text-gray-300'}
+                      />
+                      <p className="text-xs text-gray-400">Shown next to the company name on financial reports</p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="contactPerson">Contact Name</Label>
