@@ -171,7 +171,7 @@ export async function POST(request: NextRequest) {
         // Load attendance entries
         let entriesQuery = supabase
             .from('hr_attendance_entries')
-            .select('id, user_id, clock_in_at, clock_out_at, work_minutes, break_minutes, overtime_minutes, attendance_flag')
+            .select('id, user_id, clock_in_at, clock_out_at, worked_minutes, break_minutes, overtime_minutes, attendance_flag')
             .eq('organization_id', ctx.organizationId)
             .gte('clock_in_at', `${start_date}T00:00:00`)
             .lte('clock_in_at', `${end_date}T23:59:59`)
@@ -235,7 +235,7 @@ export async function POST(request: NextRequest) {
                 dayType = 'rest_day'
             }
 
-            const workMinutes = entry.work_minutes || 0
+            const workMinutes = entry.worked_minutes || 0  // column is worked_minutes (B2B)
             const result = computeOvertime(workMinutes, policy, primaryRule, dayType)
 
             totalRegular += result.regular

@@ -1,5 +1,6 @@
 import { classifyProductLine, isCartridgeLine } from '@/lib/returns/format'
 import { normalizeBaseCost } from './stock-count-costing'
+import { resolveCaseUnitsPerCase, resolveStockUnit } from './stock-count-quantity'
 import {
   evaluateStockConfigEligibility,
   resolveStockConfigProfile,
@@ -47,13 +48,29 @@ export interface StockCountCatalogRow {
   manualSku: string | null
   imageUrl: string | null
   systemQuantity: number
+  /** Loose pieces held on top of systemQuantity (0 for piece-stocked products). */
+  systemPcs: number
   quantityAllocated: number
   physicalCount: string
+  /** Loose pieces counted on top of physicalCount ('' = none typed). */
+  physicalPcs: string
   note: string
   unitCost: number | null
   warehouseLocation: string | null
   /** Unit the warehouse balance — and therefore the count — is kept in. */
   countUnit?: StockCountUnit
+  /**
+   * Pieces in one stock case (1 for products stocked in pieces). Used only to
+   * offer Pcs-mode entry and to show the piece equivalent — the stored balance
+   * and the posted movement stay in cases.
+   */
+  unitsPerCase?: number
+  /**
+   * Pieces in one stock case, snapshotted on the balance row. This is the
+   * ratio the stored balance is actually denominated in, so the UI never
+   * disagrees with the database.
+   */
+  pcsPerCase?: number
 }
 
 export interface StockCountLocation {
@@ -148,6 +165,7 @@ export function buildStockCountCatalogRows(
 
     const groupConfigProfile = resolveStockConfigProfile(group?.stock_config_profile)
     const systemQuantity = Number(balance?.quantity_on_hand || 0)
+    const systemPcs = Number(balance?.pcs_on_hand || 0)
     const eligible = evaluateStockConfigEligibility({
       configCode: config.config_code,
       volumeMl: config.volume_ml,
@@ -190,12 +208,23 @@ export function buildStockCountCatalogRows(
       manualSku: variant.manual_sku || null,
       imageUrl: variant.image_url || null,
       systemQuantity,
+      systemPcs,
       quantityAllocated: Number(balance?.quantity_allocated || 0),
       physicalCount: '',
+      physicalPcs: '',
       note: '',
       unitCost: normalizeBaseCost(variant.base_cost),
       warehouseLocation: balance?.warehouse_location || null,
       countUnit: resolveStockCountUnit(product.product_name),
+      unitsPerCase: resolveCaseUnitsPerCase(product.product_name, product.units_per_case ?? variant.units_per_case),
+      // Shared unit rule: a real ratio (> 1) on the balance wins; a missing or
+      // defaulted 1 on a case-stocked product falls back to the pack rule
+      // instead of turning the case balance into pieces.
+      pcsPerCase: resolveStockUnit({
+        productName: product.product_name,
+        balancePcsPerCase: balance?.pcs_per_case,
+        masterUnitsPerCase: product.units_per_case ?? variant.units_per_case,
+      }).pcsPerCase,
     }
   })
 

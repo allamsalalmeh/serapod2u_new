@@ -73,7 +73,7 @@ describe('Stock Count active warehouse safety', () => {
       physicalCount: '',
       note: '',
     }], context)
-    sheet.getRow(2).getCell(12).value = 11
+    sheet.getRow(2).getCell(15).value = 11
 
     const targets = [{
       stockConfigId: 'config-20nb',

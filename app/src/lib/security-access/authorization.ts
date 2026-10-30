@@ -1,5 +1,6 @@
 import 'server-only'
 import { randomUUID } from 'crypto'
+import { recordAuthorizationDenial } from './denial-log'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { checkPermissionForUser } from '@/lib/server/permissions'
 import { activeAccountState, isActiveAccountRecord } from './active-account'
@@ -72,7 +73,8 @@ async function loadNewPolicy(request: AuthorizationRequest) {
     id: m.id, organizationId: m.organization_id, status: m.status,
     effectiveFrom: m.effective_from, effectiveUntil: m.effective_until,
   }))
-  const mappedAssignments: PolicyAssignment[] = (assignments || []).map((a: any) => ({
+  // Same rule as the database evaluator: a policy that is not active (e.g. a retired legacy compatibility policy) grants nothing.
+  const mappedAssignments: PolicyAssignment[] = (assignments || []).filter((a: any) => a.role?.status === 'active').map((a: any) => ({
     assignmentId: a.id,
     roleId: a.role.id,
     roleKey: a.role.role_key,
@@ -164,7 +166,7 @@ async function evaluateNew(request: AuthorizationRequest, actorActive: boolean):
   return evaluateNewPolicy(request, { actorActive, ...(await loadNewPolicy(request)) })
 }
 
-export async function authorize(
+async function evaluateAuthorization(
   request: AuthorizationRequest,
   options: { log?: boolean; legacy?: LegacyEvaluator; trace?: Trace } = {},
 ): Promise<AuthorizationDecision> {
@@ -248,12 +250,33 @@ export async function authorize(
       // recorded fails closed, reported as unavailable (it is not a policy denial).
       // Non-authoritative modes keep legacy behavior.
       if (auditWriteFailureIsFatal(mode) && result.decision === 'ALLOW') {
-        return { ...result, decision: 'DENY', reasonCode: 'POLICY_ERROR', unavailable: 'audit_write_failed' }
+        result.decision = 'DENY'
+        result.reasonCode = 'POLICY_ERROR'
+        result.unavailable = 'audit_write_failed'
       }
     }
   }
+  if (shouldLog && result.decision === 'DENY') {
+    result.referenceId = await recordAuthorizationDenial(request, result)
+  }
   trace.outcome(`${result.decision}:${result.reasonCode}${result.unavailable ? `:${result.unavailable}` : ''}`)
   return result
+}
+
+
+export class AuthorizationUnavailableError extends Error {
+  readonly status = 503
+  constructor(readonly referenceId?: string) { super('Authorization service unavailable'); this.name = 'AuthorizationUnavailableError' }
+}
+
+/** Input/read failures are fail-closed and observable without fabricating an audit decision. */
+export async function authorize(request: AuthorizationRequest, options: { log?: boolean; legacy?: LegacyEvaluator; trace?: Trace } = {}): Promise<AuthorizationDecision> {
+  try { return await evaluateAuthorization(request, options) }
+  catch {
+    const referenceId = options.log !== false && !request.context?.explainOnly
+      ? await recordAuthorizationDenial(request, { reasonCode: 'POLICY_ERROR', unavailable: 'policy_evaluation_failed' }) : undefined
+    throw new AuthorizationUnavailableError(referenceId)
+  }
 }
 
 

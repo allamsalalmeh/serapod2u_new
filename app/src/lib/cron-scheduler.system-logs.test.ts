@@ -39,6 +39,24 @@ describe('scheduler → System Logs worker reports', () => {
     expect(report).toHaveBeenCalledWith('qr-reverse-worker', expect.objectContaining({ status: 500, serverReferenceId: 'REQ-ABCDEFGHJKMN', apiRoute: '/api/cron/qr-reverse-worker' }))
   })
 
+  it('captures the worker code and cause from a fail-closed 503 body (why the worker 503ed)', async () => {
+    fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ status: 'LEASE_UNAVAILABLE', worker: 'qr-reverse-worker', code: 'LEASE_UNAVAILABLE', cause: 'An invalid response was received from the upstream server' }),
+      { status: 503, headers: { 'content-type': 'application/json' } },
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    const mod = await import('./cron-scheduler')
+    mod.startCronScheduler()
+    ;(scheduleMock.mock.calls[0][1] as () => void)()
+    await new Promise((r) => setTimeout(r, 10))
+
+    expect(report).toHaveBeenCalledWith('qr-reverse-worker', expect.objectContaining({
+      status: 503,
+      code: 'LEASE_UNAVAILABLE',
+      details: expect.objectContaining({ cause: 'An invalid response was received from the upstream server' }),
+    }))
+  })
+
   it('records timeouts', async () => {
     await tick('timeout')
     expect(report).toHaveBeenCalledWith('qr-reverse-worker', expect.objectContaining({ message: expect.stringContaining('timed out') }))

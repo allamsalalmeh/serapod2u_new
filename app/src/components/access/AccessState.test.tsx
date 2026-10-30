@@ -10,6 +10,16 @@ vi.mock('next/link', () => ({ default: ({ href, children }: any) => <a href={hre
 afterEach(cleanup)
 
 describe('AccessState', () => {
+  it('shows only the persisted reference, without exposing permission internals', () => {
+    const { container } = render(<AccessState kind="denied" referenceId="SA-real-reference123" />)
+    expect(screen.getByText('SA-real-reference123')).toBeTruthy()
+    expect(container.textContent).not.toContain('ecommerce.channel.manage')
+    expect(screen.getByRole('alert').getAttribute('data-access-state')).toBe('denied')
+  })
+  it('omits invalid or absent references instead of fabricating a diagnostic', () => {
+    const { container } = render(<AccessState kind="denied" referenceId="SQL credentials <secret>" />)
+    expect(container.textContent).not.toContain('Reference:')
+  })
   it('shows the ordinary denial copy and a working way back to My Workspace', () => {
     render(<AccessState kind="denied" homeHref="/hr/my-workspace" homeLabel="Back to My Workspace" />)
     expect(screen.getByText('You don’t have access to this page.')).toBeTruthy()

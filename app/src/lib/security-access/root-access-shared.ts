@@ -1,3 +1,5 @@
+import { catalogueRollout, isActiveCataloguePermission, type CataloguePermission, type Rollout } from './rollout'
+
 /**
  * Root Access (Full System Administrator): constants and wording shared by the server route, the People & Access
  * screen and tests. Authorizes nothing: the database (sa_grant_root_access / sa_revoke_root_access and the canonical
@@ -34,7 +36,13 @@ export interface RootAccessInfo {
 }
 
 /** Viewer capability reported with the directory. `available` is false until the migration is applied. */
-export interface RootAccessCapability { available: boolean; viewerIsRoot: boolean; activeCount: number | null }
+export interface RootAccessCapability {
+  available: boolean
+  viewerIsRoot: boolean
+  activeCount: number | null
+  /** Active permissions in the current catalogue (for the Root card's effective-access summary). Null when unavailable. */
+  activePermissionCount: number | null
+}
 
 /** Database refusal codes → HTTP status and a message safe to show. */
 export const ROOT_ACCESS_REFUSALS: Record<string, { status: number; message: string }> = {
@@ -60,4 +68,32 @@ export function rootRefusal(code: string | null | undefined): { status: number; 
 /** True while the grant has no expiry or its expiry is still ahead (same rule as the evaluator). */
 export function rootAccessCurrent(info: Pick<RootAccessInfo, 'effectiveUntil'> | null | undefined, now: Date = new Date()): boolean {
   return !!info && (!info.effectiveUntil || new Date(info.effectiveUntil).getTime() > now.getTime())
+}
+
+/** Root Access breakdown: the Policies catalogue restricted to active permissions, with a count reconciliation. */
+export interface RootEffectivePermissions {
+  /** Policies-catalogue hierarchy of the active permissions (same grouping as Roles & Policies → Policies). */
+  rollout: Rollout
+  /** Catalogue rows left out because they are not active (Root Access does not cover them). */
+  inactiveExcluded: number
+  /** The server's independent active count (Root card summary), or null when it could not be read. */
+  serverActiveCount: number | null
+  /** False when the server count and the rows shown differ: the UI must not claim everything is listed. */
+  reconciled: boolean
+}
+
+/**
+ * Display only. Root Access is evaluated in the database for every active permission; this lists what that means from
+ * the catalogue the viewer already holds and never becomes a grant. Null when no catalogue was loaded.
+ */
+export function rootEffectivePermissions(catalogue: CataloguePermission[] | null | undefined, serverActiveCount: number | null = null): RootEffectivePermissions | null {
+  if (!Array.isArray(catalogue)) return null
+  const active = catalogue.filter(isActiveCataloguePermission)
+  const rollout = catalogueRollout(active)
+  return {
+    rollout,
+    inactiveExcluded: catalogue.length - active.length,
+    serverActiveCount,
+    reconciled: serverActiveCount == null || serverActiveCount === rollout.total,
+  }
 }

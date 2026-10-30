@@ -145,9 +145,19 @@ const selfItem = (actor: NavActor, permission: string) => ({
  * plan is one explain-only batch: same outcome per permission, shared reads, bounded concurrency.
  */
 async function decide(actor: NavActor, plan: Plan, options: { audit: boolean }): Promise<PermissionAnswers> {
-  const run = (items: ReturnType<typeof orgItem>[]) => options.audit
-    ? Promise.all(items.map(item => authorizeOperation({ actorId: actor.userId, ...item, explainOnly: false }).then(d => d.decision)))
-    : explainMany(actor.userId, items)
+  // Alternative navigation permissions are probes, not attempted operations.
+  // Audit only successful witnesses; a failed destination is recorded once below.
+  const run = async (items: ReturnType<typeof orgItem>[]) => {
+    const decisions = await explainMany(actor.userId, items)
+    if (options.audit) {
+      await Promise.all(items.map(async (item, i) => {
+        if (decisions[i] !== 'ALLOW') return
+        const current = await authorizeOperation({ actorId: actor.userId, ...item, explainOnly: false })
+        if (current.unavailable || current.decision !== 'ALLOW') throw new Error('page_access_changed')
+      }))
+    }
+    return decisions
+  }
   const items = [...plan.org.map(p => orgItem(actor, p)), ...plan.self.map(p => selfItem(actor, p))]
   const decisions = await run(items)
   const org: Record<string, boolean> = {}
@@ -298,7 +308,7 @@ export async function resolveChildViewAccess(profile: any, viewId: string, modul
 
 export type DestinationAccess =
   | { state: 'allowed'; /** The destination that matched (e.g. the staff chart instead of the administrative one). */ destination: string }
-  | { state: 'denied' }
+  | { state: 'denied'; referenceId?: string }
   | { state: 'unavailable' }
 
 /**
@@ -323,7 +333,19 @@ export async function resolveDestinationAccess(actor: NavActor, destinationIds: 
   for (const { id, req } of requirements) {
     if (destinationAllowed(req!, answers)) return { state: 'allowed', destination: id }
   }
-  return { state: 'denied' }
+  // One actual failed page request, not every rejected alternative in its menu.
+  const req = requirements[0].req!
+  const failed = req.module && !answers.org[req.module]
+    ? orgItem(actor, req.module)
+    : plan.org.find(p => !answers.org[p]) ? orgItem(actor, plan.org.find(p => !answers.org[p])!)
+    : plan.self.find(p => !answers.self[p]) ? selfItem(actor, plan.self.find(p => !answers.self[p])!) : null
+  if (!failed) return { state: 'denied' }
+  try {
+    const decision = await authorizeOperation({ actorId: actor.userId, ...failed, explainOnly: false,
+      diagnosticOrigin: 'page_navigation', operationId: ids[0] })
+    if (decision.unavailable || decision.decision !== 'DENY') return { state: 'unavailable' }
+    return { state: 'denied', ...(decision.referenceId ? { referenceId: decision.referenceId } : {}) }
+  } catch { return { state: 'unavailable' } }
 }
 
 

@@ -19,24 +19,14 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
         }
 
-        const body = await request.json()
-        const runId = String(body.run_id || '').trim()
-        if (!runId) {
-            return NextResponse.json({ success: false, error: 'Payroll run ID is required' }, { status: 400 })
-        }
-
-        const amountValue = body.amount
-        const amount = typeof amountValue === 'number' && Number.isFinite(amountValue) ? amountValue : null
-
-        const { data, error } = await supabase.rpc('hr_post_payroll_run_to_gl', {
-            p_run_id: runId,
-            p_amount: amount
-        })
-        if (error) {
-            return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-        }
-
-        return NextResponse.json({ success: true, data })
+        // B2B (P-F03 containment): this second payroll GL path (hr_post_payroll_run_to_gl, separate idempotency store)
+        // is disabled so a run cannot be posted twice. The canonical path is /api/hr/payroll/post-to-gl
+        // (post_payroll_run_to_gl). The database function is NOT changed or revoked here (Phase B / Finance owner).
+        return NextResponse.json({
+            success: false,
+            error: 'PAYROLL_GL_ROUTE_RETIRED',
+            message: 'This payroll posting route is retired. Use Payroll → Post to GL (the canonical payroll posting path).',
+        }, { status: 410 })
     } catch (error: any) {
         console.error('Failed to post payroll run to GL:', error)
         return NextResponse.json({ success: false, error: error.message || 'Internal error' }, { status: 500 })

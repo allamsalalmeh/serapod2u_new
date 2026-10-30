@@ -69,6 +69,12 @@ export interface ProvisionIdentityInput {
   requireNewIdentity?: boolean
   /** Add User: the existing identity the administrator explicitly linked; the resolved identity must be exactly this one. */
   linkUserId?: string | null
+  /**
+   * The email/phone was released by an archived identity (IDENTITY_PREVIOUSLY_RELEASED): only an explicit
+   * administrator decision that this is a DIFFERENT person creates a new identity (new UUID; nothing of the
+   * archived identity is inherited). A returning person is reactivated instead.
+   */
+  releasedIdentifierDecision?: 'new_person' | null
 }
 
 /** Server-generated audit context for Group Policies assigned while a user is created (no administrator-typed reason). */
@@ -128,6 +134,8 @@ const DB_ERROR_MAP: Array<[RegExp, IdentityErrorCode, number, string]> = [
     'A legacy role or level cannot be set while creating a user. Nothing was created.'],
   [/identity_email_invalid|identity_phone_invalid|identity_account_scope_invalid|identity_authorizing_permission_invalid/, 'INVALID_INPUT', 400,
     'The email or phone number is not valid.'],
+  [/identity_released_identifier_taken/, 'IDENTITY_CONFLICT', 409,
+    'This archived account\'s email or phone number now belongs to another person, so it cannot be reactivated with them. Nothing was changed.'],
 ]
 
 /** Maps a database exception from the identity functions to a caller-safe error. */
@@ -170,12 +178,17 @@ export async function provisionIdentity(input: ProvisionIdentityInput): Promise<
   if (resolution.outcome === 'INVALID_INPUT') {
     return { ok: false, code: 'INVALID_INPUT', status: 400, message: 'The email or phone number is not valid.' }
   }
+  // A released identifier: a different person only by explicit decision (recorded); otherwise stop.
+  const newPersonOnReleased = resolution.outcome === 'IDENTITY_PREVIOUSLY_RELEASED' && input.releasedIdentifierDecision === 'new_person'
   if (isIdentityBlockCode(resolution.outcome)) {
     await admin.rpc('identity_record_conflict', {
       p_code: resolution.outcome, p_resolution: resolved, p_email: email, p_phone: phone,
-      p_source: input.source, p_actor: input.actorId, p_details: { stage: 'resolve' },
+      p_source: input.source, p_actor: input.actorId,
+      p_details: newPersonOnReleased ? { stage: 'resolve', decision: 'new_person' } : { stage: 'resolve' },
     })
-    return blocked(resolution.outcome, resolution.matchedUserIds)
+    if (!newPersonOnReleased) {
+      return blocked(resolution.outcome, resolution.outcome === 'IDENTITY_PREVIOUSLY_RELEASED' ? resolution.releasedUserIds : resolution.matchedUserIds)
+    }
   }
 
   if (input.linkUserId) {
@@ -188,7 +201,7 @@ export async function provisionIdentity(input: ProvisionIdentityInput): Promise<
   let userId = resolution.userId
   let created = false
   let tempPassword: string | undefined
-  if (resolution.outcome === 'NO_MATCH') {
+  if (resolution.outcome === 'NO_MATCH' || newPersonOnReleased) {
     const password = input.password?.trim() ? input.password : (tempPassword = generateTemporaryPassword())
     const { data: authUser, error: authError } = await admin.auth.admin.createUser({
       email,

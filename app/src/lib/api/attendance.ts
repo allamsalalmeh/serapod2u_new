@@ -237,10 +237,15 @@ export const createCorrectionRequest = async (payload: {
     corrected_clock_in?: string | null
     corrected_clock_out?: string | null
 }) => {
+    // Wave 3 route shape: times of day (the entry's own date; an earlier clock-out means the next day).
+    const timePart = (v?: string | null) => (v && /T(\d{2}:\d{2})/.exec(v)?.[1]) || (v && /^\d{2}:\d{2}$/.test(v) ? v : null)
     const response = await fetch('/api/hr/attendance/corrections', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+            action: 'request', entry_id: payload.entry_id, reason: payload.reason,
+            clock_in: timePart(payload.corrected_clock_in), clock_out: timePart(payload.corrected_clock_out),
+        })
     })
     const data = await parseJson<{ success: boolean; data?: AttendanceCorrectionRequest; error?: string }>(response)
     if (!response.ok || !data.success) {

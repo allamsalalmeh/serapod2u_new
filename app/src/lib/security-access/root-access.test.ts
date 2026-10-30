@@ -111,9 +111,9 @@ describe('Root Access status read model', () => {
 
   it('reports the viewer capability from the database, unavailable on error', async () => {
     const ok = { rpc: async (fn: string) => ({ data: fn === 'sa_actor_is_root' ? true : 2, error: null }) }
-    expect(await rootAccessCapability(ok, 'v')).toEqual({ available: true, viewerIsRoot: true, activeCount: 2 })
+    expect(await rootAccessCapability(ok, 'v')).toEqual({ available: true, viewerIsRoot: true, activeCount: 2, activePermissionCount: null })
     const missing = { rpc: async () => ({ data: null, error: { code: 'PGRST202' } }) }
-    expect(await rootAccessCapability(missing, 'v')).toEqual({ available: false, viewerIsRoot: false, activeCount: null })
+    expect(await rootAccessCapability(missing, 'v')).toEqual({ available: false, viewerIsRoot: false, activeCount: null, activePermissionCount: null })
   })
 
   it('maps every database refusal to a safe message and status', () => {

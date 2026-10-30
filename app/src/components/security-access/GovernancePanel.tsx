@@ -213,8 +213,10 @@ function Delegations({ data, nameOf, orgName }: any) {
   }
   async function revoke(id: string) {
     const reason = window.prompt('Reason for revoking this delegation?')
-    if (!reason || reason.trim().length < 5) return
-    const result = await callApi('/api/security-access/delegations', { body: { action: 'revoke', delegationId: id, reason } })
+    if (reason === null) return // cancelled
+    // Never drop a short reason silently: say why nothing was sent.
+    if (reason.trim().length < 5) { setMessage({ tone: 'error', text: 'A reason of at least 5 characters is required. The delegation was not revoked.' }); return }
+    const result = await callApi('/api/security-access/delegations', { body: { action: 'revoke', delegationId: id, reason: reason.trim() } })
     setMessage(result.ok ? { tone: 'ok', text: 'Delegation revoked.' } : { tone: 'error', text: result.error || 'Unable to revoke' })
     if (result.ok) reload()
   }

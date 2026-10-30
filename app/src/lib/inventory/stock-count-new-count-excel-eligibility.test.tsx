@@ -188,10 +188,13 @@ describe('Genuinely new count — archived master data eligibility (UI + Excel p
     const sheet = buildStockCountWorksheet(workbook, toWorksheetRows(visible))
     expect(sheet.name).toBe('Stock Count')
     expect((sheet.getRow(1).values as unknown[]).slice(1)).toEqual([...STOCK_COUNT_EXCEL_HEADERS])
-    expect(sheet.autoFilter).toEqual({ from: 'A1', to: 'M1' })
+    expect(sheet.autoFilter).toEqual({ from: 'A1', to: 'P1' })
     // Header formatting anchors: text columns stay text, quantities stay numeric.
     expect(sheet.getColumn(1).numFmt).toBe('@')
-    expect(sheet.getColumn(11).numFmt).toBe('#,##0')
+    // Stock Unit (K) and Units per Case (L) are context; System Quantity (M) and
+    // Physical Count (O) stay numeric.
+    expect(sheet.getColumn(13).numFmt).toBe('#,##0')
+    expect(sheet.getColumn(15).numFmt).toBe('#,##0')
   })
 
   it('reopened draft keeps the archived variant as a historical scope row (unchanged history)', () => {

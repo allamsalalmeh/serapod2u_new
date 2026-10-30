@@ -8,6 +8,7 @@
 
 import { createClient } from '@/lib/supabase/client'
 import type { ILeaveRepository } from './repository'
+import { assertLeaveRowsChanged, leaveErrorMessage } from './leaveErrors'
 import type {
   LeaveType,
   LeaveRequest,
@@ -218,7 +219,7 @@ export class SupabaseLeaveRepository implements ILeaveRepository {
       `)
       .single()
 
-    if (error || !data) throw new Error(error?.message || 'Failed to create leave request')
+    if (error || !data) throw new Error(leaveErrorMessage(error, 'Failed to create leave request'))
     return mapDbLeaveRequest(data)
   }
 
@@ -227,20 +228,27 @@ export class SupabaseLeaveRepository implements ILeaveRepository {
     status: LeaveRequestStatus,
     comment?: string
   ): Promise<LeaveRequest> {
-    // Update the request status
-    const { error: updateError } = await this.supabase
+    // Update the request status. The database (B2A guard) stamps approver/time and cancellation time, refuses
+    // self-approval and unauthorized decisions; a row filtered out by row-level security is a refusal too.
+    const decided = status === 'approved' || status === 'rejected'
+    const { data: changed, error: updateError } = await this.supabase
       .from('hr_leave_requests')
       .update({
         status,
+        ...(decided && comment ? { approval_comment: comment } : {}),
         ...(status === 'cancelled' ? { cancelled_at: new Date().toISOString() } : {}),
       })
       .eq('id', id)
+      .select('id')
 
-    if (updateError) throw new Error(updateError.message)
+    if (updateError) throw new Error(leaveErrorMessage(updateError))
+    assertLeaveRowsChanged(changed)
 
-    // Record the approval action
-    if (status === 'approved' || status === 'rejected') {
-      await this.supabase.from('hr_leave_approvals').insert({
+    // Record the approval step. The decision above is already saved (and audited by the database in
+    // hr_leave_request_events), so a refused step must not turn a real decision into an error, but it is reported.
+    let stepRecorded = true
+    if (decided) {
+      const { error: stepError } = await this.supabase.from('hr_leave_approvals').insert({
         organization_id: this.organizationId,
         request_id: id,
         approver_id: this.userId,
@@ -250,11 +258,16 @@ export class SupabaseLeaveRepository implements ILeaveRepository {
         comment: comment || null,
         actioned_at: new Date().toISOString(),
       })
+      if (stepError) {
+        stepRecorded = false
+        console.warn('Leave approval step not recorded:', stepError.message)
+      }
     }
 
     const result = await this.getLeaveRequestById(id)
     if (!result) throw new Error('Request not found after update')
-    return result
+    // Report what the database actually stored, never the requested status.
+    return stepRecorded ? result : { ...result, approvalStepRecorded: false }
   }
 
   // ── Leave Balances ─────────────────────────────────────────────
@@ -280,7 +293,9 @@ export class SupabaseLeaveRepository implements ILeaveRepository {
       entitled: Number(row.entitled || 0),
       taken: Number(row.taken || 0),
       pending: Number(row.pending || 0),
-      remaining: Number(row.entitled || 0) - Number(row.taken || 0) - Number(row.pending || 0),
+      // Table rule (and the Wave 3 ledger projection): entitled + carried forward + adjustment − taken − pending.
+      remaining: Number(row.entitled || 0) + Number(row.carried_forward || 0) + Number(row.adjustment || 0)
+        - Number(row.taken || 0) - Number(row.pending || 0),
       carriedForward: Number(row.carried_forward || 0),
     }))
   }

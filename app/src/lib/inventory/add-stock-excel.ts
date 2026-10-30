@@ -7,6 +7,7 @@ import {
   parseUnitCost,
   type ManualStockCatalogRow,
 } from './add-stock-inventory'
+import { stockUnitDisplayLabel, stockUnitForProduct } from './stock-count-quantity'
 
 export const MANUAL_STOCK_ADDITION_EXCEL_HEADERS = [
   'Stock Configuration ID',
@@ -19,6 +20,8 @@ export const MANUAL_STOCK_ADDITION_EXCEL_HEADERS = [
   'Product Code',
   'Volume',
   'Packaging Version',
+  // Quantities below are in this unit (cases for cartridges, pcs otherwise).
+  'Stock Unit',
   'Current Quantity',
   'Add Quantity',
   'Unit Cost',
@@ -91,6 +94,7 @@ export function buildManualStockAdditionWorksheet(
       row.productCode || null,
       row.volumeMl,
       formatPackagingVersion(row.packaging),
+      stockUnitDisplayLabel(stockUnitForProduct(row.productName)),
       row.currentOnHand,
       quantities[row.rowKey] ? Number(quantities[row.rowKey]) : null,
       unitCosts[row.rowKey] ? Number(unitCosts[row.rowKey]) : null,
@@ -119,9 +123,9 @@ export function buildManualStockAdditionWorksheet(
 
   for (const column of [1, 2, 3, 8]) worksheet.getColumn(column).numFmt = '@'
   worksheet.getColumn(9).numFmt = '0'
-  worksheet.getColumn(11).numFmt = '#,##0'
   worksheet.getColumn(12).numFmt = '#,##0'
-  worksheet.getColumn(13).numFmt = '#,##0.00'
+  worksheet.getColumn(13).numFmt = '#,##0'
+  worksheet.getColumn(14).numFmt = '#,##0.00'
 
   // Lock identity columns; unlock only Add Quantity, Unit Cost, Row Note.
   for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {

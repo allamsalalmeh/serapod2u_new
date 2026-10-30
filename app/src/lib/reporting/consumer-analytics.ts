@@ -388,18 +388,49 @@ export function buildConsumerAnalyticsReport(aggregate: ConsumerAnalyticsAggrega
 /**
  * Month options for the Reporting Month dropdown, newest first.
  *
- * The current Malaysia month is always offered so entering the tab on the 1st
- * of a month is not a dead end, and nothing beyond it is ever generated.
+ * The supported range runs from the earliest month the report has records
+ * for up to the current Malaysia month, and EVERY calendar month inside it is
+ * offered — a month with no transactions is a valid (empty) report, not a gap
+ * that previous/next navigation silently jumps over. The current month is
+ * always offered so entering the tab on the 1st of a month is not a dead end,
+ * and nothing beyond it is ever generated.
  */
 export function buildReportingMonthOptions(
   availableMonths: string[],
   currentMonth: string = currentReportingPeriodKey(),
 ): { value: string; label: string }[] {
-  const months = new Set<string>([currentMonth])
+  let earliest = currentMonth
   for (const month of availableMonths) {
-    if (isValidMonthKey(month) && month <= currentMonth) months.add(month)
+    if (isValidMonthKey(month) && month < earliest) earliest = month
   }
-  return [...months]
-    .sort((a, b) => b.localeCompare(a))
-    .map((month) => ({ value: month, label: monthLabel(month) }))
+  const options: { value: string; label: string }[] = []
+  for (let month = currentMonth; month >= earliest; month = previousMonthKey(month)) {
+    options.push({ value: month, label: monthLabel(month) })
+  }
+  return options
+}
+
+/**
+ * The months either side of `month` within newest-first `options`: `older` for
+ * the ← button and `newer` for →. Undefined at the ends of the supported range.
+ */
+export function adjacentReportingMonths(
+  options: readonly { value: string }[],
+  month: string,
+): { older?: string; newer?: string } {
+  const index = options.findIndex((option) => option.value === month)
+  if (index < 0) return {}
+  return { older: options[index + 1]?.value, newer: index > 0 ? options[index - 1].value : undefined }
+}
+
+/**
+ * A `?month=` value accepted from a URL: a well-formed `YYYY-MM` that is not in
+ * the future (Malaysia time). Anything else is null so the caller can fall back
+ * to the current month explicitly rather than reporting on a bad key.
+ */
+export function parseReportingMonthParam(
+  value: string | null | undefined,
+  currentMonth: string = currentReportingPeriodKey(),
+): string | null {
+  return isValidMonthKey(value) && value <= currentMonth ? value : null
 }

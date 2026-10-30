@@ -1,0 +1,43 @@
+{
+  "dateLocal": "2026-10-24",
+  "timezone": "Asia/Kuala_Lumpur",
+  "branch": "Enhancement03",
+  "focusedTests": {
+    "exitCode": 0,
+    "filesPassed": 110,
+    "testsPassed": 1102,
+    "failed": 0,
+    "runtime": "22.21.1"
+  },
+  "isolatedPostgresql": {
+    "version": 17,
+    "result": "PASS",
+    "scope": "Actual preview migration on synthetic minimal schema; no full application RLS mutation test",
+    "serverStopped": true
+  },
+  "typescript": {
+    "runtime": "22.21.1",
+    "maxOldSpaceMiB": 8192,
+    "exitCode": 2,
+    "diagnosticCount": 270,
+    "enhancementFileDiagnostics": 0,
+    "exactCompletedBeforeCount": null,
+    "initialAttempt": "heap exhausted",
+    "details": "TYPECHECK.md"
+  },
+  "build": {
+    "runtime": "22.21.1",
+    "exitCode": 0,
+    "internalCronWorkersDisabled": true,
+    "existingIgnoreBuildErrors": true
+  },
+  "lint": {
+    "status": "NOT RUN",
+    "reason": "No lint script or ESLint configuration"
+  },
+  "authenticatedBrowserUat": "NOT RUN; owner scenarios in UAT.md",
+  "sharedStagingMutations": false,
+  "migrationsExecutedOnSharedDatabase": [],
+  "newMigration": "20261216100000_sa_legacy_preview_scope_coverage.sql",
+  "commitsPushesDeployments": false
+}

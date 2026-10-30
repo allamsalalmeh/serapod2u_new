@@ -57,5 +57,5 @@ export async function getEcommercePageContext() {
     const access = await resolveDestinationAccess(navActorFromProfile(transformedUserProfile), 'ecommerce')
     const canViewEcommerce = access.state === 'allowed'
 
-    return { user, userProfile: transformedUserProfile, canViewEcommerce, accessState: access.state }
+    return { user, userProfile: transformedUserProfile, canViewEcommerce, accessState: access.state, access }
 }

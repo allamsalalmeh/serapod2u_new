@@ -416,7 +416,9 @@ export async function GET(request: NextRequest) {
         ? (await supabase.from('organizations').select('org_name').eq('id', warehouseOrgId).single()).data?.org_name || 'Warehouse'
         : 'Warehouse'
       const notifPayload = {
+        order_id: orderId,
         order_no: displayOrderNo,
+        warehouse_org_id: warehouseOrgId || null,
         batch_id: batch.id,
         total_received: totalProcessed.toString(),
         warehouse_name: warehouseName,

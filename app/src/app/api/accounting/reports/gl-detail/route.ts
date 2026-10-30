@@ -1,13 +1,35 @@
 import { financeAllowed } from '@/lib/security-access/finance'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import {
+  fetchPostedLines, fiscalYearStart, getCompanyHeader, headerAccountIds, isoDate, toNum,
+} from '@/lib/accounting/report-data'
 
 /**
  * GET /api/accounting/reports/gl-detail
- * GL Detail Report: transaction-level detail for a specific account.
  *
- * Params: account_id (required), from, to, page, per_page
+ * General ledger in the legacy UBS / SQL Account layout, one block per account:
+ *
+ *   ACCOUNT NO. : 1000/100        SHARE CAPITAL
+ *   DATE  REF.  DESCRIPTION                 DEBIT   CREDIT   BALANCE
+ *               BALANCE B/F                                    0.00
+ *   ...lines with running balance (debit − credit)...
+ *               (totals)                    x.xx     y.yy     z.zz
+ *
+ * Query params:
+ *   account_id – optional; omit for all accounts with activity or a non-zero B/F
+ *   from, to   – period; `from` defaults to the start of the fiscal year containing `to`
+ *
+ * Balance brought forward:
+ *   - balance sheet accounts: all postings before `from`
+ *   - income / expense accounts: postings from the fiscal year start to the day before `from`
+ *     (P&L accounts start each fiscal year at zero, as in UBS)
+ *
+ * Also returns `accountsList` (all leaf accounts) for the account picker.
  */
+
+const BS_TYPES = ['ASSET', 'LIABILITY', 'EQUITY']
+
 export async function GET(request: Request) {
   try {
     const supabase = await createClient()
@@ -30,98 +52,111 @@ export async function GET(request: Request) {
     }
 
     const orgId = userData.organization_id
+    const db = supabase as any
     const { searchParams } = new URL(request.url)
-    const accountId = searchParams.get('account_id')
-    const fromDate = searchParams.get('from')
-    const toDate = searchParams.get('to')
-    const page = parseInt(searchParams.get('page') || '1')
-    const perPage = parseInt(searchParams.get('per_page') || '50')
-    const offset = (page - 1) * perPage
+    const accountId = searchParams.get('account_id') || null
+    const toDate = searchParams.get('to') || isoDate(new Date())
 
-    if (!accountId) {
-      return NextResponse.json({ error: 'account_id is required' }, { status: 400 })
-    }
+    const [company, { start: fyStart, fiscalYear }] = await Promise.all([
+      getCompanyHeader(db, orgId),
+      fiscalYearStart(db, orgId, toDate),
+    ])
+    const fromDate = searchParams.get('from') || fyStart
+    // P&L accounts restart at the beginning of the fiscal year that contains `from`
+    const { start: plStart } = fromDate === fyStart ? { start: fyStart } : await fiscalYearStart(db, orgId, fromDate)
 
-    // Get account info
-    const { data: account } = await supabase
+    const { data: allAccounts, error: accError } = await db
       .from('gl_accounts')
-      .select('id, code, name, account_type')
-      .eq('id', accountId)
+      .select('id, code, name, account_type, parent_account_id')
       .eq('company_id', orgId)
-      .single()
+      .order('code', { ascending: true })
+    if (accError) return NextResponse.json({ error: accError.message }, { status: 500 })
 
-    if (!account) {
+    const accounts = (allAccounts || []) as any[]
+    const headers = headerAccountIds(accounts)
+    const leafAccounts = accounts.filter((a) => !headers.has(a.id))
+    const byId: Record<string, any> = {}
+    for (const a of leafAccounts) byId[a.id] = a
+
+    if (accountId && !byId[accountId]) {
       return NextResponse.json({ error: 'Account not found' }, { status: 404 })
     }
 
-    // Calculate opening balance (all posted lines before fromDate)
-    let openingBalance = 0
-    if (fromDate) {
-      const { data: openingLines } = await supabase
-        .from('v_gl_journal_lines' as any)
-        .select('debit_amount, credit_amount')
-        .eq('company_id', orgId)
-        .eq('account_id', accountId)
-        .eq('journal_status', 'posted')
-        .lt('journal_date', fromDate)
-
-      for (const line of (openingLines as any[]) || []) {
-        openingBalance += (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
-      }
-    }
-
-    // Get transactions for the period
-    let query = supabase
-      .from('v_gl_journal_lines' as any)
-      .select('*', { count: 'exact' })
-      .eq('company_id', orgId)
-      .eq('account_id', accountId)
-      .eq('journal_status', 'posted')
-      .order('journal_date', { ascending: true })
-      .order('line_number', { ascending: true })
-      .range(offset, offset + perPage - 1)
-
-    if (fromDate) query = query.gte('journal_date', fromDate)
-    if (toDate) query = query.lte('journal_date', toDate)
-
-    const { data: transactions, error, count } = await query
-
-    if (error) {
-      console.error('GL detail error:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
-
-    // Build detail with running balance
-    let runningBalance = openingBalance
-    const lines = ((transactions as any[]) || []).map((t: any) => {
-      const debit = Number(t.debit_amount) || 0
-      const credit = Number(t.credit_amount) || 0
-      runningBalance += debit - credit
-      return {
-        journal_id: t.journal_id,
-        journal_number: t.journal_number,
-        journal_date: t.journal_date,
-        description: t.description,
-        debit,
-        credit,
-        running_balance: runningBalance,
-        journal_status: t.journal_status,
-        memo: t.entity_name || null,
-      }
+    const { lines, error: linesError } = await fetchPostedLines(db, {
+      companyId: orgId,
+      toDate,
+      accountId: accountId || undefined,
+      columns: '*',
     })
+    if (linesError) return NextResponse.json({ error: linesError }, { status: 500 })
 
-    const total = count || 0
-    const totalPages = Math.ceil(total / perPage)
+    type Block = {
+      id: string; code: string; name: string; account_type: string
+      openingBalance: number
+      lines: { date: string; ref: string; description: string; memo: string | null; debit: number; credit: number; balance: number }[]
+      totalDebit: number; totalCredit: number; closingBalance: number
+    }
+    const blocks: Record<string, Block> = {}
+    const blockFor = (a: any) => {
+      if (!blocks[a.id]) {
+        blocks[a.id] = {
+          id: a.id, code: a.code, name: a.name, account_type: a.account_type,
+          openingBalance: 0, lines: [], totalDebit: 0, totalCredit: 0, closingBalance: 0,
+        }
+      }
+      return blocks[a.id]
+    }
+
+    // 1) Split into balance brought forward and period lines
+    for (const l of lines) {
+      const acc = byId[l.account_id]
+      if (!acc) continue
+      const dr = toNum(l.debit_amount)
+      const cr = toNum(l.credit_amount)
+      const date: string = l.journal_date
+      const isBS = BS_TYPES.includes(acc.account_type)
+
+      if (date < fromDate) {
+        if (isBS || date >= plStart) blockFor(acc).openingBalance += dr - cr
+        continue
+      }
+      const b = blockFor(acc)
+      b.totalDebit += dr
+      b.totalCredit += cr
+      b.lines.push({
+        date,
+        ref: l.journal_number || '',
+        description: l.description || l.line_description || '',
+        memo: l.entity_name || null,
+        debit: dr,
+        credit: cr,
+        balance: 0,
+      })
+    }
+
+    // 2) Running balance per account, in date order (stable within a date)
+    for (const b of Object.values(blocks)) {
+      b.lines.sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0))
+      let running = b.openingBalance
+      for (const ln of b.lines) {
+        running += ln.debit - ln.credit
+        ln.balance = running
+      }
+      b.closingBalance = running
+    }
+
+    const result = Object.values(blocks)
+      .filter((b) => b.lines.length > 0 || Math.abs(b.openingBalance) >= 0.005)
+      .sort((x, y) => x.code.localeCompare(y.code))
 
     return NextResponse.json({
-      account: { id: account.id, code: account.code, name: account.name, account_type: account.account_type },
-      lines,
-      openingBalance,
-      closingBalance: runningBalance,
-      total,
-      totalPages,
-      page,
-      perPage,
+      company,
+      fromDate,
+      toDate,
+      fiscalYearLabel: fiscalYear?.name || null,
+      accounts: result,
+      accountsList: leafAccounts.map((a) => ({ id: a.id, code: a.code, name: a.name, account_type: a.account_type })),
+      lineCount: result.reduce((n, b) => n + b.lines.length, 0),
     })
   } catch (error) {
     console.error('Error in GL detail API:', error)

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   mode: 'SHADOW' as string,
   history: [] as string[] | null,
   setStatus: vi.fn(),
+  archive: vi.fn(),
   ban: vi.fn(),
   destructiveDenied: null as any,
 }))
@@ -60,6 +61,12 @@ vi.mock('@/lib/security-access/authorization', () => ({ currentMigrationMode: as
 vi.mock('@/lib/identity/provisioning', () => ({
   identityHistoryReferences: async () => mocks.history,
   setIdentityAccountStatus: (...args: any[]) => mocks.setStatus(...args),
+}))
+// The canonical Archive & Revoke Access (database transaction: account, S&A leaver sync, login, sessions, Telegram).
+vi.mock('@/lib/identity/archive', () => ({
+  archivePreview: async (_actor: string, userId: string) => ({ ok: true, preview: {
+    archive_allowed: true, blockers: [], preview_token: `tok-${userId}`, confirmation_phrase: `${userId}@phrase` } }),
+  archiveExecute: (input: any) => mocks.archive(input),
 }))
 vi.mock('@/server/auth/passwordResetService', () => ({ hashOtp: (c: string) => `h:${c}`, logNotificationEvent: vi.fn() }))
 
@@ -115,17 +122,27 @@ describe('POST /api/admin/delete-user-otp/verify-and-delete — Archive Identiti
     mocks.setStatus.mockImplementation(async (_a: string, id: string, status: string) => {
       Object.assign(user(id)!, { account_status: status }); return { ok: true, status }
     })
+    mocks.archive.mockImplementation(async (input: any) => {
+      Object.assign(user(input.userId)!, { account_status: 'ARCHIVED' })
+      mocks.db.sa_organization_memberships.filter(m => m.user_id === input.userId).forEach(m => { m.status = 'inactive' })
+      mocks.db.telegram_links.filter(t => t.user_id === input.userId).forEach(t => { t.is_active = false })
+      return { ok: true, outcome: { status: 'completed', actionId: 'a-1', replayed: false, released: false } }
+    })
   })
 
-  it('authorized archive succeeds as a soft archive (identity kept, identifiers reserved, login banned, Telegram off)', async () => {
+  it('authorized archive is the canonical Archive & Revoke Access (identity kept, identifiers reserved, access and login revoked)', async () => {
     const res = await confirm()
     expect(res.status).toBe(200)
     expect((await res.json()).mode).toBe('archive')
+    expect(mocks.archive).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: 'admin-1', userId: 'target-1', entry: 'user_management', previewToken: 'tok-target-1',
+      confirmation: 'target-1@phrase', releaseIdentifiers: false, employmentEnd: 'resigned',
+    }))
     expect(user('target-1')).toMatchObject({ account_status: 'ARCHIVED', email: 'target@example.com', phone: '+60100000001' })
-    expect(mocks.ban).toHaveBeenCalledWith('target-1', { ban_duration: '876000h' })
     expect(mocks.db.telegram_links[0].is_active).toBe(false)
     expect(otp('code-1').used_at).toBeTruthy()
-    expect(mocks.db.sa_organization_memberships[0].status).toBe('active')
+    expect(mocks.db.sa_organization_memberships[0].status).toBe('inactive')
+    expect(mocks.setStatus).not.toHaveBeenCalled()
     expect(mocks.db.destructive_ops_audit_log.at(-1)).toMatchObject({ operation: 'archive_user_keep_identifiers', allowed: true })
   })
 
@@ -206,20 +223,23 @@ describe('POST /api/admin/delete-user-otp/verify-and-delete — Archive Identiti
     before = snapshot()
     expect((await confirm('super-1', 'code-super')).status).toBe(403)
     expect(snapshot()).toBe(before)
-    expect(mocks.setStatus).not.toHaveBeenCalled()
+    expect(mocks.archive).not.toHaveBeenCalled()
   })
 
-  it('once enforced, the archive goes through the database lifecycle function (which re-decides the scope)', async () => {
-    mocks.mode = 'NEW_ENFORCED'
-    expect((await confirm()).status).toBe(200)
-    expect(mocks.setStatus).toHaveBeenCalledWith('admin-1', 'target-1', 'ARCHIVED', expect.stringContaining('history retained'))
-    expect(user('target-1')!.account_status).toBe('ARCHIVED')
-    expect(mocks.db.telegram_links[0].is_active).toBe(false)
+  it('in every mode the archive runs in the database (which re-decides authority), never as a direct status write', async () => {
+    for (const mode of ['SHADOW', 'NEW_ENFORCED']) {
+      seed(); mocks.archive.mockClear(); mocks.mode = mode
+      expect((await confirm()).status, mode).toBe(200)
+      expect(mocks.archive.mock.calls[0][0].reason, mode).toContain('history retained')
+      expect(user('target-1')!.account_status).toBe('ARCHIVED')
+    }
+    expect(mocks.setStatus).not.toHaveBeenCalled()
+    expect(mocks.ban).not.toHaveBeenCalled()
   })
 
   it('a database refusal at archive time keeps the account, membership and code usable state intact', async () => {
     mocks.mode = 'NEW_ENFORCED'
-    mocks.setStatus.mockResolvedValue({ ok: false, code: 'FORBIDDEN', status: 403, message: 'You are not authorized to perform this identity or access change.' })
+    mocks.archive.mockResolvedValue({ ok: false, code: 'FORBIDDEN', status: 403, message: 'You are not authorized to permanently delete this person.' })
     const res = await confirm()
     expect(res.status).toBe(403)
     expect(user('target-1')!.account_status).toBe('ACTIVE')

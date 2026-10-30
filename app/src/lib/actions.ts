@@ -29,12 +29,10 @@ import { warehouseSupportFor } from '@/lib/security-access/scope-eligibility'
 import { previewOnboardingCandidate } from '@/lib/hr/onboarding'
 import { explainOperation, PreflightUnavailableError } from '@/lib/security-access/preflight'
 import {
-  identityHistoryReferences,
   provisionIdentity,
   setIdentityAccountStatus,
   updateIdentityAccess,
 } from '@/lib/identity/provisioning'
-import { authorizeIdentityRemoval } from '@/lib/identity/removal-authorization'
 
 /** Organization of an existing user (trusted row), for S&A target scoping. */
 const NO_ORGANIZATION_MATCH = '00000000-0000-0000-0000-000000000000'
@@ -119,6 +117,8 @@ export async function createUserWithAuth(userData: {
    * false = excluded (non-employee HQ account); true is rejected for a non-HQ organization. Judged on the stored org type.
    */
   include_ess?: boolean | null
+  /** The email/phone was released by an archived former user and the administrator confirmed this is a DIFFERENT person. */
+  released_identifier_decision?: 'new_person' | null
 }, _callerInfo?: { id: string, role_code: string }) {
   try {
     const supabase = await createClient()
@@ -245,6 +245,7 @@ export async function createUserWithAuth(userData: {
       // Never reuse an account silently: an existing person is either linked explicitly (HQ employee) or the request stops.
       requireNewIdentity: true,
       linkUserId: userData.linked_user_id || null,
+      releasedIdentifierDecision: userData.released_identifier_decision === 'new_person' ? 'new_person' : null,
       source: 'user_management',
     })
     if (!provisioned.ok) {
@@ -950,188 +951,17 @@ export async function setUserAccountStatus(userId: string, status: 'ACTIVE' | 'S
   }
 }
 
-export async function deleteUserWithAuth(userId: string, _callerInfo?: { id: string, role_code: string }) {
-  try {
-    const adminClient = createAdminClient()
-
-    if (!adminClient) {
-      return {
-        success: false,
-        error: 'Admin client not available. Check service role key configuration.'
-      }
-    }
-
-    const supabase = await createClient()
-
-    // Verify caller has permission to delete users
-    let isAuthorized = false
-
-    // Try to get current user from session first
-    const { data: { user: currentUser }, error: sessionAuthError } = await supabase.auth.getUser()
-
-    if (currentUser && !sessionAuthError) {
-      const permissionCheck = await checkPermissionForUser(currentUser.id, 'delete_users')
-      isAuthorized = await userAllowed(currentUser.id, 'platform.user.manage', () => permissionCheck.allowed,
-        { organizationId: await targetUserOrganization(userId) })
-    }
-
-    if (!isAuthorized) {
-      return {
-        success: false,
-        error: 'Unauthorized: Only administrators can delete users'
-      }
-    }
-
-    // Removing an identity is Archive Identities (platform.identity.delete)
-    // for the target's organization, with self and target protection — the
-    // same decision as the User Management delete flow. Managing users alone
-    // does not authorize it.
-    const removal = await authorizeIdentityRemoval(currentUser!.id, userId)
-    if (!removal.ok) {
-      return { success: false, error: removal.status === 403 ? 'Unauthorized: Only administrators can delete users' : removal.error }
-    }
-
-    // Business or audit history must survive account removal: such an
-    // identity is archived (account lifecycle), never hard-deleted. Checked
-    // before any cleanup so nothing is removed on refusal; the database
-    // (users_history_delete_guard) enforces the same rule.
-    const historyReferences = await identityHistoryReferences(userId)
-    if (historyReferences === null) {
-      return { success: false, error: 'Unable to verify this user\'s history; nothing was deleted.' }
-    }
-    if (historyReferences.length > 0) {
-      return {
-        success: false,
-        code: 'IDENTITY_HAS_HISTORY',
-        error: 'This user is referenced by business or audit history and cannot be deleted. Deactivate or archive the account instead.',
-      }
-    }
-
-    // First, get user's email and phone for consumer_activations lookup
-    const { data: targetUser } = await adminClient
-      .from('users')
-      .select('email, phone')
-      .eq('id', userId)
-      .single()
-
-    // Step 1: Delete audit_logs first to avoid foreign key constraint
-    // Use admin client to bypass RLS policies
-    const { error: auditError } = await adminClient
-      .from('audit_logs')
-      .delete()
-      .eq('user_id', userId)
-
-    if (auditError) {
-      console.error('Failed to delete audit logs:', auditError)
-      // Don't fail on audit log deletion - continue with user deletion
-    }
-
-    // Step 2: Delete points_transactions for this user
-    const { error: pointsError } = await adminClient
-      .from('points_transactions')
-      .delete()
-      .eq('user_id', userId)
-
-    if (pointsError) {
-      console.error('Failed to delete points_transactions:', pointsError)
-      // Continue anyway
-    }
-
-    // Step 3: Delete consumer_activations for this user by email or phone
-    if (targetUser?.email) {
-      const { error: activationsEmailError } = await adminClient
-        .from('consumer_activations')
-        .delete()
-        .eq('consumer_email', targetUser.email)
-
-      if (activationsEmailError) {
-        console.error('Failed to delete consumer_activations by email:', activationsEmailError)
-      }
-    }
-
-    if (targetUser?.phone) {
-      const { error: activationsPhoneError } = await adminClient
-        .from('consumer_activations')
-        .delete()
-        .eq('consumer_phone', targetUser.phone)
-
-      if (activationsPhoneError) {
-        console.error('Failed to delete consumer_activations by phone:', activationsPhoneError)
-      }
-    }
-
-    // Step 4: Set null on consumer_qr_scans for this user (FK has SET NULL rule)
-    const { error: scansError } = await adminClient
-      .from('consumer_qr_scans')
-      .update({ consumer_id: null })
-      .eq('consumer_id', userId)
-
-    if (scansError) {
-      console.error('Failed to nullify consumer_qr_scans:', scansError)
-    }
-
-    const transferOperations = [
-      { table: 'documents', column: 'created_by', value: currentUser?.id, label: 'documents.created_by' },
-      { table: 'documents', column: 'acknowledged_by', value: null, label: 'documents.acknowledged_by' },
-      { table: 'document_files', column: 'uploaded_by', value: currentUser?.id, label: 'document_files.uploaded_by' },
-      { table: 'orders', column: 'created_by', value: currentUser?.id, label: 'orders.created_by' },
-      { table: 'orders', column: 'approved_by', value: null, label: 'orders.approved_by' },
-      { table: 'orders', column: 'updated_by', value: null, label: 'orders.updated_by' },
-    ]
-
-    for (const operation of transferOperations) {
-      if (operation.value === undefined) continue
-
-      const { error } = await adminClient
-        .from(operation.table)
-        .update({ [operation.column]: operation.value })
-        .eq(operation.column, userId)
-
-      if (error) {
-        console.error(`Failed to transfer ${operation.label}:`, error)
-      }
-    }
-
-    // Step 5: Delete user from public.users table using admin client to bypass RLS
-    const { error: dbError } = await adminClient
-      .from('users')
-      .delete()
-      .eq('id', userId)
-
-    if (dbError) {
-      console.error('Database delete error:', dbError)
-      return {
-        success: false,
-        error: `Failed to delete user from database: ${dbError.message}`
-      }
-    }
-
-    // Step 6: Delete user from Supabase Auth
-    const { error: authError } = await adminClient.auth.admin.deleteUser(userId)
-
-    if (authError) {
-      console.error('Failed to delete auth user (but database user deleted):', authError)
-      // We still return success since the main user record is deleted
-      // The auth record will be orphaned but won't cause issues
-      return {
-        success: true,
-        warning: 'User deleted from database but auth deletion failed',
-        message: 'User deleted successfully'
-      }
-    }
-
-    // Step 7: Return success
-    revalidatePath('/dashboard')
-    return {
-      success: true,
-      message: 'User deleted successfully from both database and auth'
-    }
-  } catch (error) {
-    console.error('Error deleting user:', error)
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to delete user'
-    }
+/**
+ * Retired (2026-10-23). It deleted audit_logs, re-assigned orders/documents to
+ * the administrator and reported success when the login could not be removed.
+ * Permanent deletion is the canonical identity deletion shared by User
+ * Management and HR: /api/identity/permanent-delete (lib/identity/permanent-deletion.ts).
+ */
+export async function deleteUserWithAuth(_userId: string, _callerInfo?: { id: string, role_code: string }) {
+  return {
+    success: false,
+    code: 'USE_PERMANENT_DELETE',
+    error: 'Use Delete User in User Management (permanent deletion with eligibility preview).',
   }
 }
 
@@ -1143,7 +973,8 @@ async function resolveConsumerRegistrationIdentity(adminClient: any, email: stri
   const { data, error } = await adminClient.rpc('identity_resolve', { p_email: email, p_phone: phone ?? null })
   if (error) return 'Registration is temporarily unavailable. Please try again.'
   const outcome = data?.outcome
-  if (outcome === 'NO_MATCH') return null
+  // A released identifier of an archived identity: self-registration (ownership verified by the sign-up) is a new person.
+  if (outcome === 'NO_MATCH' || outcome === 'IDENTITY_PREVIOUSLY_RELEASED') return null
   if (outcome === 'INVALID_INPUT') return 'Please check your email address and mobile number.'
   if (outcome === 'MATCH' && data?.matched_by !== 'phone') return 'An account with this email already exists. Please sign in instead.'
   if (outcome === 'MATCH') return 'This mobile number is already registered. Please sign in with it instead.'

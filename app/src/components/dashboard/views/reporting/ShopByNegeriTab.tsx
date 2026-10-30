@@ -27,9 +27,10 @@ import {
   previousReportingPeriod,
   reportingPeriodDateWindow,
   reportingPeriodFilenameLabel,
+  reportingPeriodFromKey,
   reportingPeriodRangeLabel,
-  type ReportingPeriod,
 } from '@/lib/reporting/reporting-period'
+import { readShopScans } from '@/lib/reporting/shop-performance'
 import {
   buildCanonicalStates,
   type CanonicalState,
@@ -37,15 +38,18 @@ import {
 import ExecutiveKpiValue from './ExecutiveKpiValue'
 import MalaysiaStateMap, { type StateMapMetric } from './MalaysiaStateMap'
 import StateFlag from './StateFlag'
+import ReportingMonthSelector from './ReportingMonthSelector'
 
 interface ShopByNegeriTabProps {
   userProfile: any
   chartGridColor: string
   chartTickColor: string
   isDark: boolean
-  periods: ReportingPeriod[]
-  selectedPeriod: ReportingPeriod | null
-  onPeriodChange: (key: string) => void
+  /** Selected Reporting Month, `YYYY-MM`. */
+  month: string
+  onMonthChange: (month: string) => void
+  /** Months with scans; only the earliest bounds the selector. */
+  availableMonths: string[]
   onRefreshPeriods: () => Promise<void>
 }
 
@@ -76,9 +80,12 @@ function Skeleton({ className = '' }: { className?: string }) {
 
 export default function ShopByNegeriTab({
   userProfile, chartGridColor, chartTickColor, isDark,
-  periods, selectedPeriod, onPeriodChange, onRefreshPeriods,
+  month, onMonthChange, availableMonths, onRefreshPeriods,
 }: ShopByNegeriTabProps) {
   const supabase = useMemo(() => createClient(), [])
+  // Every month in the supported range is a valid period, with or without scans.
+  const selectedPeriod = useMemo(() => reportingPeriodFromKey(month), [month])
+  const requestId = useRef(0)
 
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -109,12 +116,15 @@ export default function ShopByNegeriTab({
 
   // ── Data fetching ──────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
+    const id = ++requestId.current
+    const isLatest = () => id === requestId.current
     try {
       // Reference data
       const [{ data: stateData }, { data: regionData }] = await Promise.all([
         supabase.from('states').select('id, state_name, region_id').order('state_name'),
         supabase.from('regions').select('id, region_name').order('region_name'),
       ])
+      if (!isLatest()) return
       setStates((stateData as NegeriStateRow[]) || [])
       setRegions((regionData as NegeriRegionRow[]) || [])
 
@@ -123,23 +133,17 @@ export default function ShopByNegeriTab({
         setOrgs([])
         return
       }
+      // Comparison month + report month, every page (never truncated by the row cap).
       const previousPeriod = previousReportingPeriod(selectedPeriod)
-      const { data: scanData, error: scanErr } = await supabase
-        .from('consumer_qr_scans')
-        .select('id, consumer_id, scanned_at, shop_id, points_amount')
-        .eq('is_manual_adjustment', false)
-        .not('shop_id', 'is', null)
-        .gte('scanned_at', previousPeriod.startUtc)
-        .lt('scanned_at', selectedPeriod.endUtc)
-        .order('scanned_at', { ascending: false })
-
-      if (scanErr) {
+      let rows: NegeriScanRow[]
+      try {
+        rows = (await readShopScans(supabase, previousPeriod.startUtc, selectedPeriod.endUtc)) as unknown as NegeriScanRow[]
+      } catch (scanErr) {
         console.error('ShopByNegeriTab scan fetch error:', scanErr)
-        setScans([])
+        if (isLatest()) setScans([])
         return
       }
-
-      const rows = (scanData as unknown as NegeriScanRow[]) || []
+      if (!isLatest()) return
       setScans(rows)
 
       // Organizations for the referenced shops (with state_id)
@@ -155,6 +159,7 @@ export default function ShopByNegeriTab({
             .in('id', batch)
           if (orgData) orgList.push(...(orgData as NegeriOrgRow[]))
         }
+        if (!isLatest()) return
         setOrgs(orgList)
       } else {
         setOrgs([])
@@ -166,7 +171,8 @@ export default function ShopByNegeriTab({
 
   useEffect(() => {
     setLoading(true)
-    fetchData().finally(() => setLoading(false))
+    const id = requestId.current + 1
+    fetchData().finally(() => { if (id === requestId.current) setLoading(false) })
   }, [fetchData])
 
   const handleRefresh = async () => {
@@ -359,17 +365,12 @@ export default function ShopByNegeriTab({
       <Card className="border-0 shadow-sm bg-card/80 backdrop-blur">
         <CardContent className="p-4">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Reporting Month</label>
-              <Select value={selectedPeriod.key} onValueChange={onPeriodChange}>
-                <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {periods.map((o) => (
-                    <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <ReportingMonthSelector
+              id="shop-by-negeri-month"
+              month={month}
+              onMonthChange={onMonthChange}
+              availableMonths={availableMonths}
+            />
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Region Type</label>
               <Select value={region} onValueChange={handleRegionChange}>

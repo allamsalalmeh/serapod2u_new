@@ -17,9 +17,9 @@ interface HrLandingViewProps {
 }
 
 const cardDescriptions: Record<string, string> = {
-    'hr-people': 'Manage employees, organizational chart, departments, and job positions.',
-    'hr-attendance': 'Track clock-in/out events and review employee timesheets.',
-    'hr-leave': 'Configure leave types, manage requests, and set up approval flows.',
+    'hr-people': 'Employees, onboarding, HR profiles, employment history, reporting lines, departments and positions.',
+    'hr-attendance': 'Daily board, exceptions, corrections, manual entry, Excel import, overtime, reports, policy, shifts and holidays.',
+    'hr-leave': 'Approve and cancel leave, manage balances, entitlements and adjustments, and configure leave types.',
     'hr-payroll': 'Define salary structures, allowances & deductions, and generate payslips.',
     'hr-performance': 'Set KPIs, conduct appraisals, and manage performance reviews.',
     'hr-settings': 'Configure departments, positions, approval rules, permissions, and accounting.',
@@ -42,7 +42,7 @@ export default function HrLandingView({ userName, bannerImageUrl }: HrLandingVie
 
             <SetupReadinessBanner
                 auditEndpoint="/api/hr/config/audit"
-                settingsHref="/dashboard?view=hr/settings/configuration"
+                settingsHref="/hr/settings/configuration"
                 moduleName="HR"
                 accentColor="blue"
             />

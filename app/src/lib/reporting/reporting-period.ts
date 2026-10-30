@@ -87,12 +87,31 @@ export function previousReportingPeriod(period: ReportingPeriod): ReportingPerio
   return reportingPeriodFromKey(`${previousYear}-${String(previousMonth).padStart(2, '0')}`)!
 }
 
-export function reportingPeriodDateWindow(period: ReportingPeriod) {
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Report and comparison windows for a reporting month, on the same rule as
+ * the Product, Distributor and Overview reports:
+ *
+ *   - a historical month is the complete month, compared with the complete
+ *     previous month;
+ *   - the current month is month to date (through today, Malaysia time),
+ *     compared with the SAME number of elapsed days of the previous month —
+ *     never a partial month against a whole one.
+ */
+export function reportingPeriodDateWindow(period: ReportingPeriod, now: Date = new Date()) {
   const previous = previousReportingPeriod(period)
+  const start = new Date(period.startUtc)
+  const prevStart = new Date(previous.startUtc)
+  if (period.key !== currentReportingPeriodKey(now)) {
+    return { start, end: new Date(period.endUtc), prevStart, prevEnd: new Date(previous.endUtc) }
+  }
+  const elapsedDays = Math.floor((now.getTime() - start.getTime()) / DAY_MS) + 1
+  const previousDays = Number(previous.endDate.slice(-2))
   return {
-    start: new Date(period.startUtc),
-    end: new Date(period.endUtc),
-    prevStart: new Date(previous.startUtc),
-    prevEnd: new Date(previous.endUtc),
+    start,
+    end: new Date(start.getTime() + elapsedDays * DAY_MS),
+    prevStart,
+    prevEnd: new Date(prevStart.getTime() + Math.min(elapsedDays, previousDays) * DAY_MS),
   }
 }

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { timeInventoryOperation, type InventoryTrace } from '@/lib/inventory/inventory-timing'
 import { useSupabaseAuth } from '@/lib/hooks/useSupabaseAuth'
 import {
     buildDefaultPermissionMap,
@@ -19,8 +20,8 @@ interface UsePermissionsResult {
     refresh: () => Promise<void>
 }
 
-export function usePermissions(roleLevel?: number, roleCode?: string, departmentId?: string | null): UsePermissionsResult {
-    const { supabase, isReady } = useSupabaseAuth()
+export function usePermissions(roleLevel?: number, roleCode?: string, departmentId?: string | null, timingTrace?: InventoryTrace): UsePermissionsResult {
+    const { supabase, isReady } = useSupabaseAuth(timingTrace, 'auth.permissions.getUser')
     const [permissions, setPermissions] = useState<RolePermissions>({})
     const [loading, setLoading] = useState(true)
     const [deniedPermissions, setDeniedPermissions] = useState<Set<string>>(new Set())
@@ -54,22 +55,22 @@ export function usePermissions(roleLevel?: number, roleCode?: string, department
 
         try {
             // Try to load permissions from database
-            const { data: roleData, error } = await supabase
+            const { data: roleData, error } = await timeInventoryOperation(timingTrace, 'permissions.roles', () => supabase
                 .from('roles')
                 .select('permissions')
                 .eq('role_level', effectiveRoleLevel)
-                .single()
+                .single())
 
 
             if (error || !roleData?.permissions) {
                 const perms = buildDefaultPermissionMap(effectiveRoleLevel)
                 let merged = perms
                 if (departmentId) {
-                    const { data: deptData } = await supabase
+                    const { data: deptData } = await timeInventoryOperation(timingTrace, 'permissions.departments', () => supabase
                         .from('departments')
                         .select('permission_overrides')
                         .eq('id', departmentId)
-                        .single()
+                        .single())
                     merged = applyDepartmentOverrides(perms, deptData?.permission_overrides)
                 } else {
                     setDeniedPermissions(new Set())
@@ -83,11 +84,11 @@ export function usePermissions(roleLevel?: number, roleCode?: string, department
 
                     let merged = validPerms
                     if (departmentId) {
-                        const { data: deptData } = await supabase
+                        const { data: deptData } = await timeInventoryOperation(timingTrace, 'permissions.departments', () => supabase
                             .from('departments')
                             .select('permission_overrides')
                             .eq('id', departmentId)
-                            .single()
+                            .single())
                         merged = applyDepartmentOverrides(validPerms, deptData?.permission_overrides)
                     } else {
                         setDeniedPermissions(new Set())
@@ -98,11 +99,11 @@ export function usePermissions(roleLevel?: number, roleCode?: string, department
                     const fallbackPerms = buildDefaultPermissionMap(effectiveRoleLevel)
                     let merged = fallbackPerms
                     if (departmentId) {
-                        const { data: deptData } = await supabase
+                        const { data: deptData } = await timeInventoryOperation(timingTrace, 'permissions.departments', () => supabase
                             .from('departments')
                             .select('permission_overrides')
                             .eq('id', departmentId)
-                            .single()
+                            .single())
                         merged = applyDepartmentOverrides(fallbackPerms, deptData?.permission_overrides)
                     } else {
                         setDeniedPermissions(new Set())
@@ -116,11 +117,11 @@ export function usePermissions(roleLevel?: number, roleCode?: string, department
             const perms = buildDefaultPermissionMap(effectiveRoleLevel)
             let merged = perms
             if (departmentId) {
-                const { data: deptData } = await supabase
+                const { data: deptData } = await timeInventoryOperation(timingTrace, 'permissions.departments', () => supabase
                     .from('departments')
                     .select('permission_overrides')
                     .eq('id', departmentId)
-                    .single()
+                    .single())
                 merged = applyDepartmentOverrides(perms, deptData?.permission_overrides)
             } else {
                 setDeniedPermissions(new Set())
@@ -129,7 +130,7 @@ export function usePermissions(roleLevel?: number, roleCode?: string, department
         } finally {
             setLoading(false)
         }
-    }, [isReady, effectiveRoleLevel, supabase, departmentId, applyDepartmentOverrides])
+    }, [isReady, effectiveRoleLevel, supabase, departmentId, applyDepartmentOverrides, timingTrace])
 
     useEffect(() => {
         loadPermissions()

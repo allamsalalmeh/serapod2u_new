@@ -2,13 +2,15 @@
 
 import { useMemo, useState } from 'react'
 import { AlertTriangle, ShieldAlert, ShieldOff } from 'lucide-react'
+import PermissionTree from './PermissionTree'
 import SearchableSelect from './SearchableSelect'
 import { callApi, formatDate, one, toIso } from './client-api'
-import { FOCUS } from './ui'
+import { FOCUS, ToggleButton } from './ui'
 import {
   ROOT_ACCESS_CONFIRMATION, ROOT_ACCESS_MODULES, ROOT_ACCESS_ORGANIZATIONS, ROOT_ACCESS_WARNING, ROOT_REASON_MAX, ROOT_REASON_MIN,
-  rootAccessCurrent, type RootAccessCapability, type RootAccessInfo,
+  rootAccessCurrent, rootEffectivePermissions, type RootAccessCapability, type RootAccessInfo,
 } from '@/lib/security-access/root-access-shared'
+import type { CataloguePermission } from '@/lib/security-access/rollout'
 
 export type AccessLevel = 'standard' | 'root'
 
@@ -142,7 +144,12 @@ export function RootGrantForm({ candidates, viewerId, onQueryChange, searching, 
 }
 
 /** Root Access status in a person's access detail, with Revoke for another Root Administrator. */
-export function RootAccessCard({ person, viewerIsRoot, isViewer, onChanged }: { person: any; viewerIsRoot: boolean; isViewer: boolean; onChanged: (message: { tone: 'ok' | 'error'; text: string }) => void }) {
+export function RootAccessCard({ person, viewerIsRoot, isViewer, activePermissionCount, permissions, onChanged }: {
+  person: any; viewerIsRoot: boolean; isViewer: boolean; activePermissionCount?: number | null
+  /** The Policies catalogue already loaded for this viewer (Overview read model); undefined when it is not available. */
+  permissions?: CataloguePermission[] | null
+  onChanged: (message: { tone: 'ok' | 'error'; text: string }) => void
+}) {
   const info: RootAccessInfo | null = person.root_access ?? null
   const [busy, setBusy] = useState(false)
   if (!info || !rootAccessCurrent(info)) return null
@@ -150,7 +157,9 @@ export function RootAccessCard({ person, viewerIsRoot, isViewer, onChanged }: { 
   const grantedBy = info.method === 'bootstrap' ? 'Initial setup (database owner)' : info.grantedBy ? (info.grantedBy.name || info.grantedBy.email || 'Root Administrator') : 'Former administrator'
   async function revoke() {
     const reason = window.prompt(`Revoke Root Access from ${who}? Only Root Access ends; their Group Policies and other access stay in place. Reason (at least ${ROOT_REASON_MIN} characters)?`)
-    if (!reason || reason.trim().length < ROOT_REASON_MIN) return
+    if (reason === null) return // cancelled
+    // Never drop a short reason silently: say why nothing was sent.
+    if (reason.trim().length < ROOT_REASON_MIN) { onChanged({ tone: 'error', text: `A reason of at least ${ROOT_REASON_MIN} characters is required. Root Access was not revoked.` }); return }
     setBusy(true)
     const res = await callApi('/api/security-access/root-access', { body: { action: 'revoke', userId: person.id, reason: reason.trim() } })
     setBusy(false)
@@ -166,13 +175,68 @@ export function RootAccessCard({ person, viewerIsRoot, isViewer, onChanged }: { 
         <ShieldOff className="h-3 w-3" aria-hidden />{busy ? 'Revoking…' : 'Revoke Root Access'}</button>}
       {viewerIsRoot && isViewer && <span className="text-xs text-gray-500">You cannot revoke your own Root Access.</span>}
     </div>
+    <div className="border-b border-red-100 bg-red-50/40 px-3 py-2">
+      <p className="text-sm font-semibold text-gray-900">Root Access applies across all modules</p>
+      <p className="text-xs text-gray-600">{activePermissionCount != null
+        ? `Effective for all ${activePermissionCount} active permissions in the current catalogue — Root Access creates no individual grants.`
+        : 'Effective for every active permission in the current catalogue — Root Access creates no individual grants.'}</p>
+    </div>
     <dl className="grid gap-3 px-3 py-2.5 sm:grid-cols-2 lg:grid-cols-4">
+      {row('Status', 'Root Administrator — active')}
       {row('Granted by', grantedBy)}
       {row('Granted', formatDate(info.grantedAt))}
       {row('Expires', info.effectiveUntil ? formatDate(info.effectiveUntil) : 'No expiry')}
       {row('Scope', 'Global — all modules and organizations')}
       <div className="min-w-0 sm:col-span-2 lg:col-span-4"><dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Reason</dt><dd className="whitespace-pre-wrap break-words text-sm text-gray-800">{info.reason}</dd></div>
     </dl>
+    <RootEffectivePermissionsSection permissions={permissions} serverActiveCount={activePermissionCount ?? null} personId={person.id} />
     <p className="border-t border-red-100 px-3 py-2 text-xs text-gray-500">Group Policies below are kept and stay in force if Root Access ends.</p>
   </section>
 }
+
+export const ROOT_EFFECTIVE_EXPLANATION = 'Permissions below are inherited through active Root Access. They are not individual or automatic group-policy assignments.'
+
+/**
+ * Effective Root Permissions: the Roles & Policies → Policies hierarchy restricted to active permissions. Collapsed by
+ * default and rendered only when opened. Display only — nothing here is a grant, and it is shown only inside an active
+ * Root card (RootAccessCard returns nothing once Root Access is revoked or expired).
+ */
+export function RootEffectivePermissionsSection({ permissions, serverActiveCount, personId }: { permissions?: CataloguePermission[] | null; serverActiveCount: number | null; personId: string }) {
+  const [open, setOpen] = useState(false)
+  const model = useMemo(() => rootEffectivePermissions(permissions, serverActiveCount), [permissions, serverActiveCount])
+  const describe = useMemo(() => new Map((permissions || []).filter(p => p.description).map(p => [p.permission_key, String(p.description)])), [permissions])
+  const panelId = `root-effective-${personId}`
+  const shown = model?.rollout.total ?? 0
+  const plural = (n: number) => `${n} active permission${n === 1 ? '' : 's'}`
+  const heading = !model ? 'Effective Root Permissions' : `Effective Root Permissions — ${plural(model.reconciled ? shown : model.serverActiveCount ?? shown)}`
+  return <div className="border-t border-red-100 px-3 py-2.5">
+    <ToggleButton open={open} onClick={() => setOpen(o => !o)} controls={panelId} label={heading}>
+      <span className="text-sm font-semibold text-gray-900">{heading}</span>
+    </ToggleButton>
+    {open && <div id={panelId} className="mt-2 space-y-2">
+      <p className="text-xs text-gray-600">{ROOT_EFFECTIVE_EXPLANATION}</p>
+      {!model
+        ? <p role="alert" className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">The permission catalogue could not be loaded, so the individual permissions cannot be listed. Root Access still applies to every active permission.</p>
+        : <>
+          {!model.reconciled && <p role="alert" className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            Showing {plural(shown)} of {model.serverActiveCount} reported by the catalogue. The list below may be incomplete; reload to refresh it. Root Access still applies to every active permission.</p>}
+          {model.inactiveExcluded > 0 && <p className="text-xs text-gray-500">{model.inactiveExcluded} inactive catalogue permission{model.inactiveExcluded === 1 ? ' is' : 's are'} not listed or counted.</p>}
+          <PermissionTree
+            rollout={model.rollout}
+            showModes={false}
+            fitWidth
+            headingLevel="h4"
+            title="Effective Root Permissions"
+            searchPlaceholder="Search permissions"
+            emptyText="No active permissions are registered in the catalogue."
+            renderSubtitle={p => describe.has(p.key) ? <div className="text-xs text-gray-500">{describe.get(p.key)}</div> : null}
+            renderDetails={() => <span className="flex flex-wrap gap-1">
+              <span className="rounded bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-700">Allowed by Root</span>
+              <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-600">Scope: Global</span>
+            </span>}
+          />
+        </>}
+    </div>}
+  </div>
+}
+

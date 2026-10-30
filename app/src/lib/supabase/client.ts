@@ -1,3 +1,4 @@
+import { inventoryDiagnosticFetch } from '@/lib/inventory/inventory-timing'
 import { createBrowserClient } from '@supabase/ssr'
 import { Database } from '@/types/database'
 
@@ -25,7 +26,8 @@ export function createClient() {
   // Create new client with proper configuration
   client = createBrowserClient<Database>(
     supabaseUrl,
-    supabaseAnonKey
+    supabaseAnonKey,
+    process.env.NODE_ENV === 'development' ? { global: { fetch: inventoryDiagnosticFetch } } : undefined
   )
 
   return client

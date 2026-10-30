@@ -21,6 +21,12 @@ export const smsTemplates: Record<string, SmsTemplate[]> = {
         description: 'Short SMS when a new order needs approval',
         channel: 'sms',
         body: `[Serapod]  Order #{{order_no}} submitted by {{User}} for RM {{amount}} needs approval.`,
+    }, {
+        id: 'os_sms_partner',
+        name: 'SMS Partner Update',
+        description: 'For the distributor or manufacturer on the order — approval stays with HQ',
+        channel: 'sms',
+        body: `[Serapod2U] Order #{{order_no}} submitted (RM {{amount}}). Awaiting HQ approval; no action needed yet.`,
     }],
     order_approved: [{
         id: 'oa_sms_1',

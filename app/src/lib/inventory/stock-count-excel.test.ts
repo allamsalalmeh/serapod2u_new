@@ -44,7 +44,7 @@ describe('Stock Count Excel', () => {
     expect(extractFlavour('Variant without square brackets')).toBe('')
   })
 
-  it('exports configuration identity and dimensions in the exact A-M order', () => {
+  it('exports configuration identity, stock unit context, and dimensions in the exact A-P order', () => {
     const workbook = new ExcelJS.Workbook()
     const sheet = buildStockCountWorksheet(workbook, sourceRows)
 
@@ -56,16 +56,46 @@ describe('Stock Count Excel', () => {
     expect(sheet.getCell('E2').value).toBe('New Box')
     expect(sheet.getCell('J2').value).toBe('00123')
     expect(sheet.getColumn(10).numFmt).toBe('@')
-    expect(sheet.autoFilter).toEqual({ from: 'A1', to: 'M1' })
+    expect(sheet.autoFilter).toEqual({ from: 'A1', to: 'P1' })
+  })
+
+  it('states the stock unit and piece equivalent without rescaling the balance', () => {
+    const workbook = new ExcelJS.Workbook()
+    const sheet = buildStockCountWorksheet(workbook, [
+      { ...sourceRows[0], stockUnit: 'cases', unitsPerCase: 4, systemQuantity: 3861 },
+      { ...sourceRows[1], stockUnit: 'pcs', unitsPerCase: 1, systemQuantity: 140 },
+    ])
+
+    // Case-stocked row: 3,861 stays 3,861 cases; the pcs figure is secondary.
+    expect(sheet.getCell('K2').value).toBe('Cases')
+    expect(sheet.getCell('L2').value).toBe(4)
+    expect(sheet.getCell('M2').value).toBe(3861)
+    expect(sheet.getCell('N2').value).toBe(15444)
+
+    // Piece-stocked row: unit is pcs and the equivalent is the same number.
+    expect(sheet.getCell('K3').value).toBe('Pcs')
+    expect(sheet.getCell('L3').value).toBe(1)
+    expect(sheet.getCell('M3').value).toBe(140)
+    expect(sheet.getCell('N3').value).toBe(140)
+  })
+
+  it('defaults an unlabelled row to pieces so no pack size is ever applied', () => {
+    const workbook = new ExcelJS.Workbook()
+    const sheet = buildStockCountWorksheet(workbook, sourceRows)
+
+    expect(sheet.getCell('K2').value).toBe('Pcs')
+    expect(sheet.getCell('L2').value).toBe(1)
+    expect(sheet.getCell('M2').value).toBe(3997)
+    expect(sheet.getCell('N2').value).toBe(3997)
   })
 
   it('matches two rows for one flavour independently by Stock Configuration ID', () => {
     const workbook = new ExcelJS.Workbook()
     const sheet = buildStockCountWorksheet(workbook, sourceRows)
-    sheet.getCell('L2').value = 25
-    sheet.getCell('M2').value = '20ml shelf'
-    sheet.getCell('L3').value = 8
-    sheet.getCell('M3').value = '50ml shelf'
+    sheet.getCell('O2').value = 25
+    sheet.getCell('P2').value = '20ml shelf'
+    sheet.getCell('O3').value = 8
+    sheet.getCell('P3').value = '50ml shelf'
 
     const result = parseStockCountWorksheet(sheet, targets())
     expect(result.patches.get('config-20nb')).toEqual({ physicalCount: '25', note: '20ml shelf' })
@@ -80,9 +110,9 @@ describe('Stock Count Excel', () => {
       target.stockConfigId === 'config-20nb'
         ? { ...target, physicalCount: '17', note: 'counted yesterday' }
         : target)
-    sheet.getCell('L2').value = null
-    sheet.getCell('M2').value = null
-    sheet.getCell('L3').value = 0
+    sheet.getCell('O2').value = null
+    sheet.getCell('P2').value = null
+    sheet.getCell('O3').value = 0
 
     const result = parseStockCountWorksheet(sheet, existingTargets)
 
@@ -119,6 +149,27 @@ describe('Stock Count Excel', () => {
     )
   })
 
+  it('still imports a template exported before the Stock Unit columns existed', () => {
+    const workbook = new ExcelJS.Workbook()
+    const sheet = workbook.addWorksheet('Stock Count')
+    // The previous 13-column layout: identification, System Quantity, Physical
+    // Count, Note — no Stock Unit / Units per Case / System Qty (Pcs).
+    sheet.addRow([
+      'Stock Configuration ID', 'Stock SKU', 'Variant ID', 'Volume (ml)', 'Packaging Version',
+      'Product Group/Brand', 'Variant Name', 'Product Name', 'Flavour', 'Product Code',
+      'System Quantity', 'Physical Count', 'Note',
+    ])
+    sheet.addRow([
+      'config-20nb', 'SKU-001-20NB', 'variant-1', 20, 'New Box', 'Cartridge',
+      'Deluxe Cellera Cartridge [ Banana Milk ]', 'Cellera Hero', '[Banana Milk]', '00123',
+      3997, 25, 'old template',
+    ])
+
+    const result = parseStockCountWorksheet(sheet, targets())
+    expect(result.failed).toBe(0)
+    expect(result.patches.get('config-20nb')).toEqual({ physicalCount: '25', note: 'old template' })
+  })
+
   it('does not silently accept a mismatched Variant ID', () => {
     const workbook = new ExcelJS.Workbook()
     const sheet = buildStockCountWorksheet(workbook, sourceRows)
@@ -148,8 +199,8 @@ describe('Stock Count Excel', () => {
 
     expect(sheet.getCell('A2').text).toBe('config-20nb')
     expect(sheet.getCell('J2').text).toBe('00123')
-    sheet.getCell('L2').value = 3998
-    sheet.getCell('M2').value = 'Round trip'
+    sheet.getCell('O2').value = 3998
+    sheet.getCell('P2').value = 'Round trip'
 
     const result = parseStockCountWorksheet(sheet, targets())
     expect(result.patches.get('config-20nb')).toEqual({ physicalCount: '3998', note: 'Round trip' })

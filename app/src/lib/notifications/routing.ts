@@ -4,6 +4,11 @@ export type NotificationRoutingPreset =
     | 'sms_only'
     | 'whatsapp_email_fallback'
     | 'whatsapp_sms_email_fallback'
+    // Independent channels: every listed channel is sent, none waits for another to fail.
+    | 'whatsapp_sms'
+    | 'whatsapp_email'
+    | 'sms_email'
+    | 'whatsapp_sms_email'
 
 export type NotificationDeliveryChannel = 'whatsapp' | 'sms' | 'email'
 
@@ -15,7 +20,32 @@ const VALID_PRESETS: NotificationRoutingPreset[] = [
     'sms_only',
     'whatsapp_email_fallback',
     'whatsapp_sms_email_fallback',
+    'whatsapp_sms',
+    'whatsapp_email',
+    'sms_email',
+    'whatsapp_sms_email',
 ]
+
+const MULTI_CHANNEL_PRESETS: Record<string, NotificationDeliveryChannel[]> = {
+    whatsapp_sms: ['whatsapp', 'sms'],
+    whatsapp_email: ['whatsapp', 'email'],
+    sms_email: ['sms', 'email'],
+    whatsapp_sms_email: ['whatsapp', 'sms', 'email'],
+}
+
+/**
+ * Independent multi-channel presets ("WhatsApp + SMS"): the same event is sent on
+ * every listed channel. This is not a fallback — no channel waits for another to
+ * fail — and a saved fallback preset is never read as one of these.
+ */
+export function isMultiChannelPreset(preset: unknown): preset is NotificationRoutingPreset {
+    return typeof preset === 'string' && preset in MULTI_CHANNEL_PRESETS
+}
+
+/** Channels a preset sends on independently (empty for single-channel and fallback presets). */
+export function independentChannelsForPreset(preset: NotificationRoutingPreset): NotificationDeliveryChannel[] {
+    return [...(MULTI_CHANNEL_PRESETS[preset] || [])]
+}
 
 export function isNotificationRoutingPreset(value: unknown): value is NotificationRoutingPreset {
     return typeof value === 'string' && VALID_PRESETS.includes(value as NotificationRoutingPreset)
@@ -26,6 +56,8 @@ export function isNotificationRoutingPreset(value: unknown): value is Notificati
  * advances to later hops only after the current hop fails.
  */
 export function deliveryChainForPreset(preset: NotificationRoutingPreset): NotificationDeliveryChannel[] {
+    // Multi-channel presets list their channels; they are all sent, not tried in turn.
+    if (isMultiChannelPreset(preset)) return independentChannelsForPreset(preset)
     if (preset === 'email_only') return ['email']
     if (preset === 'sms_only') return ['sms']
     if (preset === 'whatsapp_only') return ['whatsapp']
@@ -48,6 +80,8 @@ export function nextFallbackChannels(
     preset: NotificationRoutingPreset,
     failedChannel: NotificationDeliveryChannel,
 ): NotificationDeliveryChannel[] {
+    // Independent channels already have their own rows; a failure never adds another channel.
+    if (isMultiChannelPreset(preset)) return []
     const chain = deliveryChainForPreset(preset)
     const index = chain.indexOf(failedChannel)
     if (index < 0) return []
@@ -131,6 +165,7 @@ export function resolveNotificationRoutingPreset(setting: any, useSavedDefault =
         || preset === 'sms_only'
         || preset === 'whatsapp_email_fallback'
         || preset === 'whatsapp_sms_email_fallback'
+        || isMultiChannelPreset(preset)
     ) {
         return preset
     }

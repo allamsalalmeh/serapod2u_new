@@ -21,10 +21,28 @@ export function resolveRuntimeEnvironment(env: NodeJS.ProcessEnv = process.env):
   return 'production'
 }
 
-/** Build identifier inlined at build time (next.config.js → NEXT_PUBLIC_APP_BUILD). */
+const BUILD_ID_PATTERN = /^[A-Za-z0-9._+-]{1,64}$/
+
+/**
+ * Build identifier, resolved from trusted runtime configuration only (never from a request).
+ *
+ * Order: the build-time-inlined NEXT_PUBLIC_APP_BUILD, then an explicit APP_BUILD_ID, then the
+ * deployment commit (SOURCE_COMMIT / GIT_COMMIT_SHA — Coolify sets these at runtime on the container).
+ * Falling back to the runtime commit fixes the "App build: unknown" gap on self-hosted deployments,
+ * where the build-time inlining of NEXT_PUBLIC_APP_BUILD does not survive the standalone server bundle.
+ */
 export function appBuild(env: NodeJS.ProcessEnv = process.env): string {
-  const raw = String(env.NEXT_PUBLIC_APP_BUILD ?? '').trim()
-  return /^[A-Za-z0-9._+-]{1,64}$/.test(raw) ? raw : 'unknown'
+  const candidates = [
+    env.NEXT_PUBLIC_APP_BUILD,
+    env.APP_BUILD_ID,
+    env.SOURCE_COMMIT,
+    env.GIT_COMMIT_SHA,
+  ]
+  for (const raw of candidates) {
+    const value = String(raw ?? '').trim()
+    if (BUILD_ID_PATTERN.test(value)) return value.slice(0, 64)
+  }
+  return 'unknown'
 }
 
 function hostOf(raw: string | undefined): string | null {

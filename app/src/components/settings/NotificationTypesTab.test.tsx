@@ -101,7 +101,7 @@ describe('NotificationTypesTab', () => {
       expect(moduleButton(name).getAttribute('aria-expanded')).toBe('false')
     }
     expect(moduleButton('Supply Chain').textContent).toContain('3 categories · 4/5 enabled')
-    expect(screen.queryByText('Order Status')).toBeNull()
+    expect(screen.queryByText('Sales Orders')).toBeNull()
     expect(screen.queryByText('RoadTour')).toBeNull()
   })
 
@@ -110,7 +110,7 @@ describe('NotificationTypesTab', () => {
     expect(screen.getByText('Manage notifications by module.')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /Expand all/ }))
     const supply = screen.getByRole('region', { name: 'Supply Chain' })
-    expect(within(supply).getByText('Order Status')).toBeTruthy()
+    expect(within(supply).getByText('Sales Orders')).toBeTruthy()
     expect(within(supply).getByText('Inventory & Stock')).toBeTruthy()
     expect(within(supply).getByText(/3 categories · 4\/5 enabled/)).toBeTruthy()
     const growth = screen.getByRole('region', { name: 'Customer & Growth' })
@@ -190,10 +190,10 @@ describe('NotificationTypesTab', () => {
   it('labels inherited and custom delivery', async () => {
     await renderTab()
     await openModule('Supply Chain')
-    const category = screen.getByLabelText('Order Status routing') as HTMLSelectElement
+    const category = screen.getByLabelText('Sales Orders routing') as HTMLSelectElement
     expect(category.selectedOptions[0].textContent).toBe('Default · WhatsApp → Email')
     await userEvent.selectOptions(category, 'email_only')
-    await userEvent.click(categoryButton('Order Status'))
+    await userEvent.click(categoryButton('Sales Orders'))
     const event = screen.getByLabelText('Order Submitted routing') as HTMLSelectElement
     expect(event.selectedOptions[0].textContent).toBe('Category · Email')
     await userEvent.selectOptions(event, 'whatsapp_only')
@@ -217,13 +217,13 @@ describe('NotificationTypesTab', () => {
     await userEvent.type(screen.getByLabelText('Search notifications'), 'verification code')
     expect(moduleButton('Platform & Settings').getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText('Delete Organization Verification Code')).toBeTruthy()
-    expect(screen.queryByText('Order Status')).toBeNull()
+    expect(screen.queryByText('Sales Orders')).toBeNull()
     await userEvent.clear(screen.getByLabelText('Search notifications'))
     expect(screen.queryByText('Delete Organization Verification Code')).toBeNull()
     expect(moduleButton('Platform & Settings').getAttribute('aria-expanded')).toBe('false')
     expect(moduleButton('Supply Chain').getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getByText('Order Status')).toBeTruthy()
-    expect(categoryButton('Order Status').getAttribute('aria-expanded')).toBe('false')
+    expect(screen.getByText('Sales Orders')).toBeTruthy()
+    expect(categoryButton('Sales Orders').getAttribute('aria-expanded')).toBe('false')
   })
 
   it('expands module → category → notification, and Expand/Collapse all covers both levels', async () => {
@@ -243,7 +243,7 @@ describe('NotificationTypesTab', () => {
     for (const name of ['Supply Chain', 'Customer & Growth', 'Platform & Settings']) {
       expect(moduleButton(name).getAttribute('aria-expanded')).toBe('false')
     }
-    expect(screen.queryByText('Order Status')).toBeNull()
+    expect(screen.queryByText('Sales Orders')).toBeNull()
   })
 
   it('collapsing a module keeps unsaved edits and does not save', async () => {
@@ -264,7 +264,7 @@ describe('NotificationTypesTab', () => {
     await renderTab()
     await userEvent.selectOptions(screen.getByLabelText('Filter by status'), 'disabled')
     await userEvent.click(screen.getByRole('button', { name: /Expand all/ }))
-    expect(screen.getByText('Order Status')).toBeTruthy()
+    expect(screen.getByText('Sales Orders')).toBeTruthy()
     expect(screen.queryByText('User Account')).toBeNull()
     await userEvent.type(screen.getByLabelText('Search notifications'), 'nothing-matches-this')
     expect(screen.getByText('No notifications match these filters.')).toBeTruthy()
@@ -308,7 +308,7 @@ describe('NotificationTypesTab', () => {
   })
   it('saves a delivery change made in Configure as that notification\'s own setting', async () => {
     await renderTab()
-    await openCategory('Supply Chain', 'Order Status')
+    await openCategory('Supply Chain', 'Sales Orders')
     const configure = within(screen.getByText('Order Submitted').closest('li')!).getByRole('button', { name: /Configure/ })
     await userEvent.click(configure)
     expect(drawerProps.delivery).toMatchObject({ preset: 'whatsapp_email_fallback', source: 'default', eventPreset: null, forced: false })
@@ -329,7 +329,7 @@ describe('NotificationTypesTab', () => {
 
   it('a drawer save without delivery options publishes only the saved routing', async () => {
     await renderTab()
-    await openCategory('Supply Chain', 'Order Status')
+    await openCategory('Supply Chain', 'Sales Orders')
     await userEvent.selectOptions(screen.getByLabelText('Order Submitted routing'), 'email_only')
     await userEvent.click(within(screen.getByText('Order Submitted').closest('li')!).getByRole('button', { name: /Configure/ }))
     expect(drawerProps.delivery).toMatchObject({ preset: 'email_only', source: 'custom', eventPreset: 'email_only', savedEventPreset: null, pageHasOtherUnsavedChanges: false })
@@ -340,7 +340,7 @@ describe('NotificationTypesTab', () => {
   })
   it('flags other unsaved page edits separately from this notification\'s own delivery', async () => {
     await renderTab()
-    await openCategory('Supply Chain', 'Order Status')
+    await openCategory('Supply Chain', 'Sales Orders')
     await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Default delivery' })).getByRole('radio', { name: 'Email' }))
     await userEvent.click(within(screen.getByText('Order Submitted').closest('li')!).getByRole('button', { name: /Configure/ }))
     expect(drawerProps.delivery).toMatchObject({ inherited: { preset: 'email_only', source: 'default' }, savedEventPreset: null, pageHasOtherUnsavedChanges: true })
@@ -348,5 +348,28 @@ describe('NotificationTypesTab', () => {
     // The page default stays unsaved and is still shown as pending.
     expect(screen.getByText('Unsaved changes')).toBeTruthy()
     expect(upsert.mock.calls[0][0].recipient_config.routing).toMatchObject({ default_preset: 'whatsapp_email_fallback' })
+  })
+
+  it('display groups that share one stored category show one synchronised setting and say so', async () => {
+    const extra = { id: 'qr_batch_generated', category: 'order', event_code: 'qr_batch_generated', event_name: 'QR Batch Generated', event_description: 'QR', default_enabled: true, available_channels: ['whatsapp', 'email', 'sms'], is_system: false }
+    types.push(extra)
+    try {
+      await renderTab()
+      await openModule('Supply Chain')
+      const sales = screen.getByLabelText('Sales Orders routing') as HTMLSelectElement
+      const production = screen.getByLabelText('Production & Receiving routing') as HTMLSelectElement
+      expect(screen.getByText(/Category delivery is shared with Production & Receiving\./)).toBeTruthy()
+      expect(screen.getByText(/Category delivery is shared with Sales Orders\./)).toBeTruthy()
+      await userEvent.selectOptions(sales, 'email_only')
+      expect(production.value).toBe('email_only')
+      // Saved under the one stored category, so every order event routes the same way.
+      await userEvent.click(screen.getByRole('button', { name: /Save Changes/ }))
+      const rows = upsert.mock.calls[0][0]
+      for (const code of ['order_submitted', 'qr_batch_generated']) {
+        expect(rows.find((row: any) => row.event_code === code).recipient_config.routing).toMatchObject({ preset: 'email_only', source: 'category', category_preset: 'email_only' })
+      }
+    } finally {
+      types.splice(types.indexOf(extra), 1)
+    }
   })
 })

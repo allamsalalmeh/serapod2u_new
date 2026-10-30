@@ -40,6 +40,8 @@ interface LoginPageClientProps {
         copyrightText: string
     }
     loginBanners: HeroBanner[]
+    /** Fixed by the address: business on the staff portal, store on the customer store. */
+    hostMode?: 'business' | 'store' | null
 }
 
 const WORDMARK_SRC = '/brand/serapod-wordmark.png'
@@ -70,7 +72,7 @@ function BrandWordmark({
 
 // ── Component ─────────────────────────────────────────────────────
 
-export default function LoginPageClient({ branding, loginBanners }: LoginPageClientProps) {
+export default function LoginPageClient({ branding, loginBanners, hostMode = null }: LoginPageClientProps) {
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
     const [showPassword, setShowPassword] = useState(false)
@@ -80,13 +82,13 @@ export default function LoginPageClient({ branding, loginBanners }: LoginPageCli
     const router = useRouter()
 
     // Mode from URL: ?mode=store | ?mode=business (UI copy only)
-    const [mode, setMode] = useState<'store' | 'business'>('store')
+    const [mode, setMode] = useState<'store' | 'business'>(hostMode ?? 'store')
     const [signupHref, setSignupHref] = useState('/signup')
     const [nextPath, setNextPath] = useState('/store')
     useEffect(() => {
         const params = new URLSearchParams(window.location.search)
         const m = params.get('mode')
-        if (m === 'business') setMode('business')
+        if (!hostMode && m === 'business') setMode('business')
         // Show session replaced message
         if (params.get('reason') === 'session_replaced') {
             setError('You were signed out because your account was accessed from another device.')
@@ -163,11 +165,11 @@ export default function LoginPageClient({ branding, loginBanners }: LoginPageCli
             try {
                 const params = new URLSearchParams(window.location.search)
                 const nextParam = params.get('next') || params.get('redirect')
-                const isStorefrontReturn =
+                const isStorefrontReturn = hostMode === 'store' || (
                     !!nextParam &&
                     nextParam.startsWith('/') &&
                     !nextParam.startsWith('//') &&
-                    (nextParam.startsWith('/outdoor') || nextParam.startsWith('/store') || params.get('mode') === 'store')
+                    (nextParam.startsWith('/outdoor') || nextParam.startsWith('/store') || params.get('mode') === 'store'))
 
                 const supabase = createClient()
                 const { data: { user }, error } = await supabase.auth.getUser()
@@ -464,7 +466,9 @@ export default function LoginPageClient({ branding, loginBanners }: LoginPageCli
                             <p className="mt-2 text-sm sm:text-[15px] text-[var(--sera-muted)] leading-relaxed">
                                 {mode === 'business'
                                     ? 'Sign in to access your Serapod business dashboard.'
-                                    : (branding.loginSubtitle || 'Sign in to continue to your workspace.')}
+                                    : hostMode === 'store'
+                                        ? 'Sign in to your Serapod2U account to shop and track your orders.'
+                                        : (branding.loginSubtitle || 'Sign in to continue to your workspace.')}
                             </p>
                         </div>
 
@@ -545,30 +549,34 @@ export default function LoginPageClient({ branding, loginBanners }: LoginPageCli
                             </Link>
                         </div>
 
-                        <div className="relative my-8 login-rise login-rise-delay-3">
-                            <div className="absolute inset-0 flex items-center">
-                                <div className="w-full border-t border-[var(--sera-line)]" />
-                            </div>
-                            <div className="relative flex justify-center text-[11px] uppercase tracking-[0.18em]">
-                                <span className="bg-[var(--sera-paper)] px-3 text-[var(--sera-muted)] font-medium">OR</span>
-                            </div>
-                        </div>
+                        {hostMode !== 'business' && (
+                            <>
+                                <div className="relative my-8 login-rise login-rise-delay-3">
+                                    <div className="absolute inset-0 flex items-center">
+                                        <div className="w-full border-t border-[var(--sera-line)]" />
+                                    </div>
+                                    <div className="relative flex justify-center text-[11px] uppercase tracking-[0.18em]">
+                                        <span className="bg-[var(--sera-paper)] px-3 text-[var(--sera-muted)] font-medium">OR</span>
+                                    </div>
+                                </div>
 
-                        <div className="login-rise login-rise-delay-4">
-                            <SocialAuthButtons
-                                nextPath={nextPath}
-                                disabled={isLoading}
-                                onError={setError}
-                                variant="portal"
-                            />
-                        </div>
+                                <div className="login-rise login-rise-delay-4">
+                                    <SocialAuthButtons
+                                        nextPath={nextPath}
+                                        disabled={isLoading}
+                                        onError={setError}
+                                        variant="portal"
+                                    />
+                                </div>
 
-                        <div className="mt-8 text-center text-sm text-[var(--sera-muted)] login-rise login-rise-delay-4">
-                            New to Serapod2U?{' '}
-                            <Link href={signupHref} className="font-semibold text-[var(--sera-ink)] hover:text-[var(--sera-orange)] transition-colors">
-                                Sign Up
-                            </Link>
-                        </div>
+                                <div className="mt-8 text-center text-sm text-[var(--sera-muted)] login-rise login-rise-delay-4">
+                                    New to Serapod2U?{' '}
+                                    <Link href={signupHref} className="font-semibold text-[var(--sera-ink)] hover:text-[var(--sera-orange)] transition-colors">
+                                        Sign Up
+                                    </Link>
+                                </div>
+                            </>
+                        )}
                     </div>
                 </div>
 

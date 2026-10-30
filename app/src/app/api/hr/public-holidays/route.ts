@@ -4,11 +4,14 @@ import { createClient } from '@/lib/supabase/server'
 
 // ─── Malaysian Public Holidays 2026–2030 ─────────────────────────
 // Fixed dates are exact; Islamic/lunar dates are approximate & shift each year.
+// `category` is template metadata only (hr_public_holidays has no category column). B2B: only 'national' rows are
+// loaded automatically; state holidays (Thaipusam, Federal Territory Day, …) are added by HR with their `state`
+// until state calendars exist (B6). HR reviews the loaded calendar before go-live (Gate 4.9).
 
 const MALAYSIA_HOLIDAYS: Record<number, { name: string; date: string; is_recurring: boolean; category: string }[]> = {
     2026: [
         { name: "New Year's Day", date: '2026-01-01', is_recurring: true, category: 'national' },
-        { name: 'Thaipusam', date: '2026-01-25', is_recurring: false, category: 'national' },
+        { name: 'Thaipusam', date: '2026-01-25', is_recurring: false, category: 'state' },
         { name: 'Federal Territory Day', date: '2026-02-01', is_recurring: true, category: 'state' },
         { name: 'Israk & Mikraj', date: '2026-02-17', is_recurring: false, category: 'national' },
         { name: 'Nuzul Al-Quran', date: '2026-03-20', is_recurring: false, category: 'national' },
@@ -28,7 +31,7 @@ const MALAYSIA_HOLIDAYS: Record<number, { name: string; date: string; is_recurri
     ],
     2027: [
         { name: "New Year's Day", date: '2027-01-01', is_recurring: true, category: 'national' },
-        { name: 'Thaipusam', date: '2027-01-14', is_recurring: false, category: 'national' },
+        { name: 'Thaipusam', date: '2027-01-14', is_recurring: false, category: 'state' },
         { name: 'Federal Territory Day', date: '2027-02-01', is_recurring: true, category: 'state' },
         { name: 'Israk & Mikraj', date: '2027-02-06', is_recurring: false, category: 'national' },
         { name: 'Nuzul Al-Quran', date: '2027-03-10', is_recurring: false, category: 'national' },
@@ -48,7 +51,7 @@ const MALAYSIA_HOLIDAYS: Record<number, { name: string; date: string; is_recurri
     ],
     2028: [
         { name: "New Year's Day", date: '2028-01-01', is_recurring: true, category: 'national' },
-        { name: 'Thaipusam', date: '2028-01-14', is_recurring: false, category: 'national' },
+        { name: 'Thaipusam', date: '2028-01-14', is_recurring: false, category: 'state' },
         { name: 'Federal Territory Day', date: '2028-02-01', is_recurring: true, category: 'state' },
         { name: 'Israk & Mikraj', date: '2028-01-27', is_recurring: false, category: 'national' },
         { name: 'Nuzul Al-Quran', date: '2028-02-28', is_recurring: false, category: 'national' },
@@ -68,7 +71,7 @@ const MALAYSIA_HOLIDAYS: Record<number, { name: string; date: string; is_recurri
     ],
     2029: [
         { name: "New Year's Day", date: '2029-01-01', is_recurring: true, category: 'national' },
-        { name: 'Thaipusam', date: '2029-02-01', is_recurring: false, category: 'national' },
+        { name: 'Thaipusam', date: '2029-02-01', is_recurring: false, category: 'state' },
         { name: 'Federal Territory Day', date: '2029-02-01', is_recurring: true, category: 'state' },
         { name: 'Israk & Mikraj', date: '2029-01-16', is_recurring: false, category: 'national' },
         { name: 'Nuzul Al-Quran', date: '2029-02-17', is_recurring: false, category: 'national' },
@@ -89,7 +92,7 @@ const MALAYSIA_HOLIDAYS: Record<number, { name: string; date: string; is_recurri
     2030: [
         { name: "New Year's Day", date: '2030-01-01', is_recurring: true, category: 'national' },
         { name: 'Israk & Mikraj', date: '2030-01-05', is_recurring: false, category: 'national' },
-        { name: 'Thaipusam', date: '2030-01-21', is_recurring: false, category: 'national' },
+        { name: 'Thaipusam', date: '2030-01-21', is_recurring: false, category: 'state' },
         { name: 'Federal Territory Day', date: '2030-02-01', is_recurring: true, category: 'state' },
         { name: 'Nuzul Al-Quran', date: '2030-02-07', is_recurring: false, category: 'national' },
         { name: 'Hari Raya Aidilfitri (Day 1)', date: '2030-02-16', is_recurring: false, category: 'national' },
@@ -196,21 +199,27 @@ export async function POST(request: NextRequest) {
                     .lte('date', `${year}-12-31`)
             }
 
-            const rows = template.map(h => ({
+            const national = template.filter(h => h.category === 'national')
+            const skippedState = template.filter(h => h.category !== 'national').map(h => h.name)
+            const rows = national.map(h => ({
                 organization_id: ctx.orgId,
                 name: h.name,
                 date: h.date,
                 is_recurring: h.is_recurring,
-                category: h.category,
             }))
 
             const { error } = await supabase.from('hr_public_holidays').insert(rows)
             if (error) return NextResponse.json({ error: error.message }, { status: 400 })
-            return NextResponse.json({ success: true, message: `${rows.length} holidays loaded for ${year}`, count: rows.length })
+            return NextResponse.json({
+                success: true,
+                message: `${rows.length} national holidays loaded for ${year}` + (skippedState.length ? `; state holidays not loaded: ${skippedState.join(', ')}` : ''),
+                count: rows.length,
+                skippedState,
+            })
         }
 
         // Create single holiday
-        const { name, date, is_recurring, category, state } = body
+        const { name, date, is_recurring, state } = body
         if (!name || !date) return NextResponse.json({ error: 'name and date required' }, { status: 400 })
 
         const { data, error } = await supabase
@@ -220,7 +229,6 @@ export async function POST(request: NextRequest) {
                 name,
                 date,
                 is_recurring: is_recurring || false,
-                category: category || 'custom',
                 state: state || null,
             })
             .select()
@@ -244,8 +252,11 @@ export async function PUT(request: NextRequest) {
             'hr.settings.manage', () => ctx.roleLevel <= 20))) return NextResponse.json({ error: 'Admin only' }, { status: 403 })
 
         const body = await request.json()
-        const { id, ...updates } = body
+        const { id } = body
         if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
+        // Only real hr_public_holidays columns may change (no category column).
+        const updates: Record<string, unknown> = {}
+        for (const key of ['name', 'date', 'is_recurring', 'state'] as const) if (body[key] !== undefined) updates[key] = body[key]
 
         const { data, error } = await supabase
             .from('hr_public_holidays')

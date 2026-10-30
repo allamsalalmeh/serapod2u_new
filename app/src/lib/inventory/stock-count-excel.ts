@@ -1,4 +1,5 @@
 import type ExcelJS from 'exceljs'
+import { stockUnitDisplayLabel } from './stock-count-quantity'
 
 const STOCK_COUNT_METADATA_SHEET = '_Serapod2U_Metadata'
 
@@ -20,7 +21,14 @@ export const STOCK_COUNT_EXCEL_HEADERS = [
   'Product Name',
   'Flavour',
   'Product Code',
+  // Unit context. The balance is integer CASES for cartridge products and
+  // integer PIECES for everything else, so the worksheet states which unit
+  // "System Quantity" and "Physical Count" are expressed in — a case figure is
+  // never silently multiplied by the pack size.
+  'Stock Unit',
+  'Units per Case',
   'System Quantity',
+  'System Qty (Pcs)',
   'Physical Count',
   'Note',
 ] as const
@@ -42,6 +50,10 @@ export interface StockCountExcelRow {
   variantName: string
   productName: string
   productCode: string | null
+  /** Unit `systemQuantity` and the entered physical count are expressed in. */
+  stockUnit?: 'cases' | 'pcs'
+  /** Pieces in one stock case. Only meaningful when `stockUnit` is 'cases'. */
+  unitsPerCase?: number
   systemQuantity: number
   physicalCount: string
   note: string
@@ -91,6 +103,10 @@ export function buildStockCountWorksheet(
   worksheet.addRow([...STOCK_COUNT_EXCEL_HEADERS])
 
   rows.forEach((row) => {
+    const stockUnit = row.stockUnit ?? 'pcs'
+    const unitsPerCase = stockUnit === 'cases' && row.unitsPerCase && row.unitsPerCase > 0
+      ? row.unitsPerCase
+      : 1
     worksheet.addRow([
       row.stockConfigId,
       row.stockSku,
@@ -102,7 +118,11 @@ export function buildStockCountWorksheet(
       row.productName,
       extractFlavour(row.variantName) || null,
       row.productCode || null,
+      stockUnitDisplayLabel(stockUnit),
+      unitsPerCase,
       row.systemQuantity,
+      // Display-only piece equivalent so a case balance is never misread as pcs.
+      stockUnit === 'cases' ? row.systemQuantity * unitsPerCase : row.systemQuantity,
       row.physicalCount.trim() === '' ? null : Number(row.physicalCount),
       row.note || null,
     ])
@@ -111,10 +131,11 @@ export function buildStockCountWorksheet(
   worksheet.columns = [
     { width: 38 }, { width: 24 }, { width: 38 }, { width: 14 },
     { width: 20 }, { width: 24 }, { width: 42 }, { width: 34 },
-    { width: 24 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 34 },
+    { width: 24 }, { width: 18 }, { width: 14 }, { width: 15 },
+    { width: 18 }, { width: 18 }, { width: 18 }, { width: 34 },
   ]
   worksheet.views = [{ state: 'frozen', ySplit: 1 }]
-  worksheet.autoFilter = { from: 'A1', to: 'M1' }
+  worksheet.autoFilter = { from: 'A1', to: 'P1' }
 
   const header = worksheet.getRow(1)
   header.height = 24
@@ -124,11 +145,14 @@ export function buildStockCountWorksheet(
   header.eachCell((cell) => {
     cell.border = { bottom: { style: 'thin', color: { argb: 'FFC2410C' } } }
   })
+  // Physical Count is entered in the row's Stock Unit (column K). Say so in
+  // place instead of leaving the unit to be guessed from another column.
+  worksheet.getCell('O1').note = 'Enter the physical count in the Stock Unit shown in column K (Cases or Pcs). A case count is never converted to pieces.'
 
   for (const column of [1, 2, 3, 10]) worksheet.getColumn(column).numFmt = '@'
   worksheet.getColumn(4).numFmt = '0'
-  worksheet.getColumn(11).numFmt = '#,##0'
-  worksheet.getColumn(12).numFmt = '#,##0'
+  worksheet.getColumn(12).numFmt = '0'
+  for (const column of [13, 14, 15]) worksheet.getColumn(column).numFmt = '#,##0'
 
   if (context) {
     const metadata = workbook.addWorksheet(STOCK_COUNT_METADATA_SHEET)

@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
         })
         if (!companyId) return NextResponse.json({ error: 'Company not found' }, { status: 404 })
         if (!(await hrCan({ userId: user.id, organizationId: userData.organization_id, roleCode: null, roleLevel: (userData.roles as any)?.role_level ?? null },
-            'finance.payroll_integration.manage', () => true))) {
+            'finance.payroll_integration.manage'))) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
         }
 
@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
         // ── 2. Load run items (aggregates) ───────────────────────────
         const { data: items, error: itemsErr } = await supabase
             .from('hr_payroll_run_items')
-            .select('basic_salary, overtime_amount, allowances_amount, epf_employee, socso_employee, eis_employee, pcb_amount, epf_employer, socso_employer, eis_employer, net_amount, gross_salary')
+            .select('basic_salary, overtime_amount, allowances_amount, epf_employee, socso_employee, eis_employee, pcb_amount, epf_employer, socso_employer, eis_employer, net_amount, gross_amount')
             .eq('payroll_run_id', payroll_run_id)
 
         if (itemsErr) {
@@ -100,7 +100,7 @@ export async function POST(request: NextRequest) {
             agg.socso_employer += Number(item.socso_employer || 0)
             agg.eis_employer += Number(item.eis_employer || 0)
             agg.net_amount += Number(item.net_amount || 0)
-            agg.gross_salary += Number(item.gross_salary || 0)
+            agg.gross_salary += Number(item.gross_amount || 0)  // column is gross_amount
         }
 
         // ── 4. Load component GL mappings ────────────────────────────

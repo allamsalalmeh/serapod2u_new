@@ -135,7 +135,7 @@ describe('critical mode contract', () => {
   it('migration-mode lookup failure fails closed instead of assuming legacy', async () => {
     world.failModeLookup = true
     await expect(requireAuthorization({ actorId: USER.sa, permission: VERIFY, resource: await stockCount(USER.sa, ORG.whA1) }))
-      .rejects.toThrow('migration_mode_unavailable')
+      .rejects.toThrow('Authorization service unavailable')
   })
 
   it('denial exposes only the decision id and a stable reason code', async () => {

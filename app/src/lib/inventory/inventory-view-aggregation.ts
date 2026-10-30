@@ -24,6 +24,11 @@
  */
 
 import { isLegacyConfigCode } from './canonical-stock-config'
+import { resolveStockUnit } from './stock-count-quantity'
+import type { StockCountUnit } from './stock-count-catalog'
+
+/** Unit a balance is denominated in, as resolved by resolveStockUnit(). */
+export type InventoryStockUnit = StockCountUnit | 'unknown'
 
 export interface InventoryConfigRow {
   id: string
@@ -50,6 +55,10 @@ export interface InventoryConfigRow {
   default_for_ord?: boolean | null
   stock_config_status?: string | null
   quantity_on_hand: number
+  /** Loose pieces held on top of quantity_on_hand (0 for piece-stocked products). */
+  pcs_on_hand?: number | null
+  /** Pieces per case snapshotted on the balance row. */
+  pcs_per_case?: number | null
   quantity_allocated: number
   quantity_available: number
   unit_cost?: number | null
@@ -71,6 +80,12 @@ export interface AggregatedConfig {
   lifecycleStatus: string | null
   isLegacy: boolean
   onHand: number
+  pcsOnHand: number
+  pcsPerCase: number
+  /** Unit onHand/allocated/available/incoming/position are denominated in. */
+  stockUnit: InventoryStockUnit
+  /** Operator-facing reason the unit/ratio is uncertain, else null. */
+  unitConflict: string | null
   allocated: number
   available: number
   incoming: number
@@ -95,6 +110,21 @@ export interface VariantInventorySummary {
   productName: string | null
   productCode: string | null
   onHand: number
+  /**
+   * Loose pieces summed across configurations. Never folded into onHand:
+   * configurations are different physical SKUs, and onHand must stay the sum
+   * of quantity_on_hand that orders and reservations use.
+   */
+  pcsOnHand: number
+  pcsPerCase: number
+  /**
+   * Unit every quantity on this summary is denominated in — On Hand, Reserved,
+   * Available to Order, Incoming and Projected Position share it. Resolved from
+   * the product line, never from a missing/defaulted pcs_per_case.
+   */
+  stockUnit: InventoryStockUnit
+  /** Operator-facing reason the unit/ratio is uncertain, else null. */
+  unitConflict: string | null
   allocated: number
   available: number
   incoming: number
@@ -107,6 +137,11 @@ export interface VariantInventorySummary {
   updatedAt: string | null
   /** Configuration detail for the drill-down (zero Legacy hidden by default). */
   configs: AggregatedConfig[]
+  /**
+   * Every configuration id behind this summary, including hidden zero rows.
+   * The Reserved drill-down scopes to exactly these.
+   */
+  allConfigIds: string[]
   /** Number of configuration rows hidden from the detail (zero Legacy/inactive). */
   hiddenConfigCount: number
   /** True when at least one configuration carries physical dimensions. */
@@ -319,7 +354,9 @@ export function buildInventorySummaryExportRows(summaries: VariantInventorySumma
     variantCode: summary.variantCode,
     organizationName: summary.organizationName,
     warehouseLocation: summary.warehouseLocation,
+    stockUnit: summary.stockUnit,
     onHand: summary.onHand,
+    pcsOnHand: summary.pcsOnHand,
     allocated: summary.allocated,
     available: summary.available,
     incoming: summary.incoming,
@@ -360,7 +397,15 @@ export function aggregateVariantInventory(
     const incomingTotal = num(getIncoming(first.organization_id, first.variant_id))
     const incomingRowId = incomingTotal > 0 ? pickIncomingConfigRowId(groupRows) : null
 
+    // One unit for the whole flavour row, resolved from the product line and
+    // every configuration's snapshotted ratio (a defaulted 1 cannot win).
+    const groupUnit = resolveStockUnit({
+      productName: first.product_name,
+      balancePcsPerCase: groupRows.map((row) => row.pcs_per_case),
+    })
+
     let onHand = 0
+    let pcsOnHand = 0
     let allocated = 0
     let available = 0
     let value = 0
@@ -377,12 +422,23 @@ export function aggregateVariantInventory(
         : num(row.quantity_available)
       const rowIncoming = row.id === incomingRowId ? incomingTotal : 0
       const unitCost = row.unit_cost === null || row.unit_cost === undefined ? null : Number(row.unit_cost)
+      const rowUnit = resolveStockUnit({
+        productName: row.product_name ?? first.product_name,
+        balancePcsPerCase: row.pcs_per_case,
+      })
+      const rowPcs = num(row.pcs_on_hand)
       // Current-balance value only. Clearing a Legacy balance (On Hand → 0)
-      // yields 0, never a negative movement-variance value.
-      const rowValue = unitCost === null ? 0 : Math.max(0, rowOnHand) * unitCost
+      // yields 0, never a negative movement-variance value. Cost is per stock
+      // unit; loose pieces are worth unitCost / pcsPerCase (same rule as the
+      // generated product_inventory.pcs_value). A piece-stocked row has none.
+      const pcsValue = unitCost !== null && rowUnit.unit === 'cases' && rowUnit.pcsPerCase > 1
+        ? (Math.max(0, rowPcs) * unitCost) / rowUnit.pcsPerCase
+        : 0
+      const rowValue = unitCost === null ? 0 : Math.max(0, rowOnHand) * unitCost + pcsValue
       const legacy = isLegacyConfigRow(row)
 
       onHand += rowOnHand
+      pcsOnHand += rowPcs
       allocated += rowAllocated
       available += rowAvailable
       value += rowValue
@@ -402,6 +458,10 @@ export function aggregateVariantInventory(
         lifecycleStatus: row.stock_config_status ?? null,
         isLegacy: legacy,
         onHand: rowOnHand,
+        pcsOnHand: rowPcs,
+        pcsPerCase: rowUnit.pcsPerCase,
+        stockUnit: rowUnit.unit,
+        unitConflict: rowUnit.conflict,
         allocated: rowAllocated,
         available: rowAvailable,
         incoming: rowIncoming,
@@ -449,6 +509,10 @@ export function aggregateVariantInventory(
       productName: first.product_name ?? null,
       productCode: first.product_code ?? null,
       onHand,
+      pcsOnHand,
+      pcsPerCase: groupUnit.pcsPerCase,
+      stockUnit: groupUnit.unit,
+      unitConflict: groupUnit.conflict,
       allocated,
       available,
       incoming: incomingTotal,
@@ -459,6 +523,7 @@ export function aggregateVariantInventory(
       warehouseLocation: first.warehouse_location ?? null,
       updatedAt,
       configs: visibleConfigs,
+      allConfigIds: Array.from(new Set(groupRows.map((row) => row.stock_config_id).filter((id): id is string => Boolean(id)))),
       hiddenConfigCount: configs.length - visibleConfigs.length,
       configuredVariant,
       legacyOnHand,

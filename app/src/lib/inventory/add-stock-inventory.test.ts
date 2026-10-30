@@ -336,8 +336,8 @@ describe('Manual Stock Addition bulk helpers', () => {
       reason: 'Non-PO Receipt',
       externalReference: 'EMAIL-9',
       items: [
-        { stockConfigId: 'c-20nb', variantId: 'v-1', quantity: 4, unitCost: 12, rowNote: 'shelf A' },
-        { stockConfigId: 'c-50nb', variantId: 'v-1', quantity: 2, unitCost: 15 },
+        { stockConfigId: 'c-20nb', variantId: 'v-1', quantity: 4, pcs: 0, unitCost: 12, rowNote: 'shelf A' },
+        { stockConfigId: 'c-50nb', variantId: 'v-1', quantity: 2, pcs: 0, unitCost: 15 },
       ],
     })
 
@@ -345,8 +345,8 @@ describe('Manual Stock Addition bulk helpers', () => {
     expect(params.p_organization_id).toBe(BALAKONG)
     expect(params.p_reason).toBe('Non-PO Receipt')
     expect(params.p_items).toEqual([
-      { stock_config_id: 'c-20nb', variant_id: 'v-1', quantity: 4, unit_cost: 12, row_note: 'shelf A' },
-      { stock_config_id: 'c-50nb', variant_id: 'v-1', quantity: 2, unit_cost: 15, row_note: null },
+      { pcs: 0, stock_config_id: 'c-20nb', variant_id: 'v-1', quantity: 4, unit_cost: 12, row_note: 'shelf A' },
+      { pcs: 0, stock_config_id: 'c-50nb', variant_id: 'v-1', quantity: 2, unit_cost: 15, row_note: null },
     ])
     expect(JSON.stringify(params.p_items)).not.toContain('UNCLASSIFIED')
   })

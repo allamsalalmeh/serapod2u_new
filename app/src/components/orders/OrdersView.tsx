@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, type ReactNode } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -15,6 +16,18 @@ import { useOrderCreateAccess } from '@/modules/supply-chain/useOrderCreateAcces
 import { queryByIdChunks } from '@/lib/orders/chunked-id-query'
 import { getOrderDisplayOrgName, orderMatchesSearch } from '@/lib/orders/order-search'
 import { calculateOrderTotal, sortOrders } from '@/lib/orders/order-list-sort'
+import { isMissingOrderDateColumn } from '@/lib/orders/order-date'
+import {
+  ALL_ORDER_MONTHS,
+  ALL_ORDER_MONTHS_LABEL,
+  ORDER_MONTH_PARAM,
+  applyOrderMonthFilter,
+  orderMonthHref,
+  orderMonthOf,
+  parseOrderMonthParam,
+  type OrderMonth,
+} from '@/lib/orders/order-month-filter'
+import ReportingMonthSelector from '@/components/dashboard/views/reporting/ReportingMonthSelector'
 import {
   FileText,
   Plus,
@@ -179,6 +192,23 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'all'>('all')
   const [typeFilter, setTypeFilter] = useState<OrderType | 'all'>('all')
   const [sellerFilter, setSellerFilter] = useState('')
+  // Order Month lives only in the URL (?month=YYYY-MM), so refresh, deep links
+  // and Back/Forward all read the same value and there is no state to keep in
+  // sync. No parameter — a fresh entry — is All Months; an invalid one fails
+  // safe to All Months too.
+  const searchParams = useSearchParams()
+  const rawOrderMonth = searchParams?.get(ORDER_MONTH_PARAM) ?? null
+  const orderMonth: OrderMonth = parseOrderMonthParam(rawOrderMonth)
+  const setOrderMonth = (month: OrderMonth) => {
+    if (month === orderMonth) return
+    // pushState (not replace) so Back/Forward step through month choices.
+    window.history.pushState(null, '', orderMonthHref(window.location.pathname, window.location.search, month))
+  }
+  // Earliest business month this user can see: the dropdown's lower bound.
+  const [earliestOrderMonth, setEarliestOrderMonth] = useState<string | null>(null)
+  // Only the newest list request may write the list, so stepping quickly
+  // through months never ends on an older month's rows.
+  const loadRequestRef = useRef(0)
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [viewMode, setViewMode] = useState<'cards' | 'list'>('list')
   const [showOrderTypeDialog, setShowOrderTypeDialog] = useState(false)
@@ -271,7 +301,15 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1)
-  }, [searchQuery, statusFilter, typeFilter, sellerFilter])
+  }, [searchQuery, statusFilter, typeFilter, sellerFilter, orderMonth])
+
+  // A malformed or future ?month= is dropped from the address bar so the URL
+  // says what the page shows (All Months). Replace, not push: no extra entry.
+  useEffect(() => {
+    if (rawOrderMonth !== null && orderMonth === ALL_ORDER_MONTHS) {
+      window.history.replaceState(null, '', orderMonthHref(window.location.pathname, window.location.search, ALL_ORDER_MONTHS))
+    }
+  }, [rawOrderMonth, orderMonth])
 
   const handleTrackOrder = (orderId: string) => {
     // Store order ID and navigate to track view
@@ -791,11 +829,21 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
 
   useEffect(() => {
     loadOrders()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter, typeFilter, orderMonth])
+
+  // The Summary cards keep their company-wide definitions: they do not follow
+  // the list filters (Order Type / Status never changed them either), so a
+  // month choice does not reload them.
+  useEffect(() => {
     loadSummary()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, typeFilter])
+
+  useEffect(() => {
+    loadEarliestOrderMonth()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleCreateOrder = async () => {
     // Check if user has digital signature
@@ -910,7 +958,34 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
     }
   }
 
+  /** Earliest business month visible to this user, so every month back to it is selectable. */
+  const loadEarliestOrderMonth = async () => {
+    try {
+      const { data: companyData } = await supabase
+        .rpc('get_company_id', { p_org_id: userProfile.organization_id })
+      const companyId = companyData || userProfile.organization_id
+      const orgType = userProfile.organizations.org_type_code
+      const runQuery = (column: 'order_date' | 'created_at'): PromiseLike<{ data: any[] | null; error: any }> => {
+        let query = supabase.from('orders').select(column)
+        if (orgType === 'MFG' || orgType === 'MANU') {
+          query = query.eq('seller_org_id', userProfile.organization_id).neq('status', 'submitted').neq('status', 'draft')
+        } else {
+          query = query.eq('company_id', companyId)
+        }
+        return query.order(column, { ascending: true }).limit(1) as any
+      }
+      let { data, error } = await runQuery('order_date')
+      if (error && isMissingOrderDateColumn(error)) ({ data, error } = await runQuery('created_at'))
+      if (error) throw error
+      setEarliestOrderMonth(orderMonthOf(data?.[0]))
+    } catch (error) {
+      // Not fatal: the dropdown still offers the current month and any month in the URL.
+      console.warn('Failed to load the earliest order month:', error)
+    }
+  }
+
   const loadOrders = async () => {
+    const requestId = ++loadRequestRef.current
     try {
       setLoading(true)
 
@@ -953,12 +1028,17 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
         query = query.eq('company_id', companyId)
       }
 
-      query = query.order('created_at', { ascending: false }).limit(ORDER_FETCH_LIMIT)
-
       // Apply status filter
       if (statusFilter !== 'all') {
         query = query.eq('status', statusFilter)
       }
+
+      // Order Month is a business-date (order_date) range in the query itself,
+      // before ORDER_FETCH_LIMIT, so a month always comes back whole — never a
+      // client-side slice of whatever the newest window happened to hold.
+      const baseQuery = query
+      const limited = (q: typeof query) => q.order('created_at', { ascending: false }).limit(ORDER_FETCH_LIMIT)
+      query = limited(applyOrderMonthFilter(baseQuery, orderMonth))
 
       // Search is deliberately NOT pushed into the query. It used to be an
       // `.or(order_no, display_doc_no, notes)` filter, which threw away every
@@ -967,9 +1047,15 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
       // order). ORDER_FETCH_LIMIT already brings back the full window, so the
       // search runs client-side over the same fields the user can see.
 
-      const { data: ordersData, error: ordersError } = await query
+      let { data: ordersData, error: ordersError } = await query
+      // A database without orders.order_date yet: the same month by the MYT date
+      // of created_at, which is exactly what order_date was backfilled from.
+      if (ordersError && orderMonth !== ALL_ORDER_MONTHS && isMissingOrderDateColumn(ordersError)) {
+        ({ data: ordersData, error: ordersError } = await limited(applyOrderMonthFilter(baseQuery, orderMonth, { useCreatedAt: true })))
+      }
 
       if (ordersError) throw ordersError
+      if (requestId !== loadRequestRef.current) return
 
       const hydratedOrdersData = await hydrateOrderActors(ordersData || [])
 
@@ -1076,17 +1162,19 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
           }
 
           console.log('========================')
+          if (requestId !== loadRequestRef.current) return
           setOrders(ordersWithItems as any)
           return
         }
       }
 
       console.log('========================')
+      if (requestId !== loadRequestRef.current) return
       setOrders(hydratedOrdersData as any)
     } catch (error) {
       console.error('Error loading orders:', error)
     } finally {
-      setLoading(false)
+      if (requestId === loadRequestRef.current) setLoading(false)
     }
   }
 
@@ -1246,7 +1334,18 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
       <Card className="sera-sc-panel shadow-none">
         <CardContent className="p-4 sm:pt-6 space-y-4">
           {/* Filter Row */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+            {/* Order Month — business date (order_date), every status included */}
+            <ReportingMonthSelector
+              id="orders-order-month"
+              label="Order Month"
+              month={orderMonth}
+              onMonthChange={setOrderMonth}
+              availableMonths={earliestOrderMonth ? [earliestOrderMonth] : []}
+              allOption={{ value: ALL_ORDER_MONTHS, label: ALL_ORDER_MONTHS_LABEL }}
+              fullWidth
+            />
+
             {/* Order Type Filter - Hidden for Manufacturers */}
             {!['MANU', 'MFG'].includes(userProfile.organizations.org_type_code) && (
               <div>
@@ -1356,7 +1455,7 @@ export default function OrdersView({ userProfile, onViewChange }: OrdersViewProp
                 <FileText className="w-12 h-12 text-[var(--sera-muted)] mx-auto mb-4 opacity-50" />
                 <h3 className="text-lg font-medium text-[var(--sera-ink)] mb-2">No orders found</h3>
                 <p className="text-[var(--sera-muted)] mb-4">
-                  {searchQuery || statusFilter !== 'all'
+                  {searchQuery || statusFilter !== 'all' || orderMonth !== ALL_ORDER_MONTHS
                     ? 'Try adjusting your filters'
                     : ['MANU', 'MFG'].includes(userProfile.organizations.org_type_code)
                       ? 'No orders available. Manufacturers receive orders from HQ.'

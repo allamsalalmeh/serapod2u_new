@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { modeLabel, permissionLabel } from '@/lib/security-access/labels'
-import { buildRollout, type RolloutNode } from '@/lib/security-access/rollout'
+import { buildRollout, catalogueRollout, type RolloutNode } from '@/lib/security-access/rollout'
 import { CROSS_MODULE, MODULE_FILTER_OPTIONS, OTHER_MODULE, classifyRole, groupByModule, moduleGroupName, permissionModuleLabel, roleInModule, rolePermissionKeys, type RoleModules } from '@/lib/security-access/modules'
 import AccessProfilesPanel from './AccessProfilesPanel'
 import type { ProfileSummary } from '@/lib/security-access/profiles'
@@ -53,9 +53,7 @@ export default function RolesPoliciesPanel({ data, governance, onChanged, initia
     return map
   }, [modeRollout])
   const modeByKey = useMemo(() => new Map<string, string>((data.modes || []).map((m: any) => [m.permission_key, m.mode])), [data.modes])
-  const catalogue = useMemo(() => buildRollout((data.permissions || []).map((p: any) => ({
-    key: p.permission_key, label: permissionLabel(p.permission_key).label, mode: modeByKey.get(p.permission_key) ?? 'UNREGISTERED', enforcementReady: false,
-  }))), [data.permissions, modeByKey])
+  const catalogue = useMemo(() => catalogueRollout(data.permissions || [], key => modeByKey.get(key) ?? 'UNREGISTERED'), [data.permissions, modeByKey])
   const describe = useMemo(() => new Map<string, any>((data.permissions || []).map((p: any) => [p.permission_key, p])), [data.permissions])
 
   function changeMode(permissionKey: string, mode: string) {

@@ -6,14 +6,20 @@
  *   - Active / New / Inactive This Period / Returning rows are
  *     `buildDistributorRows(aggregate)` filtered by DISTRIBUTOR_METRIC_PREDICATES,
  *     the exact rows and predicates `buildDistributorAnalyticsReport` counts.
- *   - Total Orders rows are the report window's eligible orders read with the
- *     shared eligible-order scope; their count and value are checked against
- *     the report's headline and any mismatch is surfaced, never hidden.
+ *   - Active Orders rows (metric key `total_orders`, kept for existing links)
+ *     are the report window's ACTIVE eligible orders read with the shared
+ *     eligible-order scope; their count and value are checked against the
+ *     report's Active Orders / Active Order Value and any mismatch is
+ *     surfaced, never hidden. Draft and cancelled orders are not listed.
+ *   - Approved Orders rows (`approved_orders`) are those same orders narrowed
+ *     to the approved stages, checked against the Approved Orders / Approved
+ *     Sales headline.
  *
  * Order history is used only to label rows (first / last order numbers and
  * dates); it never decides membership or a count.
  */
 import {
+  APPROVED_STATUSES,
   DISTRIBUTOR_METRIC_PREDICATES,
   buildDistributorAnalyticsReport,
   buildDistributorRows,
@@ -25,7 +31,7 @@ import type { EligibleWindowOrder, OrderRecord } from './distributor-analytics-s
 import { businessDateStartUtc, malaysiaDateOf, orderBusinessDate } from '@/lib/orders/order-date'
 import { reportDateWindows } from './distributor-analytics'
 
-export const DRILLDOWN_METRICS = ['total_orders', 'active', 'new', 'inactive', 'returning'] as const
+export const DRILLDOWN_METRICS = ['total_orders', 'approved_orders', 'active', 'new', 'inactive', 'returning'] as const
 export type DrilldownMetric = (typeof DRILLDOWN_METRICS)[number]
 
 export function isDrilldownMetric(value: unknown): value is DrilldownMetric {
@@ -34,15 +40,21 @@ export function isDrilldownMetric(value: unknown): value is DrilldownMetric {
 
 export const DRILLDOWN_META: Record<DrilldownMetric, { title: string; noun: string; definition: string; empty: string }> = {
   total_orders: {
-    title: 'Total Orders',
+    title: 'Active Orders',
     noun: 'orders',
-    definition: 'Eligible D2H orders placed by distributors inside the report period, for the selected distributor and status.',
-    empty: 'No eligible orders for this reporting period.',
+    definition: 'Submitted and approved-stage D2H orders placed by distributors inside the report period, for the selected distributor and status. Draft and cancelled orders are excluded.',
+    empty: 'No active orders for this reporting period.',
+  },
+  approved_orders: {
+    title: 'Approved Orders',
+    noun: 'orders',
+    definition: 'Approved, warehouse packed, shipped and closed D2H orders placed by distributors inside the report period, for the selected distributor and status. Submitted, draft and cancelled orders are excluded.',
+    empty: 'No approved orders for this reporting period.',
   },
   active: {
     title: 'Active Distributors',
     noun: 'distributors',
-    definition: 'Distributors with at least one eligible order in the report period.',
+    definition: 'Distributors with at least one active (submitted or approved-stage) order in the report period.',
     empty: 'No active distributors for this reporting period.',
   },
   new: {
@@ -104,7 +116,7 @@ export interface DistributorDrilldown {
   period: { month: string; label: string; rangeLabel: string; comparisonRangeLabel: string; isCurrentMonth: boolean }
   scope: { distributorId: string; distributorName: string; status: string; statusLabel: string }
   /** The dashboard's own numbers for this scope. */
-  headline: { count: number; totalOrders: number; orderValue: number; activeDistributors: number }
+  headline: { count: number; activeOrders: number; activeOrderValue: number; ordersCreated: number; activeDistributors: number; approvedOrders: number; approvedSalesValue: number }
   /** Whether the rows reproduce the headline count (and, for orders, the value). */
   reconciled: boolean
   distributors: DrilldownDistributorRow[]
@@ -116,7 +128,8 @@ const orderNo = (order: OrderRecord) => order.display_doc_no || order.order_no |
 
 function headlineCount(metric: DrilldownMetric, report: ReturnType<typeof buildDistributorAnalyticsReport>): number {
   switch (metric) {
-    case 'total_orders': return report.summary.totalOrders
+    case 'total_orders': return report.summary.activeOrders
+    case 'approved_orders': return report.approvedSales.orders
     case 'active': return report.summary.activeDistributors
     case 'new': return report.relationship.newDistributors
     case 'inactive': return report.relationship.inactiveThisPeriod
@@ -134,7 +147,7 @@ const SORT: Record<DistributorMetricKey, (a: DistributorRow, b: DistributorRow) 
 export function buildDistributorDrilldown(input: {
   aggregate: DistributorAnalyticsAggregate
   metric: DrilldownMetric
-  /** Report-window eligible orders (Total Orders only). */
+  /** Report-window ACTIVE eligible orders (Active Orders only). */
   orders?: EligibleWindowOrder[]
   /** All-history eligible orders of the listed distributors (labels only). */
   history?: OrderRecord[]
@@ -151,8 +164,10 @@ export function buildDistributorDrilldown(input: {
   let orders: DrilldownOrderRow[] = []
   let reconciled: boolean
 
-  if (metric === 'total_orders') {
+  if (metric === 'total_orders' || metric === 'approved_orders') {
+    const approvedOnly = metric === 'approved_orders'
     orders = [...(input.orders || [])]
+      .filter((order) => !approvedOnly || APPROVED_STATUSES.includes(order.status))
       // Business date first, entry time as the tie-break — the report's own order.
       .sort((a, b) => (b.orderDate || '').localeCompare(a.orderDate || '')
         || Date.parse(b.createdAt) - Date.parse(a.createdAt))
@@ -162,7 +177,8 @@ export function buildDistributorDrilldown(input: {
         createdByName: createdById ? input.userNames?.get(createdById) ?? null : null,
       }))
     const value = round2(orders.reduce((sum, order) => sum + order.orderValue, 0))
-    reconciled = orders.length === count && Math.abs(value - report.summary.orderValue) < 0.01
+    const headlineValue = approvedOnly ? report.approvedSales.value : report.summary.activeOrderValue
+    reconciled = orders.length === count && Math.abs(value - headlineValue) < 0.01
   } else {
     const codeById = new Map(aggregate.distributors.map((row) => [row.distributorId, row.orgCode]))
     // History is labelled by BUSINESS date — the same date that decided each
@@ -234,9 +250,12 @@ export function buildDistributorDrilldown(input: {
     },
     headline: {
       count,
-      totalOrders: report.summary.totalOrders,
-      orderValue: report.summary.orderValue,
+      activeOrders: report.summary.activeOrders,
+      activeOrderValue: report.summary.activeOrderValue,
+      ordersCreated: report.summary.ordersCreated,
       activeDistributors: report.summary.activeDistributors,
+      approvedOrders: report.approvedSales.orders,
+      approvedSalesValue: report.approvedSales.value,
     },
     reconciled,
     distributors,

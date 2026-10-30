@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState, useEffect, useMemo, useRef } from 'react'
+import { Fragment, Profiler, useState, useEffect, useMemo, useRef } from 'react'
 import { useSupabaseAuth } from '@/lib/hooks/useSupabaseAuth'
 import { usePermissions } from '@/hooks/usePermissions'
 import { subscribeToInventoryDataRefresh } from '@/lib/inventory/inventory-data-refresh'
@@ -28,6 +28,8 @@ import SupplyChainPageHeader from '@/modules/supply-chain/components/SupplyChain
 import ProductThumbnail from './ProductThumbnail'
 import StockSettingsPanel from './StockSettingsPanel'
 import IncomingStockDialog from './IncomingStockDialog'
+import ReservedStockDialog, { type ReservedStockDialogProps } from './ReservedStockDialog'
+import ReservedQuantityTrigger from './ReservedQuantityTrigger'
 import {
   buildIncomingMap,
   getIncomingBreakdown,
@@ -45,7 +47,12 @@ import {
   type InventorySummarySortColumn,
   type VariantInventorySummary
 } from '@/lib/inventory/inventory-view-aggregation'
-import { classifyProductLine, isCartridgeLine } from '@/lib/returns/format'
+import StockQuantityDisplay, { CLICKABLE_QUANTITY_FIGURE, splitQuantityLabel, TABLE_QUANTITY_UNIT } from '@/components/inventory/StockQuantityDisplay'
+import { formatStockQuantity, stockUnitCostLabel } from '@/lib/inventory/stock-count-quantity'
+import type { InventoryStockUnit } from '@/lib/inventory/inventory-view-aggregation'
+import { createInventoryTrace, activateInventoryTransport, clearInventoryTransport, inventoryEvent, inventorySpan, observeInventoryResources, type InventoryTrace } from '@/lib/inventory/inventory-timing'
+import { readInventoryPages } from '@/lib/inventory/inventory-read'
+import { normalizeInventoryApiRow } from '@/lib/inventory/inventory-view-rows'
 import {
   HQ_CONSOLIDATED_LEGACY_NOTE,
   buildInventoryLocationScope,
@@ -83,6 +90,8 @@ interface InventoryItem {
   organization_name?: string | null
   organization_code?: string | null
   quantity_on_hand: number
+  pcs_on_hand?: number | null
+  pcs_per_case?: number | null
   quantity_allocated: number
   quantity_available: number
   reorder_point: number
@@ -99,12 +108,22 @@ interface InventoryItem {
 
 interface InventoryViewProps {
   userProfile: any
+  timingTrace?: InventoryTrace
   onViewChange?: (view: string) => void
 }
 
-export default function InventoryView({ userProfile, onViewChange }: InventoryViewProps) {
+export default function InventoryView({ userProfile, onViewChange, timingTrace }: InventoryViewProps) {
+  const [mountTrace] = useState(() => createInventoryTrace(timingTrace ? `${timingTrace.id}-v${crypto.randomUUID()}` : undefined))
+  const activeTrace = useRef(mountTrace)
+  const publishedTrace = useRef<InventoryTrace | undefined>(undefined)
   const [inventory, setInventory] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [locationError, setLocationError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loadedUser, setLoadedUser] = useState<string | null>(null)
+  const [loadedMode, setLoadedMode] = useState<boolean | null>(null)
+  const requestVersion = useRef(0)
+
   const [searchQuery, setSearchQuery] = useState('')
   const [locationFilter, setLocationFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -114,8 +133,12 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
   const [currentPage, setCurrentPage] = useState(1)
   const [locations, setLocations] = useState<any[]>([])
   const [hqWarehouseIdsByHq, setHqWarehouseIdsByHq] = useState<Map<string, string[]>>(new Map())
-  const [products, setProducts] = useState<any[]>([])
-  const [variants, setVariants] = useState<any[]>([])
+  const products = useMemo(() => Array.from(new Set(inventory.filter(row => row.quantity_on_hand > 0)
+    .map(row => row.product_name).filter((name): name is string => Boolean(name)))).sort().map(product_name => ({ product_name })), [inventory])
+  const variants = useMemo(() => Array.from(new Map(inventory.filter(row => row.quantity_on_hand > 0 && row.variant_code)
+    .map(row => [row.variant_code, { variant_code: row.variant_code, variant_name: row.variant_name,
+      product_code: row.variant_product_code, products: { product_name: row.product_name } }])).values())
+    .sort((a, b) => (a.variant_code || '').localeCompare(b.variant_code || '')), [inventory])
   const [sortColumn, setSortColumn] = useState<InventorySummarySortColumn | null>('product_name')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -125,6 +148,9 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
     InventoryItem,
     'variant_id' | 'organization_id' | 'product_name' | 'variant_name'
   > | null>(null)
+  // Reserved drill-down target. Kept beside the Incoming state so closing it
+  // leaves filters, sorting, pagination and scroll untouched.
+  const [reservedDetail, setReservedDetail] = useState<Omit<ReservedStockDialogProps, 'open' | 'onClose'> | null>(null)
   const [exporting, setExporting] = useState(false)
   const [exportMessage, setExportMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [showInactive, setShowInactive] = useState(false)
@@ -132,14 +158,33 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
   // Guards the one-time default Location selection (see fetchLocations).
   const defaultLocationApplied = useRef(false)
 
-  const { isReady, supabase } = useSupabaseAuth()
+  const { isReady, supabase, user, error: authError } = useSupabaseAuth(mountTrace)
+  const unresolved = loadedMode !== showInactive || loadedUser !== (user?.id ?? '')
   const { toast } = useToast()
-  const { hasPermission } = usePermissions(
+  const { hasPermission, loading: permissionsLoading } = usePermissions(
     userProfile?.roles?.role_level,
     userProfile?.role_code,
-    userProfile?.department_id
+    userProfile?.department_id,
+    mountTrace
   )
   const itemsPerPage = 15
+
+  useEffect(() => {
+    activateInventoryTransport(mountTrace)
+    inventoryEvent(mountTrace, 'inventory.mount', 'start')
+    const stop = timingTrace ? () => {} : observeInventoryResources(mountTrace)
+    return () => { stop(); clearInventoryTransport(mountTrace); inventoryEvent(mountTrace, 'inventory.mount', 'unmount') }
+  }, [mountTrace, timingTrace])
+  useEffect(() => { inventoryEvent(mountTrace, 'inventory.authReady', 'state', { ready: isReady, authenticated: !!user?.id, error: !!authError }) }, [isReady, user?.id, authError, mountTrace])
+  useEffect(() => { inventoryEvent(mountTrace, 'inventory.permissionsReady', 'state', { ready: !permissionsLoading }) }, [permissionsLoading, mountTrace])
+  useEffect(() => {
+    if (unresolved || loading || !publishedTrace.current) return
+    const trace = publishedTrace.current
+    inventoryEvent(trace, 'inventory.render', 'committed', { rows: inventory.length })
+    if (typeof requestAnimationFrame !== 'function') return
+    const frame = requestAnimationFrame(() => inventoryEvent(trace, 'inventory.render', 'nextFrame'))
+    return () => cancelAnimationFrame(frame)
+  }, [loading, unresolved, inventory])
 
   const formatNumber = (value?: number | null) => {
     if (value === null || value === undefined) {
@@ -148,32 +193,60 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
     return new Intl.NumberFormat('en-MY').format(value)
   }
 
-  /** Cellera Hero / Zero stock is counted in cases (master units_per_case = 1), so their quantities say so. */
-  const renderUnit = (productName: string | null | undefined) =>
-    isCartridgeLine(classifyProductLine(productName)) ? (
-      <span className="ml-1 text-[11px] font-normal text-[var(--sera-muted)]">cases</span>
-    ) : null
+  /**
+   * One presentation standard for every quantity on this page: whole cases in
+   * deep blue, real loose pieces in teal underneath, and no invented piece
+   * equivalent of a case balance. See StockQuantityDisplay.
+   */
+  const renderQuantity = (
+    cases: number,
+    pcs: number | null | undefined,
+    pcsPerCase: number | null | undefined,
+    unit: InventoryStockUnit,
+    note?: string | null,
+    align: 'start' | 'end' = 'start',
+  ) => (
+    <StockQuantityDisplay
+      // The unit is passed explicitly (resolved from the product line by the
+      // aggregation). Inferring it from pcsPerCase alone is what relabelled
+      // case balances as "pcs" when the ratio was missing or defaulted to 1.
+      quantity={{ cases, pcs: pcs ?? 0, pcsPerCase: pcsPerCase || 1, unit }}
+      note={note}
+      tone="table"
+      className={align === 'end' ? 'items-end' : 'items-start'}
+    />
+  )
+
+  const renderReservedTrigger = (
+    reserved: number,
+    pcsPerCase: number,
+    unit: InventoryStockUnit,
+    open: () => void,
+    align: 'start' | 'end' = 'start',
+  ) => <ReservedQuantityTrigger reserved={reserved} pcsPerCase={pcsPerCase} unit={unit} onOpen={open} align={align} />
 
   useEffect(() => {
-    if (isReady) {
-      fetchInventory()
-      fetchIncoming()
-      fetchLocations()
-      fetchProducts()
-      fetchVariants()
-    }
-  }, [isReady, showInactive])
+    let active = true
+    // StrictMode replays mount effects in development. Only the live effect starts reads.
+    Promise.resolve().then(() => { if (active && isReady && user?.id && !authError) fetchInventory() })
+    return () => { active = false; requestVersion.current++ }
+  }, [isReady, showInactive, user?.id, authError])
+
+  useEffect(() => {
+    let active = true
+    Promise.resolve().then(() => { if (active && isReady && user?.id && !authError) fetchLocations(() => active) })
+    return () => { active = false }
+  }, [isReady, user?.id, authError])
 
   // Authoritative invalidation: refetch once when another view confirms a
   // committed inventory write (e.g. an Opening Balance post). Not polling.
   useEffect(() => {
-    if (!isReady) return
+    if (!isReady || !user?.id || authError) return
     return subscribeToInventoryDataRefresh(() => {
       fetchInventory()
-      fetchIncoming()
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isReady, showInactive])
+  }, [isReady, showInactive, user?.id, authError])
 
   useEffect(() => {
     setCurrentPage(1)
@@ -217,7 +290,12 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
   // One authoritative summary per organization + variant. Four Banana balance
   // rows collapse to a single row; incoming appears once; value is positive.
   const allSummaries = useMemo(
-    () => aggregateVariantInventory(identityFilteredRows, getVariantIncoming, { includeInactive: showInactive }),
+    () => {
+      const end = inventorySpan(activeTrace.current, 'client.aggregate', { inputRows: identityFilteredRows.length })
+      const summaries = aggregateVariantInventory(identityFilteredRows, getVariantIncoming, { includeInactive: showInactive })
+      end({ summaryRows: summaries.length })
+      return summaries
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [identityFilteredRows, incomingMap, showInactive]
   )
@@ -418,22 +496,6 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
     }
   }
 
-  // Incoming / On Order stock from confirmed H2M orders (v_incoming_stock).
-  // Degrades gracefully to "no incoming" when the view has not been migrated yet.
-  const fetchIncoming = async () => {
-    if (!isReady) return
-    try {
-      const { data, error } = await supabase
-        .from('v_incoming_stock' as any)
-        .select('*')
-      if (error) throw error
-      setIncomingMap(buildIncomingMap((data || []) as unknown as IncomingStockRow[]))
-    } catch (error) {
-      console.warn('v_incoming_stock unavailable, incoming quantities hidden', error)
-      setIncomingMap(new Map())
-    }
-  }
-
   // Function declarations (hoisted) — also called from the sort memo above.
   function getIncomingRow(item: InventoryItem): IncomingStockRow | undefined {
     if (item.default_for_ord === false) return undefined
@@ -450,43 +512,45 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
   }
 
   const fetchInventory = async () => {
-    if (!isReady) return
+    if (!isReady || !user?.id || authError) return
 
+    const version = ++requestVersion.current
+    const started = performance.now()
+    const trace = createInventoryTrace(mountTrace ? `${mountTrace.id}-l${version}` : undefined)
+    activeTrace.current = trace
+    let succeeded = false
+    const endLoad = inventorySpan(trace, 'inventory.load', { auditMode: showInactive })
+    const readPages = (query: () => any, label: string) => readInventoryPages(query, label, 1000, trace)
     setLoading(true)
+    setLoadError(null)
+    // Start independently of the balance view; publish both together.
+    const incomingResult = readPages(() => supabase.from('v_incoming_stock' as any)
+      .select('*').order('destination_warehouse_org_id').order('variant_id'), 'incoming.v_incoming_stock')
     try {
       let source: 'view' | 'fallback' = 'view'
       let data: any[] | null = null
 
-      const pageSize = 1000
-      const fetchAllPages = async (createQuery: () => any) => {
-        const rows: any[] = []
-        for (let from = 0; ; from += pageSize) {
-          const { data: page, error } = await createQuery().range(from, from + pageSize - 1)
-          if (error) return { data: null, error }
-          rows.push(...(page || []))
-          if (!page || page.length < pageSize) return { data: rows, error: null }
-        }
-      }
+      const fetchAllPages = (createQuery: () => any, label = 'balances.vw_inventory_on_hand') => readPages(createQuery, label)
 
       const viewResult: { data: any[] | null; error: any } = showInactive
-        ? { data: null, error: { code: 'PGRST204', message: 'Show inactive requires base inventory rows' } }
+        ? { data: null, error: { code: 'AUDIT_BASE_ROWS', message: 'Show inactive requires base inventory rows' } }
         : await fetchAllPages(() => {
         return supabase
           .from('vw_inventory_on_hand' as any)
           .select('*')
           .order('organization_id')
-          .order('variant_id')
+          .order('variant_id').order('stock_config_id')
       })
       const { data: viewData, error: viewError } = viewResult
 
       if (viewError) {
         const missingView = (() => {
           const code = typeof viewError.code === 'string' ? viewError.code.toUpperCase() : null
-          if (code === '42P01' || code === 'PGRST103' || code === 'PGRST204') {
+          if (code === '42P01' || code === 'PGRST205' || code === 'AUDIT_BASE_ROWS') {
             return true
           }
           const message = typeof viewError.message === 'string' ? viewError.message.toLowerCase() : ''
-          return message.includes('vw_inventory_on_hand') || message.includes('schema cache')
+          return message.includes('schema cache') && message.includes('vw_inventory_on_hand')
         })()
 
         if (!missingView) {
@@ -504,6 +568,8 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
             variant_id,
             organization_id,
             quantity_on_hand,
+            pcs_on_hand,
+            pcs_per_case,
             quantity_allocated,
             quantity_available,
             reorder_point,
@@ -543,33 +609,19 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
             `)
             .eq('is_active', true)
             .order('organization_id')
-            .order('variant_id')
-        })
+            .order('variant_id').order('id')
+        }, 'balances.product_inventory')
 
         const { data: fallbackData, error: fallbackError } = fallbackResult
 
         if (fallbackError) {
-          console.error('Fallback inventory query failed:', {
-            error: fallbackError,
-            message: fallbackError?.message,
-            details: fallbackError?.details,
-            hint: fallbackError?.hint,
-            code: fallbackError?.code
-          })
+          console.error('Fallback inventory query failed:', fallbackError)
           throw fallbackError
         }
 
         data = fallbackData || []
       } else {
         data = viewData || []
-      }
-
-      const parseNumber = (value: any): number | null => {
-        if (value === null || value === undefined || value === '') {
-          return null
-        }
-        const numeric = Number(value)
-        return Number.isFinite(numeric) ? numeric : null
       }
 
       const variantBaseCostMap = new Map<string, number>()
@@ -594,11 +646,20 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
         )
       )
 
+      const organizationIds = Array.from(new Set((data || []).map((record: any) => record.organization_id).filter(Boolean)))
+      const warrantyBonusMap = new Map<string, number>()
+      const warrantyResult = collectedVariantIds.length && organizationIds.length
+        ? readPages(() => supabase.from('stock_movements')
+          .select('variant_id, stock_config_id, to_organization_id, quantity_change, movement_type')
+          .in('variant_id', collectedVariantIds as string[]).in('to_organization_id', organizationIds as string[])
+          .ilike('movement_type', 'warranty_bonus').order('id'), 'warranty')
+        : Promise.resolve({ data: [], error: null })
+
       if (collectedVariantIds.length > 0) {
-        const { data: variantCostRows, error: variantCostError } = await supabase
+        const { data: variantCostRows, error: variantCostError } = await readPages(() => supabase
           .from('product_variants')
           .select('id, base_cost, image_url, product_code, alternative_name')
-          .in('id', collectedVariantIds as string[])
+          .in('id', collectedVariantIds as string[]).order('id'), 'variant metadata')
 
         if (!variantCostError) {
           variantCostRows?.forEach((row: any) => {
@@ -623,143 +684,30 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
             }
           })
         } else {
-          console.warn('Failed to load variant base cost data for inventory fallback', variantCostError)
+          throw variantCostError
         }
       }
 
-      // Fetch warranty_bonus quantities to exclude from inventory value calculations
-      const warrantyBonusMap = new Map<string, number>()
-      const organizationIds = Array.from(
-        new Set(
-          (data || [])
-            .map((record: any) => record?.organization_id)
-            .filter(Boolean)
-        )
+      const warranty = await warrantyResult
+      if (warranty.error) throw warranty.error
+      for (const movement of warranty.data || []) {
+        const key = `${movement.to_organization_id}:${movement.variant_id}:${movement.stock_config_id || 'legacy'}`
+        warrantyBonusMap.set(key, (warrantyBonusMap.get(key) ?? 0) + Number(movement.quantity_change ?? 0))
+      }
+
+      const rowLookups = {
+        variantBaseCostMap,
+        variantImageMap,
+        variantProductCodeMap,
+        variantAlternativeNameMap,
+        warrantyBonusMap,
+      }
+      const endNormalize = inventorySpan(trace, 'client.normalize', { rows: data?.length ?? 0 })
+      let normalized: InventoryItem[] = (data || []).map((item: any, index: number) =>
+        normalizeInventoryApiRow(item, index, rowLookups),
       )
 
-      if (collectedVariantIds.length > 0 && organizationIds.length > 0) {
-        try {
-          const { data: warrantyMovements, error: warrantyError } = await supabase
-            .from('stock_movements')
-            .select('variant_id, stock_config_id, to_organization_id, quantity_change, movement_type')
-            .in('variant_id', collectedVariantIds as string[])
-            .in('to_organization_id', organizationIds as string[])
-            .ilike('movement_type', 'warranty_bonus')
-
-          if (!warrantyError && warrantyMovements) {
-            warrantyMovements.forEach((movement: any) => {
-              if (movement.to_organization_id && movement.variant_id) {
-                const key = `${movement.to_organization_id}:${movement.variant_id}:${movement.stock_config_id || 'legacy'}`
-                const qty = Number(movement.quantity_change ?? 0)
-                warrantyBonusMap.set(key, (warrantyBonusMap.get(key) ?? 0) + qty)
-              }
-            })
-          }
-        } catch (warrantyFetchError) {
-          console.warn('Failed to fetch warranty_bonus quantities for inventory value calculation', warrantyFetchError)
-        }
-      }
-
-      let normalized: InventoryItem[] = (data || []).map((item: any, index: number) => {
-        const rawVariant = Array.isArray(item.product_variants)
-          ? item.product_variants[0]
-          : item.product_variants
-
-        const rawProduct = rawVariant?.products
-          ? Array.isArray(rawVariant.products)
-            ? rawVariant.products[0]
-            : rawVariant.products
-          : null
-
-        const rawOrg = Array.isArray(item.organizations)
-          ? item.organizations[0]
-          : item.organizations
-
-        const variantId = item.variant_id ?? rawVariant?.id ?? null
-        const organizationId = item.organization_id ?? rawOrg?.id ?? null
-
-        const variantBaseCostCandidates: Array<number | null> = []
-        if (variantId && variantBaseCostMap.has(variantId)) {
-          variantBaseCostCandidates.push(variantBaseCostMap.get(variantId) ?? null)
-        }
-        variantBaseCostCandidates.push(parseNumber(rawVariant?.base_cost))
-        variantBaseCostCandidates.push(parseNumber(item.base_cost))
-
-        const variantBaseCost = variantBaseCostCandidates.find(cost => cost !== null) ?? null
-
-        const quantityOnHand = parseNumber(item.quantity_on_hand) ?? 0
-        const allocatedQuantity = parseNumber(item.quantity_allocated) ?? 0
-        const quantityAvailable = parseNumber(item.quantity_available) ?? quantityOnHand
-
-        const resolvedUnitCost = (() => {
-          if (variantBaseCost !== null) return variantBaseCost
-          const directUnit = parseNumber(item.unit_cost)
-          if (directUnit !== null && directUnit !== 0) return directUnit
-          const average = parseNumber(item.average_cost)
-          return average
-        })()
-
-        const resolvedTotalValue = (() => {
-          if (resolvedUnitCost !== null) {
-            // Exclude warranty_bonus quantities from value calculation
-            const key = organizationId && variantId ? `${organizationId}:${variantId}:${item.stock_config_id || 'legacy'}` : null
-            const warrantyBonusQty = key ? (warrantyBonusMap.get(key) ?? 0) : 0
-            // Inventory value is a current-balance measure: On Hand × cost. It
-            // must never go negative just because a warranty bonus or a
-            // classification-out movement exceeds the remaining balance.
-            const valuableQty = Math.max(0, quantityOnHand - warrantyBonusQty)
-            return Number((valuableQty * resolvedUnitCost).toFixed(2))
-          }
-          const directTotal = parseNumber(item.total_value)
-          if (directTotal !== null) return directTotal
-          return null
-        })()
-
-        const variantImage = variantId && variantImageMap.has(variantId)
-          ? variantImageMap.get(variantId)
-          : (item.variant_image_url ?? rawVariant?.image_url ?? null)
-
-        return {
-          id: item.id || `${organizationId || 'org'}-${variantId || rawVariant?.variant_code || index}`,
-          variant_id: variantId,
-          variant_code: item.variant_code ?? rawVariant?.variant_code ?? null,
-          variant_name: item.variant_name ?? rawVariant?.variant_name ?? null,
-          variant_image_url: variantImage,
-          variant_product_code:
-            (variantId ? variantProductCodeMap.get(variantId) : null) ?? rawVariant?.product_code ?? null,
-          alternative_name:
-            (variantId ? variantAlternativeNameMap.get(variantId) : null) ?? rawVariant?.alternative_name ?? null,
-          stock_config_id: item.stock_config_id ?? null,
-          config_code: item.config_code ?? item.inventory_stock_configurations?.config_code ?? null,
-          config_label: item.config_label ?? item.inventory_stock_configurations?.config_label ?? null,
-          stock_sku: item.stock_sku ?? item.inventory_stock_configurations?.stock_sku ?? null,
-          volume_ml: parseNumber(item.volume_ml ?? item.inventory_stock_configurations?.volume_ml),
-          packaging: item.packaging ?? item.inventory_stock_configurations?.packaging ?? null,
-          default_for_ord: item.default_for_ord ?? item.inventory_stock_configurations?.default_for_ord ?? null,
-          stock_config_status: item.stock_config_status ?? item.inventory_stock_configurations?.status ?? null,
-          product_name: item.product_name ?? rawProduct?.product_name ?? null,
-          product_code: item.product_code ?? rawProduct?.product_code ?? null,
-          organization_id: organizationId,
-          organization_name: item.organization_name ?? rawOrg?.org_name ?? null,
-          organization_code: item.organization_code ?? rawOrg?.org_code ?? null,
-          quantity_on_hand: quantityOnHand,
-          quantity_allocated: allocatedQuantity,
-          quantity_available: quantityAvailable,
-          reorder_point: Number(item.reorder_point ?? 0),
-          reorder_quantity: Number(item.reorder_quantity ?? 0),
-          max_stock_level: parseNumber(item.max_stock_level),
-          safety_stock: parseNumber(item.safety_stock),
-          lead_time_days: parseNumber(item.lead_time_days),
-          unit_cost: resolvedUnitCost,
-          total_value: resolvedTotalValue,
-          manual_balance_qty:
-            item.manual_balance_qty !== undefined && item.manual_balance_qty !== null
-              ? Number(item.manual_balance_qty)
-              : null,
-          warehouse_location: item.warehouse_location ?? null,
-          updated_at: item.updated_at ?? null
-        }
-      })
+      endNormalize({ rows: normalized.length })
 
       if (source === 'fallback' && normalized.length > 0) {
         const combos = normalized.filter(item => item.variant_id && item.organization_id)
@@ -770,11 +718,11 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
           const organizationIdSet = new Set(organizationIds)
           const manualBalanceMap = new Map<string, number>()
 
-          const { data: manualViewData, error: manualViewError } = await supabase
+          const { data: manualViewData, error: manualViewError } = await readPages(() => supabase
             .from('vw_manual_stock_balance')
             .select('warehouse_id, variant_id, stock_config_id, manual_balance_qty')
             .in('variant_id', variantIds)
-            .in('warehouse_id', organizationIds)
+            .in('warehouse_id', organizationIds).order('warehouse_id').order('variant_id').order('stock_config_id'), 'manual balance')
 
           if (!manualViewError) {
             manualViewData?.forEach((row: any) => {
@@ -784,11 +732,11 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
             })
           } else {
             console.warn('vw_manual_stock_balance unavailable, aggregating manual balance from stock_movements', manualViewError)
-            const { data: manualMovementData, error: manualMovementError } = await supabase
+            const { data: manualMovementData, error: manualMovementError } = await readPages(() => supabase
               .from('stock_movements')
               .select('variant_id, stock_config_id, movement_type, to_organization_id, from_organization_id, quantity_change')
               .in('variant_id', variantIds)
-              .in('movement_type', ['manual_in', 'manual_out'])
+              .in('movement_type', ['manual_in', 'manual_out']).order('id'), 'manual movements')
 
             if (!manualMovementError) {
               manualMovementData?.forEach((movement: any) => {
@@ -810,7 +758,7 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                 manualBalanceMap.set(key, existing + delta)
               })
             } else {
-              console.error('Failed to aggregate manual stock balance fallback:', manualMovementError)
+              throw manualMovementError
             }
           }
 
@@ -834,11 +782,11 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
           // Track warranty_bonus quantities separately (they should not add to inventory value)
           const warrantyBonusMap = new Map<string, number>()
           try {
-            const { data: movementTotalsData, error: movementTotalsError } = await supabase
+            const { data: movementTotalsData, error: movementTotalsError } = await readPages(() => supabase
               .from('stock_movements')
               .select('variant_id, stock_config_id, quantity_change, from_organization_id, to_organization_id, movement_type')
               .in('variant_id', variantIds)
-              .or(`from_organization_id.in.(${organizationIds.join(',')}),to_organization_id.in.(${organizationIds.join(',')})`)
+              .or(`from_organization_id.in.(${organizationIds.join(',')}),to_organization_id.in.(${organizationIds.join(',')})`).order('id'), 'movement totals')
 
             if (!movementTotalsError) {
               movementTotalsData?.forEach((movement: any) => {
@@ -871,10 +819,10 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                 }
               })
             } else {
-              console.error('Failed to recalculate on-hand from stock_movements:', movementTotalsError)
+              throw movementTotalsError
             }
           } catch (movementError) {
-            console.error('Unexpected error while recalculating fallback inventory totals:', movementError)
+            throw movementError
           }
 
           if (movementTotalsMap.size > 0) {
@@ -935,10 +883,11 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
       }
 
       if (showInactive && collectedVariantIds.length > 0) {
-        const { data: allConfigs } = await supabase.from('inventory_stock_configurations')
+        const { data: allConfigs, error: configError } = await readPages(() => supabase.from('inventory_stock_configurations')
           .select('id, variant_id, config_code, config_label, stock_sku, volume_ml, packaging, status, default_for_ord')
           .in('variant_id', collectedVariantIds as string[])
-          .order('sort_order')
+          .order('sort_order').order('id'), 'audit configurations')
+        if (configError) throw configError
         const present = new Set(normalized.map(row => `${row.organization_id}:${row.variant_id}:${row.stock_config_id}`))
         const contexts = new Map<string, InventoryItem>(
           normalized.filter(row => row.organization_id && row.variant_id).map(row => [`${row.organization_id}:${row.variant_id}`, row]),
@@ -959,6 +908,9 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
               stock_config_status: config.status,
               default_for_ord: config.default_for_ord,
               quantity_on_hand: 0,
+              // Never inherit the sibling configuration's loose pieces/ratio.
+              pcs_on_hand: 0,
+              pcs_per_case: null,
               quantity_allocated: 0,
               quantity_available: 0,
               total_value: 0,
@@ -968,18 +920,32 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
         }
       }
 
+      const endIncomingGate = inventorySpan(trace, 'gate.awaitIncoming')
+      const incoming = await incomingResult
+      endIncomingGate({ ok: !incoming.error })
+      if (incoming.error) throw incoming.error
+      if (version !== requestVersion.current) return
+      succeeded = true
+      publishedTrace.current = trace
+      inventoryEvent(trace, 'inventory.publish', 'ready', { rows: normalized.length })
+      setIncomingMap(buildIncomingMap((incoming.data || []) as IncomingStockRow[]))
       setInventory(normalized)
+      setLoadedMode(showInactive)
+      setLoadedUser(user?.id ?? '')
     } catch (error: any) {
       const errorMessage = typeof error?.message === 'string' ? error.message : error
       console.error('Error fetching inventory:', errorMessage, error)
-      setInventory([])
+      if (version === requestVersion.current) setLoadError(String(errorMessage || 'Unable to load inventory'))
     } finally {
-      setLoading(false)
+      endLoad({ ok: succeeded, superseded: version !== requestVersion.current })
+      if (version === requestVersion.current) setLoading(false)
+      if (process.env.NODE_ENV === 'development') console.debug('[inventory-load]', { ms: Math.round(performance.now() - started), superseded: version !== requestVersion.current })
     }
   }
 
-  const fetchLocations = async () => {
+  const fetchLocations = async (isCurrent = () => true) => {
     try {
+      const endLocations = inventorySpan(mountTrace, 'locations.organizations')
       const { data, error } = await supabase
         .from('organizations')
         .select('id, org_name, org_code, org_type_code, parent_org_id, default_warehouse_org_id')
@@ -987,10 +953,13 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
         .eq('is_active', true)
         .order('org_name')
 
+      endLocations({ ok: !error, rows: data?.length ?? 0 })
       if (error) throw error
 
       // Shared with Inventory Settings so both pages resolve the same
       // HQ/warehouse options, membership and default (see buildInventoryLocationScope).
+      if (!isCurrent()) return
+      setLocationError(null)
       const scope = buildInventoryLocationScope(data || [])
       setHqWarehouseIdsByHq(scope.warehouseIdsByHq)
       // Keep individual warehouse/HQ filters; append display-only consolidated option(s).
@@ -1006,87 +975,9 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
         }
       }
     } catch (error) {
+      if (!isCurrent()) return
+      setLocationError('Unable to load inventory locations')
       console.error('Error fetching locations:', error)
-    }
-  }
-
-  const fetchProducts = async () => {
-    try {
-      // Fetch products that have inventory records
-      const { data, error } = await supabase
-        .from('product_inventory')
-        .select(`
-          product_variants (
-            products (
-              product_name
-            )
-          )
-        `)
-        .eq('is_active', true)
-        .gt('quantity_on_hand', 0)
-
-      if (error) throw error
-
-      // Extract unique product names from inventory records
-      const productNames = new Set<string>()
-      data?.forEach((item: any) => {
-        const variant = Array.isArray(item.product_variants)
-          ? item.product_variants[0]
-          : item.product_variants
-        const product = variant?.products
-          ? Array.isArray(variant.products)
-            ? variant.products[0]
-            : variant.products
-          : null
-        if (product?.product_name) {
-          productNames.add(product.product_name)
-        }
-      })
-
-      const uniqueProducts = Array.from(productNames).sort()
-      setProducts(uniqueProducts.map(name => ({ product_name: name })))
-    } catch (error) {
-      console.error('Error fetching products:', error)
-    }
-  }
-
-  const fetchVariants = async () => {
-    try {
-      // Fetch variants that have inventory records
-      const { data, error } = await supabase
-        .from('product_inventory')
-        .select(`
-          product_variants (
-            variant_code,
-            variant_name,
-            product_code,
-            products (
-              product_name
-            )
-          )
-        `)
-        .eq('is_active', true)
-        .gt('quantity_on_hand', 0)
-
-      if (error) throw error
-
-      // Extract unique variants from inventory records
-      const variantMap = new Map()
-      data?.forEach((item: any) => {
-        const variant = Array.isArray(item.product_variants)
-          ? item.product_variants[0]
-          : item.product_variants
-        if (variant?.variant_code) {
-          variantMap.set(variant.variant_code, variant)
-        }
-      })
-
-      const uniqueVariants = Array.from(variantMap.values()).sort((a, b) =>
-        a.variant_code.localeCompare(b.variant_code)
-      )
-      setVariants(uniqueVariants)
-    } catch (error) {
-      console.error('Error fetching variants:', error)
     }
   }
 
@@ -1188,13 +1079,14 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
   const inStockPercentage = filteredSummaries.length > 0 ? Math.round((inStockItems / filteredSummaries.length) * 100) : 0
 
   return (
+    <Profiler id="inventory" onRender={(_id, phase, actualDuration) => inventoryEvent(activeTrace.current, 'react.commit', phase, { renderMs: Math.round(actualDuration) })}>
     <div className="sera-sc-page">
       <SupplyChainPageHeader
         title="Inventory"
         description="Real-time inventory tracking across all locations"
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={handleExport} disabled={loading || exporting} className="border-[var(--sera-line)]">
+            <Button variant="outline" size="sm" onClick={handleExport} disabled={loading || unresolved || !!loadError || exporting} className="border-[var(--sera-line)]">
               {exporting ? (
                 <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2" />
               ) : (
@@ -1236,27 +1128,32 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
         </div>
       )}
 
+      {(loadError || authError || locationError) && <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        Inventory could not be loaded: {loadError || authError || locationError}. {!unresolved && 'Previously loaded data is shown; stock may be outdated.'}
+        <Button variant="outline" size="sm" onClick={() => { fetchInventory(); fetchLocations() }}>Retry</Button>
+      </div>}
+      {loading && !unresolved && <p role="status" className="text-xs text-[var(--sera-muted)]">Updating inventory…</p>}
       {/* Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <div className="sera-sc-kpi">
           <p className="sera-sc-kpi__label">Total Inventory Value</p>
-          <p className="sera-sc-kpi__value text-[1.35rem] sm:text-[1.75rem] truncate">RM {formatCurrency(totalValue)}</p>
+          <p className="sera-sc-kpi__value text-[1.35rem] sm:text-[1.75rem] truncate">{unresolved ? <span aria-label="Loading inventory value" className="block h-8 w-32 animate-pulse rounded bg-slate-200" /> : <>RM {formatCurrency(totalValue)}</>}</p>
         </div>
         <div className="sera-sc-kpi">
           <p className="sera-sc-kpi__label">In Stock</p>
-          <p className="sera-sc-kpi__value">{inStockPercentage}%</p>
-          <p className="text-xs text-[var(--sera-muted)] hidden sm:block">{inStockItems} of {filteredSummaries.length} items</p>
+          <p className="sera-sc-kpi__value">{unresolved ? <span aria-label="Loading inventory summary" className="block h-8 w-20 animate-pulse rounded bg-slate-200" /> : `${inStockPercentage}%`}</p>
+          <p className="text-xs text-[var(--sera-muted)] hidden sm:block">{unresolved ? 'Loading inventory…' : `${inStockItems} of ${filteredSummaries.length} items`}</p>
         </div>
         <div className="sera-sc-kpi">
           <p className="sera-sc-kpi__label">Low Stock</p>
-          <p className="sera-sc-kpi__value">{lowStockItems}</p>
-          {lowStockWithIncoming > 0 && (
+          <p className="sera-sc-kpi__value">{unresolved ? <span aria-label="Loading inventory summary" className="block h-8 w-20 animate-pulse rounded bg-slate-200" /> : lowStockItems}</p>
+          {!unresolved && lowStockWithIncoming > 0 && (
             <p className="text-xs text-[var(--sera-orange)] hidden sm:block">{lowStockWithIncoming} with incoming replenishment</p>
           )}
         </div>
         <div className="sera-sc-kpi">
           <p className="sera-sc-kpi__label">Out of Stock</p>
-          <p className="sera-sc-kpi__value">{outOfStockItems}</p>
+          <p className="sera-sc-kpi__value">{unresolved ? <span aria-label="Loading inventory summary" className="block h-8 w-20 animate-pulse rounded bg-slate-200" /> : outOfStockItems}</p>
         </div>
       </div>
 
@@ -1418,7 +1315,7 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
             <div>
               <CardTitle>Inventory Items</CardTitle>
               <CardDescription>
-                {loading ? 'Loading...' : `${filteredSummaries.length} flavour summar${filteredSummaries.length === 1 ? 'y' : 'ies'} found`}
+                {unresolved ? (loadError ? 'Inventory unavailable' : 'Loading...') : `${filteredSummaries.length} flavour summar${filteredSummaries.length === 1 ? 'y' : 'ies'} found`}
               </CardDescription>
             </div>
             {/* Audit affordance, not an operational one. It reveals retired
@@ -1527,12 +1424,11 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
               </TableRow>
             </TableHeader>
             <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={canViewTotalValue() ? 9 : 8} className="text-center py-8">
-                    Loading inventory...
-                  </TableCell>
-                </TableRow>
+              {unresolved ? (
+                loadError ? <TableRow><TableCell colSpan={canViewTotalValue() ? 9 : 8} className="h-64 text-center">Inventory unavailable. Use Retry above.</TableCell></TableRow>
+                : Array.from({ length: 6 }, (_, i) => <TableRow key={i} aria-label="Loading inventory row">
+                  {Array.from({ length: canViewTotalValue() ? 9 : 8 }, (_, j) => <TableCell key={j} className="h-16"><div className="h-5 animate-pulse rounded bg-slate-200" /></TableCell>)}
+                </TableRow>)
               ) : filteredSummaries.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={canViewTotalValue() ? 9 : 8} className="text-center py-8">
@@ -1617,35 +1513,62 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                         )}
                       </div>
                     </TableCell>
+                    {/* One resolved unit for every quantity on the row. Loose pieces
+                        are shown under On Hand only: reservations, orders and
+                        "Available to Order" are whole units, so a "+ 2 pcs" there
+                        would advertise fractional-case ordering that does not exist. */}
                     <TableCell>
-                      <span className="text-xs font-medium">{formatNumber(summary.onHand)}{renderUnit(summary.productName)}</span>
+                      {renderQuantity(summary.onHand, summary.pcsOnHand, summary.pcsPerCase, summary.stockUnit, summary.unitConflict)}
                     </TableCell>
                     <TableCell>
-                      <span className="text-xs text-[var(--sera-muted)]">{formatNumber(summary.allocated)}{renderUnit(summary.productName)}</span>
+                      {renderReservedTrigger(summary.allocated, summary.pcsPerCase, summary.stockUnit, () => setReservedDetail({
+                        variantId: summary.variantId || '',
+                        warehouseOrgId: summary.organizationId || '',
+                        warehouseName: summary.organizationName,
+                        productName: summary.productName || 'Product',
+                        variantName: summary.variantName || '',
+                        configIds: summary.allConfigIds,
+                        includeUnconfigured: true,
+                        scopeLabel: null,
+                        storedReserved: summary.allocated,
+                        unit: summary.stockUnit,
+                        pcsPerCase: summary.pcsPerCase,
+                      }))}
                     </TableCell>
                     <TableCell>
-                      <span className="text-xs font-medium">{formatNumber(summary.available)}{renderUnit(summary.productName)}</span>
+                      {renderQuantity(summary.available, 0, summary.pcsPerCase, summary.stockUnit)}
                     </TableCell>
                     <TableCell>
                       {summary.incoming > 0 ? (
                         <div>
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              setIncomingDetailItem({
-                                variant_id: summary.variantId,
-                                organization_id: summary.organizationId,
-                                product_name: summary.productName,
-                                variant_name: summary.variantName,
-                              })
-                            }}
-                            className="text-xs font-medium text-[var(--sera-orange)] underline decoration-dotted underline-offset-2 hover:text-[var(--sera-orange-deep)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--sera-orange)]/30 focus-visible:ring-offset-1 rounded-sm" 
-                            title="View incoming orders and transfers"
-                          >
-                            {formatNumber(summary.incoming)}
-                          </button>
-                          {renderUnit(summary.productName)}
+                          {(() => {
+                            // Production styling: orange dotted-underline figure (the
+                            // clickable part) with the muted unit label beside it.
+                            const { figure, unit } = splitQuantityLabel(
+                              formatStockQuantity({ cases: summary.incoming, pcs: 0, pcsPerCase: summary.pcsPerCase, unit: summary.stockUnit }).primary,
+                            )
+                            return (
+                              <span className="whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    setIncomingDetailItem({
+                                      variant_id: summary.variantId,
+                                      organization_id: summary.organizationId,
+                                      product_name: summary.productName,
+                                      variant_name: summary.variantName,
+                                    })
+                                  }}
+                                  className={CLICKABLE_QUANTITY_FIGURE}
+                                  title="View incoming orders and transfers"
+                                >
+                                  {figure}
+                                </button>
+                                {unit && <span className={TABLE_QUANTITY_UNIT}>{unit}</span>}
+                              </span>
+                            )
+                          })()}
                           {incomingBreakdown.transfer > 0 && (
                             <p className="text-xs text-[var(--sera-muted)]/80">
                               PO {formatNumber(incomingBreakdown.manufacturer)} · TRF {formatNumber(incomingBreakdown.transfer)}
@@ -1657,10 +1580,7 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                       )}
                     </TableCell>
                     <TableCell>
-                      <span className="text-xs font-medium">
-                        {formatNumber(summary.position)}
-                        {renderUnit(summary.productName)}
-                      </span>
+                      {renderQuantity(summary.position, 0, summary.pcsPerCase, summary.stockUnit)}
                     </TableCell>
                     <TableCell>
                       <div className="space-y-2">
@@ -1690,7 +1610,7 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                           RM {formatCurrency(summary.value ?? 0)}
                         </span>
                         <p className="text-xs text-[var(--sera-muted)]">
-                          @ RM {formatCurrency(summary.unitCost ?? 0)} per unit
+                          @ RM {formatCurrency(summary.unitCost ?? 0)} per {stockUnitCostLabel(summary.stockUnit)}
                         </p>
                       </TableCell>
                     )}
@@ -1740,11 +1660,25 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
                                   <td className="px-4 py-2">
                                     <Badge variant="outline">{config.lifecycleStatus || 'active'}</Badge>
                                   </td>
-                                  <td className="px-4 py-2 text-right font-medium">{formatNumber(config.onHand)}{renderUnit(summary.productName)}</td>
-                                  <td className="px-4 py-2 text-right">{config.allocated > 0 ? <>{formatNumber(config.allocated)}{renderUnit(summary.productName)}</> : <span className="text-gray-400">0</span>}</td>
-                                  <td className="px-4 py-2 text-right font-medium">{formatNumber(config.available)}{renderUnit(summary.productName)}</td>
-                                  <td className="px-4 py-2 text-right">{config.incoming > 0 ? <>{formatNumber(config.incoming)}{renderUnit(summary.productName)}</> : <span className="text-gray-400">0</span>}</td>
-                                  <td className="px-4 py-2 text-right">{formatNumber(config.position)}{renderUnit(summary.productName)}</td>
+                                  <td className="px-4 py-2 text-right font-medium">
+                                    {renderQuantity(config.onHand, config.pcsOnHand, config.pcsPerCase, config.stockUnit, config.unitConflict, 'end')}
+                                  </td>
+                                  <td className="px-4 py-2 text-right">{config.allocated > 0 && config.stockConfigId ? renderReservedTrigger(config.allocated, config.pcsPerCase, config.stockUnit, () => setReservedDetail({
+                                    variantId: summary.variantId || '',
+                                    warehouseOrgId: summary.organizationId || '',
+                                    warehouseName: summary.organizationName,
+                                    productName: summary.productName || 'Product',
+                                    variantName: summary.variantName || '',
+                                    configIds: [config.stockConfigId as string],
+                                    includeUnconfigured: false,
+                                    scopeLabel: config.isLegacy ? 'Legacy / Unclassified' : config.label,
+                                    storedReserved: config.allocated,
+                                    unit: config.stockUnit,
+                                    pcsPerCase: config.pcsPerCase,
+                                  }), 'end') : config.allocated > 0 ? renderQuantity(config.allocated, 0, config.pcsPerCase, config.stockUnit, null, 'end') : <span className="text-gray-400">0</span>}</td>
+                                  <td className="px-4 py-2 text-right font-medium">{renderQuantity(config.available, 0, config.pcsPerCase, config.stockUnit, null, 'end')}</td>
+                                  <td className="px-4 py-2 text-right">{config.incoming > 0 ? renderQuantity(config.incoming, 0, config.pcsPerCase, config.stockUnit, null, 'end') : <span className="text-gray-400">0</span>}</td>
+                                  <td className="px-4 py-2 text-right">{renderQuantity(config.position, 0, config.pcsPerCase, config.stockUnit, null, 'end')}</td>
                                   {canViewTotalValue() && (
                                     <td className="px-4 py-2 text-right">RM {formatCurrency(config.value)}</td>
                                   )}
@@ -1786,7 +1720,7 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
           {/* Pagination */}
           <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-[var(--sera-muted)] text-sm">
-              {filteredSummaries.length === 0
+              {unresolved ? (loadError ? 'Inventory unavailable' : 'Loading inventory…') : filteredSummaries.length === 0
                 ? 'No items to display'
                 : `Showing ${(currentPage - 1) * itemsPerPage + 1} to ${Math.min(currentPage * itemsPerPage, filteredSummaries.length)} of ${filteredSummaries.length} items`}
             </p>
@@ -1848,6 +1782,15 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
         />
       )}
 
+      {/* Reserved Stock Detail Dialog (read-only) */}
+      {reservedDetail && (
+        <ReservedStockDialog
+          open={!!reservedDetail}
+          onClose={() => setReservedDetail(null)}
+          {...reservedDetail}
+        />
+      )}
+
       {/* Incoming Stock Detail Dialog */}
       {incomingDetailItem && (
         <IncomingStockDialog
@@ -1860,5 +1803,6 @@ export default function InventoryView({ userProfile, onViewChange }: InventoryVi
         />
       )}
     </div>
+    </Profiler>
   )
 }

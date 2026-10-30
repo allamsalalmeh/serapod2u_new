@@ -156,6 +156,10 @@ describe('mobile employee screens layout', () => {
     person(['hr/my-workspace', 'hr/leave/requests', 'hr'])
     expect(props(await layout())).toMatchObject({ canApproveLeave: true, canAdministerHr: true })
   })
+  it('gives the mobile Approvals tab to Manager Self-Service holders (team leave) without HR administration', async () => {
+    person(['hr/my-workspace', 'hr/team-leave'])
+    expect(props(await layout())).toMatchObject({ canApproveLeave: true, canAdministerHr: false })
+  })
   it.each(['pending', 'reset', 'none'])('shows the pending setup state when the employee record is %s', async state => {
     person(['hr/my-workspace'])
     getOwnOnboardingState.mockResolvedValue(state)

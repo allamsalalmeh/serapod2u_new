@@ -1,5 +1,6 @@
 'use client'
 
+import LegacyCutoverPreview from './LegacyCutoverPreview'
 import { useEffect, useMemo, useState } from 'react'
 import { Bot, History, KeyRound } from 'lucide-react'
 import { formatDate } from './client-api'
@@ -196,6 +197,7 @@ export function LegacyCompatibilityPanel({ governance }: { governance: any | nul
         </tbody>
       </table>
     </div>
+    <LegacyCutoverPreview />
     <div className="border-t p-4 text-xs text-gray-500">Departments with legacy permission overrides: {legacy.departmentsWithOverrides}</div>
   </Collapsible>
 }

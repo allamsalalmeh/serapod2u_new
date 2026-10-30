@@ -2,18 +2,18 @@ import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { authorizeOperation, organizationResource } from '@/lib/security-access/operation'
 import { targetProtectionAllows } from '@/lib/security-access/scope'
-import { currentMigrationMode } from '@/lib/security-access/authorization'
-import { isNewAuthoritative } from '@/lib/security-access/enforcement'
-import { setIdentityAccountStatus } from './provisioning'
+import { randomUUID } from 'node:crypto'
+import { archiveExecute, archivePreview } from './archive'
 
 /**
  * Archive / delete of an identity ("Archive Identities", platform.identity.delete).
  *
  * Every path that removes another person's identity decides here, so the
  * permission can be enforced:
- *   - /api/admin/delete-user-otp/request and /verify-and-delete (User Management)
- *   - deleteUserWithAuth (server action)
- *   - /api/admin/bulk-delete-users (guarded staging tool)
+ *   - /api/admin/delete-user-otp/request and /verify-and-delete (User Management
+ *     archive; permanent deletion is the canonical identity deletion,
+ *     lib/identity/permanent-deletion.ts, decided by the database)
+ *   (/api/admin/bulk-delete-users also deletes only through that service)
  *   - organization deletion (/api/organizations/delete/request-otp,
  *     /verify-and-delete and the guarded /api/organizations/delete), which
  *     deletes every member identity of the organization
@@ -183,43 +183,31 @@ export async function authorizeOrganizationIdentityRemoval(actorId: string, orga
 }
 
 /**
- * Archive keeps the identity whole (management decision 2026-09-29): the real
- * email and phone stay reserved on the archived identity, the login is banned
- * and Telegram ordering is switched off. Once platform.identity.delete is
- * enforced the change runs through identity_set_account_status(), which
- * re-asserts the permission over the target's organization in the database,
- * locks the row, keeps ARCHIVED terminal and writes sa_access_change_log.
- * Before that, the historical direct write is kept (its legacy rule is the
- * route's HQ Admin / Super Admin rule, which the database function does not
- * share). Either way it is a soft archive; nothing is deleted.
+ * Archive (OTP-confirmed User Management path) is the canonical Archive &
+ * Revoke Access (lib/identity/archive.ts → identity_archive_execute): one
+ * database transaction ends employment, archives the account (S&A leaver
+ * sync), bans the login and revokes sessions, refresh and one-time tokens.
+ * The UUID, name and history are kept; the email and phone stay reserved
+ * (releasing them is a separate, explicit action). The database decides
+ * authority and protections again; nothing changes on refusal.
  */
 export async function archiveIdentityKeepingIdentifiers(actorId: string, targetUserId: string): Promise<{ error: string | null; status?: number }> {
-  const admin = createAdminClient() as any
-  const reason = 'Archived by administrator (history retained; identifiers reserved)'
-
-  let enforced: boolean
-  try {
-    enforced = isNewAuthoritative(await currentMigrationMode(IDENTITY_REMOVAL_PERMISSION))
-  } catch {
-    return { error: 'Authorization service unavailable', status: 503 }
+  const reason = 'Archived by administrator (OTP verified; history retained; identifiers reserved)'
+  const preview = await archivePreview(actorId, targetUserId, 'user_management')
+  if (!preview.ok) return { error: preview.message, status: preview.status }
+  if (!preview.preview.archive_allowed) {
+    const why = preview.preview.blockers.map(b => b.message || b.code).join(' ')
+    return { error: why || 'This account cannot be archived.', status: 409 }
   }
-
-  if (enforced) {
-    // The database decides again (403 when it refuses); nothing changes on refusal.
-    const result = await setIdentityAccountStatus(actorId, targetUserId, 'ARCHIVED', reason)
-    if (!result.ok) return { error: result.message || 'Unable to archive user profile', status: result.status }
-  } else {
-    const { error: profileError } = await admin
-      .from('users')
-      .update({ account_status: 'ARCHIVED', account_status_reason: reason, updated_at: new Date().toISOString() })
-      .eq('id', targetUserId)
-    if (profileError) return { error: profileError.message || 'Unable to archive user profile', status: 500 }
-
-    const { error: authError } = await admin.auth.admin.updateUserById(targetUserId, { ban_duration: '876000h' })
-    if (authError) console.error('Archived user login could not be banned; account status still blocks access:', authError.message)
+  const executed = await archiveExecute({
+    actorId, userId: targetUserId, entry: 'user_management', requestId: randomUUID(),
+    previewToken: preview.preview.preview_token, reason,
+    // The OTP is this path's confirmation; the phrase is the one the server just previewed.
+    confirmation: preview.preview.confirmation_phrase, releaseIdentifiers: false, employmentEnd: 'resigned',
+  })
+  if (!executed.ok) return { error: executed.message, status: executed.status }
+  if (executed.outcome.status !== 'completed') {
+    return { error: executed.outcome.status === 'stale' ? 'The account changed during the request; nothing was changed. Try again.' : 'This account cannot be archived.', status: 409 }
   }
-
-  // Prevent an archived business user from continuing to submit Telegram orders.
-  await admin.from('telegram_links').update({ is_active: false }).eq('user_id', targetUserId)
   return { error: null }
 }

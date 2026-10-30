@@ -6,10 +6,10 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, Building2, Calendar,
+  AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, Building2, DollarSign, Info,
   ChevronLeft, ChevronRight, ClipboardList, Download, FileSpreadsheet, HeartPulse,
   Loader2, Minus, Package, PieChart as PieIcon, RefreshCw, Search, ShoppingCart,
-  Target, TrendingUp, Users, X,
+  TrendingUp, Users, X,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -23,8 +23,8 @@ import {
   ALL_DISTRIBUTORS,
   ALL_STATUS,
   ACTION_LABEL,
+  isActiveStatus,
   HEALTH_LABEL,
-  buildReportingMonthOptions,
   currentReportingMonthKey,
   statusLabel,
   type ActionKey,
@@ -37,7 +37,9 @@ import {
 import type { ReportingPeriod } from '@/lib/reporting/reporting-period'
 import type { DistributorDrilldown, DrilldownMetric, OrderRef } from '@/lib/reporting/distributor-drilldown'
 import { supplyChainOrderPath } from '@/modules/supply-chain/supplyChainNav'
+import { parseReportingMonthParam } from '@/lib/reporting/consumer-analytics'
 import ExecutiveKpiValue from './ExecutiveKpiValue'
+import ReportingMonthSelector from './ReportingMonthSelector'
 import { REPORTING_COLORS, REPORTING_PANEL_CLASS, ReportingTabLoading } from './reportingChrome'
 
 interface DistributorReportsTabProps {
@@ -45,6 +47,15 @@ interface DistributorReportsTabProps {
   chartGridColor?: string
   chartTickColor?: string
   isDark?: boolean
+  /** Dashboard-level Reporting Month. When given, the dashboard owns it (and its URL parameter). */
+  month?: string
+  onMonthChange?: (month: string) => void
+}
+
+/** One query-string value, read synchronously so the first request already carries the URL scope. */
+function readSearchParam(name: string): string | null {
+  if (typeof window === 'undefined') return null
+  return new URLSearchParams(window.location.search).get(name)
 }
 
 interface ReportResponse {
@@ -159,6 +170,29 @@ function GrowthBadge({ value, suffix = '%', nullLabel = 'New activity', decimals
   )
 }
 
+/**
+ * An order's status, with draft and cancelled orders set apart: they stay in
+ * Recent Orders for history and audit but never count toward Active Order
+ * Value or Approved Sales.
+ */
+function OrderStatusBadge({ status }: { status: string }) {
+  const excluded = !isActiveStatus(status)
+  return (
+    <Badge
+      variant="secondary"
+      title={excluded ? 'Not counted in Active Orders, Active Order Value or Approved Sales' : undefined}
+      className={cn(
+        'shrink-0 whitespace-nowrap px-1.5 py-0 text-[11px] font-medium',
+        status === 'cancelled'
+          ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+          : excluded ? 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300' : undefined,
+      )}
+    >
+      {statusLabel(status)}
+    </Badge>
+  )
+}
+
 function HealthBadge({ health }: { health: HealthStatus }) {
   return (
     <Badge variant="secondary" className={cn('whitespace-nowrap px-1.5 py-0 text-[11px] font-medium', HEALTH_BADGE[health])}>
@@ -218,6 +252,73 @@ function KpiCard({ label, icon: Icon, accent, value, delta, caption, onClick }: 
       </CardContent>
     </Card>
   )
+}
+
+/**
+ * Overview headline KPI: the approved figure, its growth against the comparison window, and a
+ * footer line (submitted orders awaiting approval, or a supporting breakdown) under a divider.
+ */
+function HeadlineKpiCard({ label, info, icon: Icon, accent, value, changePct, versus, footer, onClick, testId }: {
+  label: string
+  /** Definition shown on the ⓘ hint. */
+  info: string
+  icon: typeof Package
+  accent: string
+  value: string
+  changePct: number | null
+  /** e.g. "vs 01 Jul 2026 – 31 Jul 2026". */
+  versus: string
+  footer?: { label: string; value?: string | null; note?: string | null } | null
+  onClick?: () => void
+  testId?: string
+}) {
+  return (
+    <Card
+      className={cn(REPORTING_PANEL_CLASS, 'flex h-full flex-col transition-all hover:border-[var(--sera-orange)]/35', onClick && INTERACTIVE_CARD_CLASS)}
+      data-testid={testId}
+      {...interactiveProps(onClick, label)}
+    >
+      <CardContent className="flex flex-1 flex-col px-4 pb-4 pt-4 sm:px-5 sm:pt-5">
+        <div className="flex items-start gap-3">
+          <span className="shrink-0 rounded-xl p-2 sm:p-2.5" style={{ backgroundColor: `${accent}15` }}>
+            <Icon className="h-5 w-5" style={{ color: accent }} strokeWidth={1.75} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-1 text-xs font-medium text-[var(--sera-muted)] sm:text-sm">
+              <span>{label}</span>
+              <span title={info} aria-label={`${label}: ${info}`} role="img" className="inline-flex shrink-0 cursor-help">
+                <Info className="h-3.5 w-3.5" aria-hidden />
+              </span>
+            </p>
+            <ExecutiveKpiValue>{value}</ExecutiveKpiValue>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <GrowthBadge value={changePct} nullLabel="No baseline" />
+              <span className="text-[10px] text-[var(--sera-muted)] sm:text-[11px]">{versus}</span>
+            </div>
+          </div>
+        </div>
+        {footer ? (
+          <div className="mt-auto pt-3" data-testid={testId ? `${testId}-footer` : undefined}>
+            <div className="border-t border-[var(--sera-line)] pt-3">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-xs font-medium text-[var(--sera-ink)] sm:text-sm">{footer.label}</span>
+                {footer.value ? <span className="shrink-0 text-sm font-semibold tabular-nums text-[var(--sera-ink)]">{footer.value}</span> : null}
+              </div>
+              {footer.note ? <p className="mt-0.5 text-[10px] text-[var(--sera-muted)] sm:text-[11px]">{footer.note}</p> : null}
+            </div>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  )
+}
+
+/** "6 approved + 1 packed order" — approved-stage orders by status, lower-case, singular when the last count is 1. */
+function approvedStageNote(statuses: { status: string; orders: number }[]): string | null {
+  if (statuses.length === 0) return null
+  const word: Record<string, string> = { approved: 'approved', warehouse_packed: 'packed', shipped_distributor: 'shipped', closed: 'closed' }
+  const parts = statuses.map((row) => `${formatCount(row.orders)} ${word[row.status] ?? statusLabel(row.status).toLowerCase()}`)
+  return `${parts.join(' + ')} ${statuses[statuses.length - 1].orders === 1 ? 'order' : 'orders'}`
 }
 
 function SectionCard({ title, description, icon: Icon, action, children, className }: {
@@ -297,6 +398,8 @@ export default function DistributorReportsTab({
   chartGridColor,
   chartTickColor,
   isDark = false,
+  month: monthProp,
+  onMonthChange,
 }: DistributorReportsTabProps) {
   const chartGrid = chartGridColor ?? (isDark ? '#374151' : '#f0f0f0')
   const chartTick = chartTickColor ?? (isDark ? '#9ca3af' : '#6b7280')
@@ -310,9 +413,16 @@ export default function DistributorReportsTab({
 
   // Report scope — persists across sub-tab switches because it lives above the
   // Tabs component and nothing here resets it.
-  const [month, setMonth] = useState<string>(() => currentReportingMonthKey())
-  const [distributorId, setDistributorId] = useState<string>(ALL_DISTRIBUTORS)
-  const [status, setStatus] = useState<string>(ALL_STATUS)
+  // Scope is restored from the URL in the initialisers, before the first load:
+  // a restore effect would run after the URL-sync effect below had already
+  // overwritten the shared link with defaults.
+  const [localMonth, setLocalMonth] = useState<string>(
+    () => parseReportingMonthParam(readSearchParam('month')) ?? currentReportingMonthKey(),
+  )
+  const month = monthProp ?? localMonth
+  const setMonth = onMonthChange ?? setLocalMonth
+  const [distributorId, setDistributorId] = useState<string>(() => readSearchParam('distributor') || ALL_DISTRIBUTORS)
+  const [status, setStatus] = useState<string>(() => readSearchParam('status') || ALL_STATUS)
 
   const [filters, setFilters] = useState<FilterOptions>({ months: [], distributors: [], statuses: [] })
   const [response, setResponse] = useState<ReportResponse | null>(null)
@@ -400,7 +510,8 @@ export default function DistributorReportsTab({
   useEffect(() => {
     if (typeof window === 'undefined') return
     const params = new URLSearchParams(window.location.search)
-    params.set('month', month)
+    // A dashboard-owned month is written by the dashboard itself.
+    if (monthProp === undefined) params.set('month', month)
     params.set('distributor', distributorId)
     params.set('status', status)
     params.delete('dateRange')
@@ -408,29 +519,9 @@ export default function DistributorReportsTab({
     params.delete('seller')
     params.delete('search')
     window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
-  }, [month, distributorId, status])
+  }, [month, monthProp, distributorId, status])
 
-  // Restore scope from the URL once, before the first load settles.
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const params = new URLSearchParams(window.location.search)
-    const urlMonth = params.get('month')
-    const urlDistributor = params.get('distributor')
-    const urlStatus = params.get('status')
-    if (urlMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(urlMonth) && urlMonth <= currentReportingMonthKey()) {
-      setMonth(urlMonth)
-    }
-    if (urlDistributor) setDistributorId(urlDistributor)
-    if (urlStatus) setStatus(urlStatus)
-  }, [])
-
-  const monthOptions = useMemo(
-    () => buildReportingMonthOptions([...filters.months.map((period) => period.key), month]),
-    [filters.months, month],
-  )
-  const monthIndex = monthOptions.findIndex((option) => option.value === month)
-  const olderMonth = monthIndex >= 0 ? monthOptions[monthIndex + 1]?.value : undefined
-  const newerMonth = monthIndex > 0 ? monthOptions[monthIndex - 1]?.value : undefined
+  const availableMonths = useMemo(() => filters.months.map((period) => period.key), [filters.months])
 
   const report = response?.report ?? null
   const meta = response?.meta ?? null
@@ -562,45 +653,12 @@ export default function DistributorReportsTab({
   // ── Header ───────────────────────────────────────────────────────────────
   const controls = (
     <div className="flex w-full flex-col gap-3 xl:w-auto xl:flex-row xl:items-end">
-      <div className="space-y-1.5">
-        <label htmlFor="distributor-analytics-month" className="text-xs font-medium text-[var(--sera-muted)]">
-          Reporting Month
-        </label>
-        <div className="flex items-center gap-1.5">
-          <Select value={month} onValueChange={setMonth}>
-            <SelectTrigger
-              id="distributor-analytics-month"
-              className="h-10 min-w-0 flex-1 border-[var(--sera-line)] bg-white text-sm xl:h-9 xl:w-[180px] xl:flex-none"
-            >
-              <Calendar className="mr-2 h-3.5 w-3.5 shrink-0 text-[var(--sera-muted)]" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {monthOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline" size="icon"
-            className="h-10 w-10 shrink-0 border-[var(--sera-line)] xl:h-9 xl:w-9"
-            onClick={() => olderMonth && setMonth(olderMonth)}
-            disabled={!olderMonth}
-            title="Previous month"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="outline" size="icon"
-            className="h-10 w-10 shrink-0 border-[var(--sera-line)] xl:h-9 xl:w-9"
-            onClick={() => newerMonth && setMonth(newerMonth)}
-            disabled={!newerMonth}
-            title="Next month"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
+      <ReportingMonthSelector
+        id="distributor-analytics-month"
+        month={month}
+        onMonthChange={setMonth}
+        availableMonths={availableMonths}
+      />
 
       <div className="space-y-1.5">
         <label htmlFor="distributor-analytics-distributor" className="text-xs font-medium text-[var(--sera-muted)]">
@@ -726,8 +784,13 @@ export default function DistributorReportsTab({
 
   const { period, summary, comparison } = report
   const findComparison = (key: string) => comparison.find((row) => row.key === key)
-  const activeChange = findComparison('activeDistributors')?.changePoints ?? null
-  const returningChange = findComparison('returningRate')?.changePoints ?? null
+  const approved = report.approvedSales
+  const approvedComparison = report.approvedComparison
+  const versus = `vs ${period.comparisonRangeLabel}`
+  const activeDistributorsRow = findComparison('activeDistributors')
+  const activeDistributorsChangePct = activeDistributorsRow && typeof activeDistributorsRow.previous === 'number' && activeDistributorsRow.previous > 0
+    ? Math.round(((Number(activeDistributorsRow.current) - activeDistributorsRow.previous) / activeDistributorsRow.previous) * 1000) / 10
+    : null
 
   const comparisonCell = (row: ComparisonRow, side: 'current' | 'previous') => {
     const value = row[side]
@@ -794,50 +857,77 @@ export default function DistributorReportsTab({
 
         {/* ══ OVERVIEW ══════════════════════════════════════════════════ */}
         <TabsContent value="overview" className="space-y-5">
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-5">
-            <KpiCard
-              label="Total Orders"
+          {/* Headline = APPROVED-stage orders (approved, warehouse packed, shipped, closed). Submitted orders
+              awaiting approval are shown beneath each card, only when there are any. Draft and cancelled
+              orders are not part of these KPIs; they remain in Order Processing Health and Recent Orders. */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4" data-testid="distributor-headline-kpis">
+            <HeadlineKpiCard
+              testId="kpi-approved-sales"
+              label="Approved Sales"
+              info="Order value of approved, warehouse packed, shipped and closed D2H orders by SO date. Submitted, draft and cancelled orders are excluded."
+              icon={DollarSign}
+              accent={REPORTING_COLORS.success}
+              value={formatRMCompact(approved.value)}
+              changePct={approved.valueChangePct}
+              versus={versus}
+              footer={approved.submittedOrders > 0
+                ? { label: 'Submitted', value: formatRMCompact(approved.submittedValue), note: approvedStageNote(approved.statuses) }
+                : approvedStageNote(approved.statuses) ? { label: 'Approved stages', note: approvedStageNote(approved.statuses) } : null}
+            />
+            <HeadlineKpiCard
+              testId="kpi-approved-orders"
+              label="Approved Orders"
+              info="Number of approved, warehouse packed, shipped and closed D2H orders by SO date."
               icon={ShoppingCart}
               accent={REPORTING_COLORS.primary}
-              value={formatCount(summary.totalOrders)}
-              delta={<GrowthBadge value={findComparison('totalOrders')?.changePct ?? null} />}
-              caption={`${summary.avgOrdersPerDay.toFixed(1)} per day`}
-              onClick={() => openMetric('total_orders')}
+              value={formatCount(approved.orders)}
+              changePct={approved.ordersChangePct}
+              versus={versus}
+              footer={approved.submittedOrders > 0
+                ? { label: 'Submitted Orders', value: formatCount(approved.submittedOrders), note: `${formatCount(approved.orders)} approved-stage ${approved.orders === 1 ? 'order' : 'orders'}` }
+                : null}
+              onClick={() => openMetric('approved_orders')}
             />
-            <KpiCard
-              label="Order Value"
-              icon={Target}
-              accent={REPORTING_COLORS.success}
-              value={formatRMCompact(summary.orderValue)}
-              delta={<GrowthBadge value={findComparison('orderValue')?.changePct ?? null} />}
-              caption={`${formatRMCompact(summary.avgValuePerDay)} per day`}
-            />
-            <KpiCard
-              label="Avg Order Value"
-              icon={BarChart3}
-              accent={REPORTING_COLORS.violet}
-              value={summary.avgOrderValue === null ? '—' : formatRMCompact(summary.avgOrderValue)}
-              delta={<GrowthBadge value={findComparison('avgOrderValue')?.changePct ?? null} />}
-              caption={`Comparison ${findComparison('avgOrderValue')?.previous === null ? '—' : formatRMCompact(findComparison('avgOrderValue')!.previous!)}`}
-            />
-            <KpiCard
+            <HeadlineKpiCard
+              testId="kpi-active-distributors"
               label="Active Distributors"
+              info="Distributors with at least one submitted or approved-stage order in the period."
               icon={Users}
-              accent={REPORTING_COLORS.warning}
+              accent={REPORTING_COLORS.violet}
               value={formatCount(summary.activeDistributors)}
-              delta={<GrowthBadge value={activeChange} suffix="" decimals={0} nullLabel="No baseline" />}
-              caption={`${formatCount(summary.multipleOrderDistributors)} placed more than one order`}
+              changePct={activeDistributorsChangePct}
+              versus={versus}
+              footer={approved.distributors === null ? null : {
+                label: 'With Approved Orders',
+                value: formatCount(approved.distributors),
+                note: 'Distributors with ≥ 1 approved order',
+              }}
               onClick={() => openMetric('active')}
             />
-            <KpiCard
-              label="Returning Rate"
-              icon={RefreshCw}
-              accent={REPORTING_COLORS.cyan}
-              value={formatPct(summary.returningRatePct)}
-              delta={<GrowthBadge value={returningChange} suffix="pp" nullLabel="No baseline" />}
-              caption={`${formatCount(summary.returningDistributors)} of ${formatCount(summary.activeDistributors)} active traded before`}
+            <HeadlineKpiCard
+              testId="kpi-avg-approved-order-value"
+              label="Average Approved Order Value"
+              info="Approved Sales ÷ Approved Orders."
+              icon={BarChart3}
+              accent={REPORTING_COLORS.slate}
+              value={approved.avgOrderValue === null ? '—' : formatRMCompact(approved.avgOrderValue)}
+              changePct={approved.avgOrderValueChangePct}
+              versus={versus}
+              footer={approved.submittedAvgOrderValue !== null
+                ? { label: 'Submitted Avg. Order Value', value: formatRMCompact(approved.submittedAvgOrderValue), note: 'Based on submitted orders' }
+                : null}
             />
           </div>
+          <p className="-mt-2 text-[11px] text-[var(--sera-muted)]" data-testid="active-kpi-definition">
+            Approved = Approved, Warehouse Packed, Shipped and Closed orders. Submitted orders awaiting approval are shown under each
+            card. Draft and cancelled orders never count toward these KPIs under any Status filter; they remain in Order Processing
+            Health and Recent Orders. Active Distributors counts submitted and approved-stage orders.
+          </p>
+          {!approved.reconciled ? (
+            <p role="alert" className="-mt-2 text-[11px] text-amber-700">
+              Approved figures do not reconcile with Order Processing Health — please report this.
+            </p>
+          ) : null}
 
           {report.isEmpty ? (
             <Card className={REPORTING_PANEL_CLASS}>
@@ -852,6 +942,7 @@ export default function DistributorReportsTab({
             description={`${period.rangeLabel} compared with ${period.comparisonRangeLabel}`}
             icon={TrendingUp}
           >
+            {/* Approved-stage orders lead, like the headline cards; submitted, draft and cancelled orders are not in these rows. */}
             <div className="hidden md:block">
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[560px] text-sm">
@@ -864,7 +955,7 @@ export default function DistributorReportsTab({
                     </tr>
                   </thead>
                   <tbody>
-                    {comparison.map((row) => (
+                    {approvedComparison.map((row) => (
                       <tr key={row.key} className="border-b border-[var(--sera-line)]/60 last:border-0">
                         <td className="px-2 py-2.5 font-medium text-[var(--sera-ink)]">{row.label}</td>
                         <td className="px-2 py-2.5 text-right tabular-nums">{comparisonCell(row, 'current')}</td>
@@ -877,7 +968,7 @@ export default function DistributorReportsTab({
               </div>
             </div>
             <div className="space-y-2.5 md:hidden">
-              {comparison.map((row) => (
+              {approvedComparison.map((row) => (
                 <div key={row.key} className="rounded-xl border border-[var(--sera-line)] p-3">
                   <div className="mb-1.5 flex items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-[var(--sera-ink)]">{row.label}</span>
@@ -926,7 +1017,7 @@ export default function DistributorReportsTab({
             description={`${period.rangeLabel}${period.isCurrentMonth ? ' — month to date, no future days' : ''}`}
             icon={BarChart3}
           >
-            {report.dailyTrend.length === 0 || summary.totalOrders === 0 ? (
+            {report.dailyTrend.length === 0 || summary.activeOrders === 0 ? (
               <EmptyNote>{emptyPeriodNote}</EmptyNote>
             ) : (
               <div className="h-[260px] w-full sm:h-[320px]">
@@ -944,12 +1035,12 @@ export default function DistributorReportsTab({
                       contentStyle={tooltipStyle}
                       labelFormatter={(_label, payload) => payload?.[0]?.payload?.label ?? ''}
                       formatter={(value: any, name: any) => (
-                        name === 'Order Value' ? formatRM(Number(value)) : formatCount(Number(value))
+                        name === 'Active Order Value' ? formatRM(Number(value)) : formatCount(Number(value))
                       )}
                     />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
-                    <Bar yAxisId="orders" dataKey="orders" name="Orders" fill={REPORTING_COLORS.primary} radius={[4, 4, 0, 0]} maxBarSize={26} />
-                    <Line yAxisId="value" type="monotone" dataKey="orderValue" name="Order Value" stroke={REPORTING_COLORS.success} strokeWidth={2} dot={false} />
+                    <Bar yAxisId="orders" dataKey="orders" name="Active Orders" fill={REPORTING_COLORS.primary} radius={[4, 4, 0, 0]} maxBarSize={26} />
+                    <Line yAxisId="value" type="monotone" dataKey="orderValue" name="Active Order Value" stroke={REPORTING_COLORS.success} strokeWidth={2} dot={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -985,7 +1076,7 @@ export default function DistributorReportsTab({
                           <tr key={order.orderId} className="border-b border-[var(--sera-line)]/60 last:border-0">
                             <td className="px-2 py-2.5 font-medium text-[var(--sera-ink)]">{order.orderNo || order.orderId}</td>
                             <td className="px-2 py-2.5">{formatDay(order.orderDate || order.createdAt)}</td>
-                            <td className="px-2 py-2.5">{statusLabel(order.status)}</td>
+                            <td className="px-2 py-2.5"><OrderStatusBadge status={order.status} /></td>
                             <td className="px-2 py-2.5 text-right tabular-nums">{formatCount(order.itemCount)}</td>
                             <td className="px-2 py-2.5 text-right tabular-nums">{formatRM(order.orderValue)}</td>
                           </tr>
@@ -998,7 +1089,7 @@ export default function DistributorReportsTab({
                       <div key={order.orderId} className="rounded-xl border border-[var(--sera-line)] p-3">
                         <div className="mb-1.5 flex items-center justify-between gap-2">
                           <span className="truncate text-xs font-semibold text-[var(--sera-ink)]">{order.orderNo || order.orderId}</span>
-                          <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[11px]">{statusLabel(order.status)}</Badge>
+                          <OrderStatusBadge status={order.status} />
                         </div>
                         <MobileField label="Date">{formatDay(order.orderDate || order.createdAt)}</MobileField>
                         <MobileField label="Items">{formatCount(order.itemCount)}</MobileField>
@@ -1013,7 +1104,7 @@ export default function DistributorReportsTab({
             <>
               <SectionCard
                 title="Distributor Leaderboard"
-                description="Ranked by Order Value — tap a row for the full account detail"
+                description="Ranked by Active Order Value — tap a row for the full account detail"
                 icon={Users}
                 action={(
                   <div className="relative w-full sm:w-[210px]">
@@ -1099,7 +1190,7 @@ export default function DistributorReportsTab({
                 description={
                   report.contribution.topQuintileSharePct === null
                     ? 'Dependency and concentration risk'
-                    : `Top 20% of active distributors carry ${report.contribution.topQuintileSharePct.toFixed(0)}% of Order Value`
+                    : `Top 20% of active distributors carry ${report.contribution.topQuintileSharePct.toFixed(0)}% of Active Order Value`
                 }
                 icon={PieIcon}
               >
@@ -1407,8 +1498,9 @@ export default function DistributorReportsTab({
           >
             <div className="mb-4 grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
               <div className="rounded-xl border border-[var(--sera-line)] p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Orders In Period</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Total Orders Created</p>
                 <p className="mt-1 text-2xl font-bold text-[var(--sera-ink)]">{formatCount(report.orderProcessing.total)}</p>
+                <p className="mt-0.5 text-[10px] text-[var(--sera-muted)]">{formatCount(report.orderProcessing.activeOrders)} active · draft and cancelled included</p>
               </div>
               <div className="rounded-xl border border-[var(--sera-line)] p-3">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Approval Rate</p>
@@ -1427,10 +1519,10 @@ export default function DistributorReportsTab({
               </div>
             </div>
 
-            {/* Values: Approved Sales are approved-stage orders only; submitted orders are pipeline; cancelled orders never count. */}
+            {/* Values: Approved Sales are approved-stage orders only; submitted orders are pipeline; together they are Active Order Value. Cancelled orders never count. */}
             <div className="mb-4 grid grid-cols-1 gap-2.5 sm:grid-cols-3 sm:gap-3">
               <div className="rounded-xl border border-[var(--sera-line)] p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Approved Sales Value</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Approved Distributor Sales</p>
                 <p className="mt-1 text-xl font-bold text-[var(--sera-ink)]">{formatRM(report.orderProcessing.approvedSalesValue)}</p>
                 <p className="mt-0.5 text-[10px] text-[var(--sera-muted)]">{formatCount(report.orderProcessing.approvedOrders)} approved-stage orders</p>
               </div>
@@ -1492,14 +1584,14 @@ export default function DistributorReportsTab({
               {/* Selected-period KPIs against the comparison period. */}
               <div className="grid grid-cols-2 gap-2.5">
                 <div className="rounded-xl border border-[var(--sera-line)] p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Order Value</p>
-                  <p className="mt-1 text-xl font-bold text-[var(--sera-ink)]">{formatRMCompact(drawerReport.summary.orderValue)}</p>
-                  <div className="mt-1"><GrowthBadge value={drawerReport.comparison.find((row) => row.key === 'orderValue')?.changePct ?? null} /></div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Active Order Value</p>
+                  <p className="mt-1 text-xl font-bold text-[var(--sera-ink)]">{formatRMCompact(drawerReport.summary.activeOrderValue)}</p>
+                  <div className="mt-1"><GrowthBadge value={drawerReport.comparison.find((row) => row.key === 'activeOrderValue')?.changePct ?? null} /></div>
                 </div>
                 <div className="rounded-xl border border-[var(--sera-line)] p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Orders</p>
-                  <p className="mt-1 text-xl font-bold text-[var(--sera-ink)]">{formatCount(drawerReport.summary.totalOrders)}</p>
-                  <div className="mt-1"><GrowthBadge value={drawerReport.comparison.find((row) => row.key === 'totalOrders')?.changePct ?? null} /></div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Active Orders</p>
+                  <p className="mt-1 text-xl font-bold text-[var(--sera-ink)]">{formatCount(drawerReport.summary.activeOrders)}</p>
+                  <div className="mt-1"><GrowthBadge value={drawerReport.comparison.find((row) => row.key === 'activeOrders')?.changePct ?? null} /></div>
                 </div>
                 <div className="rounded-xl border border-[var(--sera-line)] p-3">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--sera-muted)]">Avg Order Value</p>
@@ -1529,7 +1621,7 @@ export default function DistributorReportsTab({
                   no twelve-month chart anywhere. */}
               <div>
                 <p className="mb-2 text-xs font-semibold text-[var(--sera-ink)]">Daily Sell-In — {period.label}</p>
-                {drawerReport.summary.totalOrders === 0 ? (
+                {drawerReport.summary.activeOrders === 0 ? (
                   <EmptyNote>{emptyPeriodNote}</EmptyNote>
                 ) : (
                   <div className="h-[180px] w-full">
@@ -1543,7 +1635,7 @@ export default function DistributorReportsTab({
                           labelFormatter={(_label, payload) => payload?.[0]?.payload?.label ?? ''}
                           formatter={(value: any) => formatRM(Number(value))}
                         />
-                        <Bar dataKey="orderValue" name="Order Value" fill={REPORTING_COLORS.primary} radius={[3, 3, 0, 0]} maxBarSize={18} />
+                        <Bar dataKey="orderValue" name="Active Order Value" fill={REPORTING_COLORS.primary} radius={[3, 3, 0, 0]} maxBarSize={18} />
                       </ComposedChart>
                     </ResponsiveContainer>
                   </div>
@@ -1580,8 +1672,8 @@ export default function DistributorReportsTab({
                           {order.orderNo || order.orderId}
                           <span className="ml-2 text-[var(--sera-muted)]">{formatDay(order.orderDate || order.createdAt)}</span>
                         </span>
-                        <span className="shrink-0 text-xs tabular-nums text-[var(--sera-muted)]">
-                          {statusLabel(order.status)} · {formatRMCompact(order.orderValue)}
+                        <span className="flex shrink-0 items-center gap-1.5 text-xs tabular-nums text-[var(--sera-muted)]">
+                          <OrderStatusBadge status={order.status} /> {formatRMCompact(order.orderValue)}
                         </span>
                       </div>
                     ))}
@@ -1628,7 +1720,8 @@ const INSIGHT_DRILLDOWN: Partial<Record<string, DrilldownMetric>> = {
 }
 
 const METRIC_TITLE: Record<DrilldownMetric, string> = {
-  total_orders: 'Total Orders',
+  total_orders: 'Active Orders',
+  approved_orders: 'Approved Orders',
   active: 'Active Distributors',
   new: 'New Distributors',
   inactive: 'Inactive Distributors',
@@ -1667,7 +1760,7 @@ function MetricDrilldownPanel({ metric, data, loading, error, periodLabel }: {
   const [page, setPage] = useState(0)
   useEffect(() => { setQuery(''); setPage(0) }, [metric, data])
 
-  const isOrders = metric === 'total_orders'
+  const isOrders = metric === 'total_orders' || metric === 'approved_orders'
   const allRows = data ? (isOrders ? data.orders : data.distributors) : []
   const needle = query.trim().toLowerCase()
   const rows = needle
@@ -1701,10 +1794,15 @@ function MetricDrilldownPanel({ metric, data, loading, error, periodLabel }: {
             {!isOrders ? (
               <Badge variant="secondary" className="px-2 py-1 text-xs">{METRIC_TITLE[metric]}: {formatCount(data.headline.count)}</Badge>
             ) : null}
-            {isOrders || metric === 'active' ? (
+            {metric === 'approved_orders' ? (
               <>
-                <Badge variant="secondary" className="px-2 py-1 text-xs">Total Orders: {formatCount(data.headline.totalOrders)}</Badge>
-                <Badge variant="secondary" className="px-2 py-1 text-xs">Order Value: {formatRMCompact(data.headline.orderValue)}</Badge>
+                <Badge variant="secondary" className="px-2 py-1 text-xs">Approved Orders: {formatCount(data.headline.approvedOrders)}</Badge>
+                <Badge variant="secondary" className="px-2 py-1 text-xs">Approved Sales: {formatRMCompact(data.headline.approvedSalesValue)}</Badge>
+              </>
+            ) : isOrders || metric === 'active' ? (
+              <>
+                <Badge variant="secondary" className="px-2 py-1 text-xs">Active Orders: {formatCount(data.headline.activeOrders)}</Badge>
+                <Badge variant="secondary" className="px-2 py-1 text-xs">Active Order Value: {formatRMCompact(data.headline.activeOrderValue)}</Badge>
               </>
             ) : null}
           </div>
