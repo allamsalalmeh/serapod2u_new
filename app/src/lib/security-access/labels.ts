@@ -45,6 +45,8 @@ const RESOURCES: Record<string, { noun: string; group: string; resourceType: str
   'hr.self_service': { noun: 'Employee Self-Service', group: 'HR & Payroll', resourceType: 'employee_record' },
   'hr.module': { noun: 'HR Module', group: 'HR & Payroll', resourceType: 'hr_module' },
   'finance.module': { noun: 'Finance Module', group: 'Finance', resourceType: 'finance_module' },
+  'finance.fiscal_year': { noun: 'Fiscal Year', group: 'Finance', resourceType: 'fiscal_year' },
+  'finance.period': { noun: 'Accounting Period', group: 'Finance', resourceType: 'fiscal_period' },
   'marketing.module': { noun: 'Marketing Module', group: 'Marketing', resourceType: 'marketing_module' },
   'ecommerce.module': { noun: 'E-Commerce Module', group: 'E-Commerce', resourceType: 'ecommerce_module' },
   'ecommerce.outdoor': { noun: 'Outdoor Store', group: 'E-Commerce', resourceType: 'outdoor_store' },
@@ -73,6 +75,10 @@ const titleCase = (value: string) => value.replace(/[_-]+/g, ' ').replace(/\b\w/
 const LABEL_OVERRIDES: Record<string, PermissionLabel> = {
   'platform.user.password_reset': { label: 'Reset User Password', group: 'Identity', resourceType: 'identity' },
   'platform.system_logs.view': { label: 'View System Logs', group: 'Platform', resourceType: 'system_logs' },
+  'finance.period.open': { label: 'Open Accounting Period', group: 'Finance', resourceType: 'fiscal_period' },
+  'finance.period.close': { label: 'Close Period / Fiscal Year', group: 'Finance', resourceType: 'fiscal_period' },
+  'finance.period.reopen': { label: 'Reopen Closed Period / Fiscal Year', group: 'Finance', resourceType: 'fiscal_period' },
+  'finance.fiscal_year.lock': { label: 'Lock Fiscal Year Permanently', group: 'Finance', resourceType: 'fiscal_year' },
 }
 
 export function permissionLabel(permissionKey: string): PermissionLabel {

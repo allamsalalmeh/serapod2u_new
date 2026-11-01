@@ -1,4 +1,6 @@
 import { financeAllowed } from '@/lib/security-access/finance'
+import { fiscalLegacyAllowed, fiscalPermissionFor } from '@/lib/security-access/fiscal-period-catalog'
+import { permissionLabel } from '@/lib/security-access/labels'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
@@ -75,8 +77,8 @@ export async function PUT(
       .eq('id', user.id)
       .single()
 
-    if (!userData || !(await financeAllowed(user.id, 'finance.settings.manage', () => userData.roles.role_level <= 20, userData.organization_id))) {
-      return NextResponse.json({ error: 'Forbidden - HQ Admin only' }, { status: 403 })
+    if (!userData) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
 
     // Get existing fiscal year
@@ -95,26 +97,45 @@ export async function PUT(
       return NextResponse.json({ error: 'Cannot modify locked fiscal year' }, { status: 400 })
     }
 
-    const updateData: any = {}
-    if (body.fiscal_year_name) updateData.fiscal_year_name = body.fiscal_year_name
-    if (body.status && ['open', 'closed', 'locked'].includes(body.status)) {
-      updateData.status = body.status
-      if (body.status === 'closed') {
-        updateData.closed_at = new Date().toISOString()
-        updateData.closed_by = user.id
+    // Status change: each transition has its own permission (close / reopen / lock).
+    if (body.status && body.status !== existing.status) {
+      const permission = fiscalPermissionFor('year', existing.status, body.status)
+      if (!permission) {
+        return NextResponse.json({ error: `Invalid status transition from ${existing.status} to ${body.status}` }, { status: 400 })
+      }
+      if (!(await financeAllowed(user.id, permission, () => fiscalLegacyAllowed(userData.roles.role_level), userData.organization_id))) {
+        return NextResponse.json({ error: `You do not have permission for this action (${permissionLabel(permission).label}).` }, { status: 403 })
+      }
+      // The database function re-checks the permission and records the change.
+      const { error: statusError } = await supabase.rpc('fiscal_year_set_status', { p_year_id: id, p_status: body.status })
+      if (statusError) {
+        const denied = statusError.code === '42501'
+        return NextResponse.json(
+          { error: denied ? `You do not have permission for this action (${permissionLabel(permission).label}).` : statusError.message },
+          { status: denied ? 403 : 400 }
+        )
       }
     }
 
-    const { data: fiscalYear, error: updateError } = await supabase
-      .from('fiscal_years')
-      .update(updateData)
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (updateError) {
-      return NextResponse.json({ error: updateError.message }, { status: 400 })
+    // Renaming stays a Finance settings action.
+    if (body.fiscal_year_name) {
+      if (!(await financeAllowed(user.id, 'finance.settings.manage', () => userData.roles.role_level <= 20, userData.organization_id))) {
+        return NextResponse.json({ error: 'Forbidden - HQ Admin only' }, { status: 403 })
+      }
+      const { error: renameError } = await supabase
+        .from('fiscal_years')
+        .update({ fiscal_year_name: body.fiscal_year_name })
+        .eq('id', id)
+      if (renameError) {
+        return NextResponse.json({ error: renameError.message }, { status: 400 })
+      }
     }
+
+    const { data: fiscalYear } = await supabase
+      .from('fiscal_years')
+      .select('*')
+      .eq('id', id)
+      .single()
 
     return NextResponse.json({ success: true, fiscalYear })
   } catch (error) {

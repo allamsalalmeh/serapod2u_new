@@ -4,6 +4,7 @@ import { HR_DATA_PERMISSION_KEYS } from './hr-data-catalog'
 import { USER_ADMIN_ENFORCEMENT_READY } from './user-admin-catalog'
 import { SYSTEM_LOGS_ENFORCEMENT_READY } from './system-logs-catalog'
 import { BANK_STATEMENT_PERMISSION_KEYS } from './bank-statement-catalog'
+import { FISCAL_PERIOD_ENFORCEMENT_READY } from './fiscal-period-catalog'
 
 /**
  * Operations whose every reachable path enforces the S&A decision: the
@@ -121,7 +122,7 @@ export const ENFORCEMENT_READY_PERMISSIONS: readonly string[] = [
 export const STOCK_COUNT_ENFORCEMENT_READY: readonly string[] = ['inventory.stock_count.create', 'inventory.stock_count.post']
 
 /** Final Wave registrations (20260928130000), Identity Foundation (20260929110000), Stage 2D (20260930100000) and HR Data Management (20261003100000) and User Administration password reset (20261016100000) and System Logs (20261017110000) and Stock Count create/post (20261019100000) and Archive Identities (20261023100000). */
-export const ALL_ENFORCEMENT_READY_PERMISSIONS: readonly string[] = [...ENFORCEMENT_READY_PERMISSIONS, ...IDENTITY_ENFORCEMENT_READY, ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS, ...USER_ADMIN_ENFORCEMENT_READY, ...SYSTEM_LOGS_ENFORCEMENT_READY, ...STOCK_COUNT_ENFORCEMENT_READY, ...IDENTITY_ARCHIVE_ENFORCEMENT_READY, ...BANK_STATEMENT_PERMISSION_KEYS]
+export const ALL_ENFORCEMENT_READY_PERMISSIONS: readonly string[] = [...ENFORCEMENT_READY_PERMISSIONS, ...IDENTITY_ENFORCEMENT_READY, ...STAGE2D_PERMISSION_KEYS, ...HR_DATA_PERMISSION_KEYS, ...USER_ADMIN_ENFORCEMENT_READY, ...SYSTEM_LOGS_ENFORCEMENT_READY, ...STOCK_COUNT_ENFORCEMENT_READY, ...IDENTITY_ARCHIVE_ENFORCEMENT_READY, ...BANK_STATEMENT_PERMISSION_KEYS, ...FISCAL_PERIOD_ENFORCEMENT_READY]
 
 export function isEnforcementReady(permissionKey: string): boolean {
   return ALL_ENFORCEMENT_READY_PERMISSIONS.includes(permissionKey)

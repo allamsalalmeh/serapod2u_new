@@ -9,6 +9,7 @@ import { resolveGroup } from './bulk-modes'
 import { COMMISSION_PERMISSION_KEYS } from './commission'
 import { MSS_PERMISSION_KEYS } from './mss'
 import { COMPENSATION_VIEWER_PERMISSION_KEYS } from './compensation-viewer'
+import { FISCAL_PERIOD_PERMISSION_KEYS } from './fiscal-period-catalog'
 
 const MIGRATION = readFileSync(resolve(process.cwd(), '..', 'supabase', 'migrations', '20261009100000_sa_group_policies_full_access.sql'), 'utf8')
 const universe = coverageReport().universe
@@ -37,7 +38,7 @@ describe('standard module Full Access policies (reviewed explicit lists)', () =>
 
   it('module boundaries: no permission belongs to two policies and only Reporting (and the reviewed exclusions) is outside every policy', () => {
     const all = FULL_ACCESS_POLICIES.flatMap(p => [...seeded.get(p.roleKey)!])
-    const reviewedOutside = ['platform.system_logs.view', ...COMMISSION_PERMISSION_KEYS, ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS, ...DESTRUCTIVE_PERMISSIONS].sort()
+    const reviewedOutside = ['platform.system_logs.view', ...COMMISSION_PERMISSION_KEYS, ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS, ...DESTRUCTIVE_PERMISSIONS, ...FISCAL_PERIOD_PERMISSION_KEYS].sort()
     expect(new Set(all).size).toBe(all.length)
     expect(universe.filter(k => !all.includes(k))).toEqual([...reviewedOutside, 'reporting.analytics.view'].sort())
     expect([...OUTSIDE_FULL_ACCESS].sort()).toEqual(reviewedOutside)

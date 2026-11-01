@@ -1,4 +1,5 @@
 import { financeAllowed } from '@/lib/security-access/finance'
+import { fiscalLegacyAllowed } from '@/lib/security-access/fiscal-period-catalog'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
@@ -88,13 +89,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
 
-    if (!(await financeAllowed(user.id, 'finance.settings.manage', () => userData.roles.role_level <= 20, userData.organization_id))) {
-      return NextResponse.json({ error: 'Forbidden - HQ Admin only' }, { status: 403 })
+    // Dedicated permission (Security & Access); while not enforced: central Super Admin only.
+    if (!(await financeAllowed(user.id, 'finance.fiscal_year.create', () => fiscalLegacyAllowed(userData.roles.role_level), userData.organization_id))) {
+      return NextResponse.json({ error: 'You do not have permission to create a fiscal year (Create Fiscal Year).' }, { status: 403 })
     }
-
-    const { data: companyId } = await supabase.rpc('get_company_id', {
-      p_org_id: userData.organization_id
-    })
 
     // Validate required fields
     if (!body.fiscal_year_name || !body.fiscal_year_code || !body.start_date || !body.end_date) {
@@ -108,54 +106,31 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'End date must be after start date' }, { status: 400 })
     }
 
-    // Check for overlapping fiscal years
-    const { data: overlapping } = await supabase
-      .from('fiscal_years')
-      .select('id, fiscal_year_name')
-      .eq('company_id', companyId)
-      .or(`and(start_date.lte.${body.end_date},end_date.gte.${body.start_date})`)
-
-    if (overlapping && overlapping.length > 0) {
-      return NextResponse.json({ 
-        error: `Dates overlap with existing fiscal year: ${overlapping[0].fiscal_year_name}` 
-      }, { status: 400 })
-    }
-
-    // Create fiscal year
-    const { data: fiscalYear, error: createError } = await supabase
-      .from('fiscal_years')
-      .insert({
-        company_id: companyId,
-        fiscal_year_name: body.fiscal_year_name,
-        fiscal_year_code: body.fiscal_year_code,
-        start_date: body.start_date,
-        end_date: body.end_date,
-        status: 'open',
-        created_by: user.id
-      })
-      .select()
-      .single()
+    // The database function re-checks the permission, refuses overlaps, creates the year and its
+    // periods (all Future) and records the change in fiscal_period_events.
+    const { data: created, error: createError } = await supabase.rpc('fiscal_year_create', {
+      p_code: body.fiscal_year_code,
+      p_name: body.fiscal_year_name,
+      p_start: body.start_date,
+      p_end: body.end_date,
+      p_period_type: body.period_type || 'monthly',
+    })
 
     if (createError) {
       console.error('Error creating fiscal year:', createError)
-      return NextResponse.json({ error: createError.message }, { status: 400 })
+      const denied = createError.code === '42501'
+      return NextResponse.json(
+        { error: denied ? 'You do not have permission to create a fiscal year (Create Fiscal Year).' : createError.message },
+        { status: denied ? 403 : 400 }
+      )
     }
 
-    // Auto-generate periods if requested
-    let periodsCreated = 0
-    if (body.generate_periods !== false) {
-      const periodType = body.period_type || 'monthly'
-      const { data: count, error: periodError } = await supabase.rpc('generate_fiscal_periods', {
-        p_fiscal_year_id: fiscalYear.id,
-        p_period_type: periodType
-      })
-      
-      if (periodError) {
-        console.error('Error generating periods:', periodError)
-      } else {
-        periodsCreated = count || 0
-      }
-    }
+    const { data: fiscalYear } = await supabase
+      .from('fiscal_years')
+      .select('*')
+      .eq('id', created?.fiscal_year_id)
+      .single()
+    const periodsCreated = created?.periods_created || 0
 
     return NextResponse.json({
       success: true,

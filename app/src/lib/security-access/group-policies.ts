@@ -2,6 +2,7 @@ import { MODULE_TAXONOMY, classifyPermission, moduleGroupName } from './modules'
 import { COMMISSION_PERMISSION_KEYS } from './commission'
 import { MSS_PERMISSION_KEYS } from './mss'
 import { COMPENSATION_VIEWER_PERMISSION_KEYS } from './compensation-viewer'
+import { FISCAL_PERIOD_PERMISSION_KEYS } from './fiscal-period-catalog'
 
 /**
  * Group Policies (the user-facing name of a business role / "Access Profile").
@@ -51,9 +52,12 @@ export const fullAccessModuleIds = FULL_ACCESS_POLICIES.map(p => p.moduleId)
  *   compensation access (least privilege).
  *   DESTRUCTIVE_PERMISSIONS — removed from Full Access by 20261110100000 (recorded as reviewed exclusions in
  *   sa_standard_policy_coverage.excluded_keys); granted only through the break-glass policies below.
+ *   finance.fiscal_year.* and finance.period.* — Fiscal Year & Periods (20261219100000): creating a year, opening,
+ *   closing, reopening and locking periods are given to named people through their own narrow policies; Finance Full
+ *   Access is NOT extended.
  */
 export const DESTRUCTIVE_PERMISSIONS: readonly string[] = ['hr.data.reset', 'finance.data.reset', 'platform.data.destructive', 'platform.identity.delete']
-export const OUTSIDE_FULL_ACCESS: readonly string[] = ['platform.system_logs.view', ...COMMISSION_PERMISSION_KEYS, ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS, ...DESTRUCTIVE_PERMISSIONS]
+export const OUTSIDE_FULL_ACCESS: readonly string[] = ['platform.system_logs.view', ...COMMISSION_PERMISSION_KEYS, ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS, ...DESTRUCTIVE_PERMISSIONS, ...FISCAL_PERIOD_PERMISSION_KEYS]
 
 /**
  * Break-glass standard policies: the only standard policies holding a destructive operation (20261110100000; HR's

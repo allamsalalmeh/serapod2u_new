@@ -39,6 +39,8 @@ import {
   Hand
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
+import { useSaCapability } from '@/hooks/useSaCapability'
+import { fiscalLegacyAllowed } from '@/lib/security-access/fiscal-period-catalog'
 
 // Posting Mode Configuration Component
 function PostingModeConfig({
@@ -323,6 +325,14 @@ export default function ConfigurationTab({
     period_type: 'monthly'
   })
   const [creatingYear, setCreatingYear] = useState(false)
+
+  // Fiscal Year & Periods: one Security & Access permission per action (until enforced: Super Admin only).
+  const fiscalLegacy = fiscalLegacyAllowed(userProfile.roles.role_level)
+  const canCreateYear = useSaCapability('finance.fiscal_year.create', fiscalLegacy)
+  const canOpenPeriod = useSaCapability('finance.period.open', fiscalLegacy)
+  const canClosePeriod = useSaCapability('finance.period.close', fiscalLegacy)
+  const canReopenPeriod = useSaCapability('finance.period.reopen', fiscalLegacy)
+  const canLockYear = useSaCapability('finance.fiscal_year.lock', fiscalLegacy)
 
   useEffect(() => {
     loadData()
@@ -747,7 +757,7 @@ export default function ConfigurationTab({
                     <RefreshCw className="w-4 h-4 mr-2" />
                     Refresh
                   </Button>
-                  {canManage && (
+                  {canCreateYear && (
                     <Dialog open={showNewYearDialog} onOpenChange={setShowNewYearDialog}>
                       <DialogTrigger asChild>
                         <Button className="w-full sm:w-auto">
@@ -851,7 +861,7 @@ export default function ConfigurationTab({
                   <p className="text-gray-500 mb-4">
                     Create your first fiscal year to start managing accounting periods.
                   </p>
-                  {canManage && (
+                  {canCreateYear && (
                     <Button onClick={() => setShowNewYearDialog(true)}>
                       <Plus className="w-4 h-4 mr-2" />
                       Create Fiscal Year
@@ -893,9 +903,9 @@ export default function ConfigurationTab({
                             </div>
                           </div>
 
-                          {canManage && fy.status !== 'locked' && (
+                          {fy.status !== 'locked' && (
                             <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                              {fy.status === 'open' && (
+                              {fy.status === 'open' && canClosePeriod && (
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -905,25 +915,25 @@ export default function ConfigurationTab({
                                   Close Year
                                 </Button>
                               )}
-                              {fy.status === 'closed' && (
-                                <>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => updateFiscalYearStatus(fy.id, 'open')}
-                                  >
-                                    <Unlock className="w-4 h-4 mr-1" />
-                                    Reopen
-                                  </Button>
-                                  <Button
-                                    variant="destructive"
-                                    size="sm"
-                                    onClick={() => updateFiscalYearStatus(fy.id, 'locked')}
-                                  >
-                                    <Lock className="w-4 h-4 mr-1" />
-                                    Lock Permanently
-                                  </Button>
-                                </>
+                              {fy.status === 'closed' && canReopenPeriod && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => updateFiscalYearStatus(fy.id, 'open')}
+                                >
+                                  <Unlock className="w-4 h-4 mr-1" />
+                                  Reopen
+                                </Button>
+                              )}
+                              {fy.status === 'closed' && canLockYear && (
+                                <Button
+                                  variant="destructive"
+                                  size="sm"
+                                  onClick={() => updateFiscalYearStatus(fy.id, 'locked')}
+                                >
+                                  <Lock className="w-4 h-4 mr-1" />
+                                  Lock Permanently
+                                </Button>
                               )}
                             </div>
                           )}
@@ -971,30 +981,33 @@ export default function ConfigurationTab({
                                     <div className="flex items-center gap-2">
                                       {getStatusBadge(period.status)}
 
-                                      {canManage && fy.status !== 'locked' && (
+                                      {fy.status !== 'locked' && (
                                         <>
-                                          {period.status === 'future' && (
+                                          {period.status === 'future' && canOpenPeriod && (
                                             <Button
                                               variant="ghost"
                                               size="sm"
+                                              title="Open period"
                                               onClick={() => updatePeriodStatus(fy.id, period.id, 'open')}
                                             >
                                               <Unlock className="w-4 h-4" />
                                             </Button>
                                           )}
-                                          {period.status === 'open' && (
+                                          {period.status === 'open' && canClosePeriod && (
                                             <Button
                                               variant="ghost"
                                               size="sm"
+                                              title="Close period"
                                               onClick={() => updatePeriodStatus(fy.id, period.id, 'closed')}
                                             >
                                               <Lock className="w-4 h-4" />
                                             </Button>
                                           )}
-                                          {period.status === 'closed' && (
+                                          {period.status === 'closed' && canReopenPeriod && (
                                             <Button
                                               variant="ghost"
                                               size="sm"
+                                              title="Reopen closed period"
                                               onClick={() => updatePeriodStatus(fy.id, period.id, 'open')}
                                             >
                                               <Unlock className="w-4 h-4" />

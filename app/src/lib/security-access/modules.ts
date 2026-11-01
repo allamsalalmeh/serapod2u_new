@@ -80,6 +80,7 @@ export const MODULE_TAXONOMY: readonly ModuleGroup[] = [
       { id: 'receivables', name: 'Receivables', match: res('finance', 'receivable') },
       { id: 'cash_bank', name: 'Cash & Bank', match: res('finance', 'cash', 'reconciliation', 'statement') },
       { id: 'finance_reports', name: 'Financial Reports', match: res('finance', 'report') },
+      { id: 'fiscal_periods', name: 'Fiscal Year & Periods', match: res('finance', 'fiscal_year', 'period') },
       { id: 'finance_admin', name: 'Finance Administration', match: res('finance', 'module', 'settings', 'data', 'payroll_integration') },
     ],
   },
