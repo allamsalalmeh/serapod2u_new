@@ -80,14 +80,19 @@ export default function StorefrontNavbar() {
     checkAuth()
 
     const supabase = createClient()
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_IN' && session?.user) {
-        const { data: profile } = await supabase
-          .from('users')
-          .select('id, full_name, email, avatar_url, phone')
-          .eq('id', session.user.id)
-          .single()
-        if (profile) setUser(profile)
+        const userId = session.user.id
+        // Supabase holds its auth lock while this callback runs; a query awaited here waits on that
+        // lock and freezes every auth call on the page, so the profile is read after it returns.
+        setTimeout(async () => {
+          const { data: profile } = await supabase
+            .from('users')
+            .select('id, full_name, email, avatar_url, phone')
+            .eq('id', userId)
+            .single()
+          if (profile) setUser(profile)
+        }, 0)
       } else if (event === 'SIGNED_OUT') {
         setUser(null)
       }
