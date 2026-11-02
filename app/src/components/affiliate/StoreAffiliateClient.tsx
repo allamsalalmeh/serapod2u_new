@@ -2,7 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Check, Copy, Link2, Loader2, Share2 } from 'lucide-react'
+import {
+  ArrowLeft,
+  BadgeCheck,
+  Banknote,
+  Check,
+  Clock3,
+  Copy,
+  Landmark,
+  Link2,
+  Loader2,
+  Package,
+  PauseCircle,
+  Search,
+  Share2,
+  ShieldAlert,
+  ShoppingBag,
+  Wallet,
+} from 'lucide-react'
 import {
   buildAffiliateLink,
   COMMISSION_STATUS_LABELS,
@@ -48,6 +65,7 @@ type Payout = { amount: number; count: number; reference: string; paidAt: string
 
 type Data = {
   signedIn: boolean
+  email?: string
   program: Program
   affiliate: Account | null
   totals?: { pending: number; confirmed: number; paid: number; cancelled: number; orders: number }
@@ -67,12 +85,13 @@ const SIGNED_OUT_PROGRAM: Program = {
   terms: '',
 }
 
-const card = 'rounded-2xl border border-[var(--sera-line)] bg-white p-5 sm:p-6'
-const field = 'h-11 w-full rounded-xl border border-[var(--sera-line)] bg-white px-3 text-sm text-[var(--sera-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--sera-orange)]/25'
+const panel = 'rounded-3xl border border-[var(--sera-line)] bg-white shadow-[0_18px_40px_-30px_rgba(20,18,16,0.35)]'
+const field =
+  'h-12 w-full rounded-2xl border border-[var(--sera-line)] bg-[var(--sera-surface)] px-4 text-sm text-[var(--sera-ink)] placeholder:text-[var(--sera-muted)]/60 transition-colors focus:border-[var(--sera-orange)]/50 focus:bg-white focus:outline-none focus:ring-4 focus:ring-[var(--sera-orange)]/10'
 const primary =
-  'inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[var(--sera-orange)] px-5 text-sm font-semibold text-white transition-colors hover:bg-[var(--sera-orange-deep)] disabled:opacity-50'
+  'inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-[var(--sera-orange)] px-6 text-sm font-semibold text-white shadow-[0_12px_24px_-12px_rgba(232,93,4,0.8)] transition-all hover:bg-[var(--sera-orange-deep)] active:scale-[0.98] disabled:opacity-50 disabled:shadow-none'
 const secondary =
-  'inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[var(--sera-line)] bg-white px-4 text-sm font-medium text-[var(--sera-ink)] transition-colors hover:bg-[var(--sera-mist)] disabled:opacity-50'
+  'inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-[var(--sera-line)] bg-white px-4 text-sm font-medium text-[var(--sera-ink)] transition-colors hover:bg-[var(--sera-surface)] disabled:opacity-50'
 
 function rm(value: number) {
   return `RM ${(Number(value) || 0).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -87,13 +106,51 @@ function percentText(value: number | null) {
   return value == null ? '' : `${Number(value).toLocaleString('en-MY', { maximumFractionDigits: 2 })}%`
 }
 
-function Notice({ tone, children }: { tone: 'ok' | 'error' | 'info'; children: React.ReactNode }) {
+function mediaUrl(raw: string | null) {
+  if (!raw) return null
+  if (/\.(mp4|webm|mov)(\?|$)/i.test(raw)) return null
+  if (/^https?:\/\//.test(raw)) return raw
+  const base = process.env.NEXT_PUBLIC_SUPABASE_URL
+  if (!base) return null
+  const path = raw.replace(/^\/+/, '')
+  const bucket = ['product-variants', 'avatars'].find((b) => path.startsWith(`${b}/`))
+  return bucket
+    ? `${base}/storage/v1/object/public/${bucket}/${path.slice(bucket.length + 1)}`
+    : `${base}/storage/v1/object/public/avatars/${path}`
+}
+
+const STATUS_TONE: Record<AffiliateCommissionStatus, string> = {
+  pending: 'bg-amber-50 text-amber-800 ring-amber-200',
+  confirmed: 'bg-sky-50 text-sky-800 ring-sky-200',
+  paid: 'bg-emerald-50 text-emerald-800 ring-emerald-200',
+  cancelled: 'bg-[var(--sera-surface)] text-[var(--sera-muted)] ring-[var(--sera-line)]',
+}
+
+function Notice({ tone, icon, title, children }: { tone: 'ok' | 'error' | 'info'; icon?: React.ReactNode; title?: string; children: React.ReactNode }) {
   const styles = {
-    ok: 'bg-green-50 text-green-700 border-green-200',
-    error: 'bg-red-50 text-red-700 border-red-200',
-    info: 'bg-[var(--sera-mist)] text-[var(--sera-ink)] border-[var(--sera-line)]',
+    ok: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+    error: 'border-red-200 bg-red-50 text-red-800',
+    info: 'border-[var(--sera-line)] bg-white text-[var(--sera-ink)]',
   }
-  return <div className={`rounded-xl border p-3 text-sm ${styles[tone]}`}>{children}</div>
+  return (
+    <div className={`flex gap-3 rounded-2xl border p-4 text-sm ${styles[tone]}`}>
+      {icon ? <span className="mt-0.5 flex-none">{icon}</span> : null}
+      <div>
+        {title ? <p className="font-semibold">{title}</p> : null}
+        <div className={title ? 'mt-0.5 opacity-90' : ''}>{children}</div>
+      </div>
+    </div>
+  )
+}
+
+function SectionTitle({ eyebrow, title, hint }: { eyebrow?: string; title: string; hint?: string }) {
+  return (
+    <div>
+      {eyebrow ? <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--sera-orange)]">{eyebrow}</p> : null}
+      <h2 className="mt-1 font-display text-xl font-semibold tracking-tight text-[var(--sera-ink)]">{title}</h2>
+      {hint ? <p className="mt-1 text-sm text-[var(--sera-muted)]">{hint}</p> : null}
+    </div>
+  )
 }
 
 function BankFields({
@@ -105,31 +162,31 @@ function BankFields({
 }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2">
-      <label className="block text-sm font-medium text-[var(--sera-ink)]/80">
-        Bank
+      <label className="block">
+        <span className="text-xs font-semibold text-[var(--sera-ink)]/80">Bank</span>
         <input className={`${field} mt-1.5`} value={value.bankName} maxLength={80} placeholder="e.g. Maybank"
           onChange={(e) => onChange({ ...value, bankName: e.target.value })} />
       </label>
-      <label className="block text-sm font-medium text-[var(--sera-ink)]/80">
-        Account number
-        <input className={`${field} mt-1.5`} value={value.bankAccountNo} inputMode="numeric" maxLength={30}
+      <label className="block">
+        <span className="text-xs font-semibold text-[var(--sera-ink)]/80">Account number</span>
+        <input className={`${field} mt-1.5 tabular-nums`} value={value.bankAccountNo} inputMode="numeric" maxLength={30} placeholder="Digits only"
           onChange={(e) => onChange({ ...value, bankAccountNo: e.target.value })} />
       </label>
-      <label className="block text-sm font-medium text-[var(--sera-ink)]/80 sm:col-span-2">
-        Name on the account
-        <input className={`${field} mt-1.5`} value={value.bankAccountName} maxLength={120}
+      <label className="block sm:col-span-2">
+        <span className="text-xs font-semibold text-[var(--sera-ink)]/80">Name on the account</span>
+        <input className={`${field} mt-1.5`} value={value.bankAccountName} maxLength={120} placeholder="As shown on your bank account"
           onChange={(e) => onChange({ ...value, bankAccountName: e.target.value })} />
       </label>
     </div>
   )
 }
 
-function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
+function CopyButton({ text, label = 'Copy', className = secondary }: { text: string; label?: string; className?: string }) {
   const [done, setDone] = useState(false)
   return (
     <button
       type="button"
-      className={secondary}
+      className={className}
       disabled={!text}
       onClick={async () => {
         try {
@@ -141,9 +198,92 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
         }
       }}
     >
-      {done ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+      {done ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
       {done ? 'Copied' : label}
     </button>
+  )
+}
+
+function Hero({ rate, program, children }: { rate: string; program: Program; children?: React.ReactNode }) {
+  return (
+    <section className={`${panel} relative isolate overflow-hidden p-6 sm:p-10`}>
+      <div className="pointer-events-none absolute -right-24 -top-24 -z-10 h-72 w-72 rounded-full bg-[var(--sera-orange)]/15 blur-3xl" />
+      <div
+        className="pointer-events-none absolute inset-0 -z-10 opacity-[0.35]"
+        style={{
+          backgroundImage:
+            'linear-gradient(var(--sera-line) 1px, transparent 1px), linear-gradient(90deg, var(--sera-line) 1px, transparent 1px)',
+          backgroundSize: '44px 44px',
+          maskImage: 'radial-gradient(ellipse at 85% 0%, black 0%, transparent 65%)',
+          WebkitMaskImage: 'radial-gradient(ellipse at 85% 0%, black 0%, transparent 65%)',
+        }}
+      />
+      <div className="grid items-center gap-8 lg:grid-cols-[1.4fr_1fr]">
+        <div>
+          <div className="h-1 w-12 rounded-full bg-[var(--sera-orange)]" />
+          <p className="mt-5 text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--sera-muted)]">Affiliate program</p>
+          <h1 className="mt-2 font-display text-3xl font-semibold leading-[1.1] tracking-tight text-[var(--sera-ink)] sm:text-4xl">
+            Share Serapod products.
+            <br />
+            <span className="text-[var(--sera-orange)]">Earn on every paid order.</span>
+          </h1>
+          <p className="mt-4 max-w-xl text-sm leading-relaxed text-[var(--sera-muted)] sm:text-base">
+            Send your own link to friends or followers. When they buy within {program.attributionDays} days, you earn
+            {rate ? ` ${rate}` : ' commission'} of the products&apos; price.
+          </p>
+          {children}
+        </div>
+        {rate ? (
+          <div className="relative rounded-3xl bg-[var(--sera-ink)] p-6 text-white">
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-white/60">Your commission</p>
+            <p className="mt-2 font-display text-6xl font-semibold tracking-tight">{rate}</p>
+            <p className="mt-1 text-sm text-white/70">of the products&apos; price, delivery not included</p>
+            <div className="mt-6 grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-2xl bg-white/10 p-3">
+                <p className="font-semibold">{program.attributionDays} days</p>
+                <p className="text-xs text-white/60">link stays yours</p>
+              </div>
+              <div className="rounded-2xl bg-white/10 p-3">
+                <p className="font-semibold">Bank transfer</p>
+                <p className="text-xs text-white/60">
+                  {program.minPayoutAmount > 0 ? `from ${rm(program.minPayoutAmount)}` : 'to your account'}
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
+function Steps({ program }: { program: Program }) {
+  const steps = [
+    { icon: <Share2 className="h-5 w-5" />, title: 'Share your link', text: 'Link to any Serapod product or page, on any app you use.' },
+    {
+      icon: <ShoppingBag className="h-5 w-5" />,
+      title: 'They buy',
+      text: `The order is yours when they pay within ${program.attributionDays} days of opening your link.`,
+    },
+    {
+      icon: <Banknote className="h-5 w-5" />,
+      title: 'You get paid',
+      text: `Confirmed ${program.confirmAfterDays} days after delivery, then sent to your bank. Cancelled or refunded orders earn nothing.`,
+    },
+  ]
+  return (
+    <section className="grid gap-4 md:grid-cols-3">
+      {steps.map((s, i) => (
+        <div key={s.title} className={`${panel} p-5`}>
+          <div className="flex items-center justify-between">
+            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--sera-orange)]/10 text-[var(--sera-orange)]">{s.icon}</span>
+            <span className="font-display text-3xl font-semibold text-[var(--sera-line)]">0{i + 1}</span>
+          </div>
+          <p className="mt-4 font-semibold text-[var(--sera-ink)]">{s.title}</p>
+          <p className="mt-1 text-sm leading-relaxed text-[var(--sera-muted)]">{s.text}</p>
+        </div>
+      ))}
+    </section>
   )
 }
 
@@ -157,6 +297,7 @@ export default function StoreAffiliateClient() {
   const [editBank, setEditBank] = useState(false)
   const [products, setProducts] = useState<LinkProduct[] | null>(null)
   const [productPath, setProductPath] = useState('')
+  const [productQuery, setProductQuery] = useState('')
   const [address, setAddress] = useState('')
   const [sub, setSub] = useState('')
 
@@ -217,12 +358,18 @@ export default function StoreAffiliateClient() {
   const subId = normalizeSubId(sub)
   const target = address.trim() || (productPath ? `${origin}${productPath}` : `${origin}/store`)
   const link = useMemo(() => (code && origin ? buildAffiliateLink(target, code, subId) : ''), [code, origin, target, subId])
+  const homeLink = useMemo(() => (code && origin ? buildAffiliateLink(`${origin}/store`, code) : ''), [code, origin])
   const addressInvalid = Boolean(address.trim()) && !link
+  const shownProducts = useMemo(() => {
+    const q = productQuery.trim().toLowerCase()
+    return (products || []).filter((p) => !q || p.name.toLowerCase().includes(q))
+  }, [products, productQuery])
+  const selectedProduct = (products || []).find((p) => p.path === productPath) || null
 
   if (loadError) {
     return (
       <Shell>
-        <Notice tone="error">{loadError}</Notice>
+        <Notice tone="error" icon={<ShieldAlert className="h-5 w-5" />}>{loadError}</Notice>
       </Shell>
     )
   }
@@ -240,11 +387,10 @@ export default function StoreAffiliateClient() {
   if (!data.signedIn) {
     return (
       <Shell>
-        <div className={card}>
-          <h2 className="text-lg font-semibold text-[var(--sera-ink)]">Sign in to join</h2>
-          <p className="mt-1 text-sm text-[var(--sera-muted)]">Use your store account to join the affiliate program and get your link.</p>
-          <Link href="/login?next=/store/affiliate" className={`${primary} mt-4`}>Sign in</Link>
-        </div>
+        <Hero rate={rate} program={program}>
+          <Link href="/login?next=/store/affiliate" className={`${primary} mt-6`}>Sign in to join</Link>
+          <p className="mt-3 text-xs text-[var(--sera-muted)]">Use your store account. New here? You can create one on the sign-in page.</p>
+        </Hero>
       </Shell>
     )
   }
@@ -252,7 +398,9 @@ export default function StoreAffiliateClient() {
   if (!affiliate && !program.open) {
     return (
       <Shell>
-        <Notice tone="info">The affiliate program is not open yet.</Notice>
+        <Notice tone="info" icon={<Clock3 className="h-5 w-5 text-[var(--sera-muted)]" />} title="Not open yet">
+          The affiliate program is not open yet. Check back soon.
+        </Notice>
       </Shell>
     )
   }
@@ -261,236 +409,323 @@ export default function StoreAffiliateClient() {
 
   return (
     <Shell>
-      {message ? <Notice tone={message.ok ? 'ok' : 'error'}>{message.text}</Notice> : null}
-
-      {affiliate && affiliate.status === 'pending' ? (
-        <Notice tone="info">Your application is waiting for approval. Your link starts working once it is approved.</Notice>
-      ) : null}
-      {affiliate && affiliate.status === 'suspended' ? (
-        <Notice tone="error">
-          Your affiliate account is suspended, so your link does not earn commission now.
-          {affiliate.reviewNote ? ` ${affiliate.reviewNote}` : ''}
+      {message ? (
+        <Notice tone={message.ok ? 'ok' : 'error'} icon={message.ok ? <BadgeCheck className="h-5 w-5" /> : <ShieldAlert className="h-5 w-5" />}>
+          {message.text}
         </Notice>
-      ) : null}
-      {affiliate && affiliate.status === 'rejected' ? (
-        <Notice tone="error">
-          Your last application was not approved.{affiliate.reviewNote ? ` ${affiliate.reviewNote}` : ''} You can apply again below.
-        </Notice>
-      ) : null}
-      {affiliate && affiliate.status === 'approved' && !program.open ? (
-        <Notice tone="info">The affiliate program is paused. Links do not earn commission until it reopens.</Notice>
       ) : null}
 
       {showJoin && program.open ? (
-        <div className={card}>
-          <h2 className="text-lg font-semibold text-[var(--sera-ink)]">How it works</h2>
-          <ul className="mt-3 space-y-2 text-sm text-[var(--sera-muted)]">
-            <li>1. Share your link to any Serapod product or page.</li>
-            <li>
-              2. When someone opens your link and pays within {program.attributionDays} days, the order is yours
-              {rate ? `: you earn ${rate} of the products' price (delivery not included)` : ''}.
-            </li>
-            <li>3. Commission is confirmed {program.confirmAfterDays} days after the order is delivered. Cancelled or refunded orders earn nothing.</li>
-            <li>4. We pay confirmed commission to your bank account by transfer{program.minPayoutAmount > 0 ? ` once it reaches ${rm(program.minPayoutAmount)}` : ''}.</li>
-          </ul>
-          {program.joinMode === 'approval' ? (
-            <p className="mt-3 text-sm text-[var(--sera-muted)]">We review each application before the link starts working.</p>
-          ) : null}
-
-          <h3 className="mt-6 text-sm font-semibold text-[var(--sera-ink)]">Bank account for payouts</h3>
-          <div className="mt-3">
-            <BankFields value={bank} onChange={setBank} />
-          </div>
-
-          {program.terms ? (
-            <div className="mt-6 max-h-48 overflow-y-auto whitespace-pre-line rounded-xl border border-[var(--sera-line)] bg-[var(--sera-paper)] p-3 text-xs text-[var(--sera-muted)]">
-              {program.terms}
-            </div>
-          ) : null}
-          <label className="mt-4 flex items-start gap-2 text-sm text-[var(--sera-ink)]/80">
-            <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[var(--sera-orange)]" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
-            <span>I agree to the affiliate program terms.</span>
-          </label>
-          <button
-            type="button"
-            className={`${primary} mt-5 w-full sm:w-auto`}
-            disabled={busy || !agree}
-            onClick={() =>
-              post({ action: 'join', agree, ...bank }, program.joinMode === 'approval' ? 'Application sent.' : 'You have joined. Your link is ready.')
-            }
-          >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            {program.joinMode === 'approval' ? 'Apply' : 'Join'}
-          </button>
-        </div>
-      ) : null}
-
-      {approved ? (
         <>
-          <div className={card}>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-wide text-[var(--sera-muted)]">Your code</p>
-                <p className="font-display text-2xl font-semibold text-[var(--sera-ink)]">{code}</p>
-              </div>
-              {rate ? (
-                <span className="rounded-full bg-[var(--sera-orange)]/10 px-3 py-1 text-sm font-semibold text-[var(--sera-orange)]">
-                  {rate} commission
-                </span>
-              ) : null}
-            </div>
+          <Hero rate={rate} program={program} />
+          <Steps program={program} />
 
-            <h2 className="mt-6 flex items-center gap-2 text-sm font-semibold text-[var(--sera-ink)]">
-              <Link2 className="h-4 w-4" /> Make a link
-            </h2>
-            <div className="mt-3 grid gap-4">
-              <label className="block text-sm font-medium text-[var(--sera-ink)]/80">
-                Product
-                <select
-                  className={`${field} mt-1.5`}
-                  value={productPath}
-                  onChange={(e) => {
-                    setProductPath(e.target.value)
-                    setAddress('')
-                  }}
+          {affiliate?.status === 'rejected' ? (
+            <Notice tone="error" icon={<ShieldAlert className="h-5 w-5" />} title="Your last application was not approved">
+              {affiliate.reviewNote ? `${affiliate.reviewNote} ` : ''}You can apply again below.
+            </Notice>
+          ) : null}
+
+          <section className={`${panel} overflow-hidden`}>
+            <div className="grid lg:grid-cols-[1.5fr_1fr]">
+              <div className="p-6 sm:p-8">
+                <SectionTitle eyebrow="Join" title="Where should we send your commission?" hint="We pay confirmed commission by bank transfer to this account. You can change it later." />
+                <div className="mt-6">
+                  <BankFields value={bank} onChange={setBank} />
+                </div>
+              </div>
+              <div className="border-t border-[var(--sera-line)] bg-[var(--sera-surface)] p-6 sm:p-8 lg:border-l lg:border-t-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--sera-muted)]">Joining as</p>
+                <p className="mt-1 truncate text-sm font-semibold text-[var(--sera-ink)]">{data.email || 'your store account'}</p>
+                {program.joinMode === 'approval' ? (
+                  <p className="mt-4 flex gap-2 text-sm text-[var(--sera-muted)]">
+                    <Clock3 className="mt-0.5 h-4 w-4 flex-none" /> We review each application. Your link starts working once it is approved.
+                  </p>
+                ) : (
+                  <p className="mt-4 flex gap-2 text-sm text-[var(--sera-muted)]">
+                    <BadgeCheck className="mt-0.5 h-4 w-4 flex-none text-emerald-600" /> Your link is ready as soon as you join.
+                  </p>
+                )}
+                {program.terms ? (
+                  <div className="mt-5 max-h-40 overflow-y-auto whitespace-pre-line rounded-2xl border border-[var(--sera-line)] bg-white p-3 text-xs leading-relaxed text-[var(--sera-muted)]">
+                    {program.terms}
+                  </div>
+                ) : null}
+                <label className="mt-5 flex cursor-pointer items-start gap-3 text-sm text-[var(--sera-ink)]/85">
+                  <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[var(--sera-orange)]" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
+                  <span>I agree to the affiliate program terms.</span>
+                </label>
+                <button
+                  type="button"
+                  className={`${primary} mt-6 w-full`}
+                  disabled={busy || !agree}
+                  onClick={() =>
+                    post({ action: 'join', agree, ...bank }, program.joinMode === 'approval' ? 'Application sent. We will let you know once it is reviewed.' : 'You have joined. Your link is ready.')
+                  }
                 >
-                  <option value="">Serapod Store home</option>
-                  {(products || []).map((p) => (
-                    <option key={`${p.channel}-${p.id}`} value={p.path}>
-                      {p.name}
-                      {p.channel === 'outdoor' ? ' (Outdoor)' : ''}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-sm font-medium text-[var(--sera-ink)]/80">
-                Or paste any Serapod page address
-                <input className={`${field} mt-1.5`} value={address} placeholder={`${origin}/store/products/…`}
-                  onChange={(e) => setAddress(e.target.value)} />
-                {addressInvalid ? <span className="mt-1 block text-xs text-red-600">Paste an address from the Serapod site.</span> : null}
-              </label>
-              <label className="block text-sm font-medium text-[var(--sera-ink)]/80">
-                Where will you post it? <span className="font-normal text-[var(--sera-muted)]">(optional, e.g. tiktok, instagram)</span>
-                <input className={`${field} mt-1.5`} value={sub} maxLength={40} placeholder="tiktok"
-                  onChange={(e) => setSub(e.target.value.replace(/[^A-Za-z0-9_-]/g, ''))} />
-                <span className="mt-1 block text-xs text-[var(--sera-muted)]">Shown next to each order so you can see which post sold it.</span>
-              </label>
-            </div>
-            <div className="mt-4 break-all rounded-xl bg-[var(--sera-mist)] p-3 text-sm text-[var(--sera-ink)]">{link || '—'}</div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <CopyButton text={link} label="Copy link" />
-              {typeof navigator !== 'undefined' && 'share' in navigator ? (
-                <button type="button" className={secondary} disabled={!link}
-                  onClick={() => navigator.share({ url: link }).catch(() => undefined)}>
-                  <Share2 className="h-4 w-4" /> Share
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {program.joinMode === 'approval' ? 'Apply now' : 'Join and get my link'}
                 </button>
-              ) : null}
+              </div>
             </div>
-          </div>
+          </section>
         </>
       ) : null}
 
-      {affiliate && affiliate.status !== 'rejected' && data.totals ? (
-        <>
-          <div className="grid gap-3 sm:grid-cols-3">
-            {[
-              { label: 'Pending', value: data.totals.pending, hint: 'Paid orders not confirmed yet' },
-              { label: 'Confirmed', value: data.totals.confirmed, hint: 'Waiting for the next transfer' },
-              { label: 'Paid to you', value: data.totals.paid, hint: 'Transferred to your bank' },
-            ].map((box) => (
-              <div key={box.label} className={card}>
-                <p className="text-xs uppercase tracking-wide text-[var(--sera-muted)]">{box.label}</p>
-                <p className="mt-1 font-display text-xl font-semibold text-[var(--sera-ink)]">{rm(box.value)}</p>
-                <p className="mt-1 text-xs text-[var(--sera-muted)]">{box.hint}</p>
-              </div>
-            ))}
-          </div>
+      {affiliate && affiliate.status === 'pending' ? (
+        <section className={`${panel} p-6 sm:p-10 text-center`}>
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-50 text-amber-700"><Clock3 className="h-7 w-7" /></span>
+          <h1 className="mt-4 font-display text-2xl font-semibold text-[var(--sera-ink)]">Application received</h1>
+          <p className="mx-auto mt-2 max-w-md text-sm text-[var(--sera-muted)]">We are reviewing it. Your link and code appear here as soon as it is approved.</p>
+        </section>
+      ) : null}
 
-          <div className={card}>
-            <h2 className="text-sm font-semibold text-[var(--sera-ink)]">Orders from your links</h2>
+      {affiliate && affiliate.status === 'suspended' ? (
+        <Notice tone="error" icon={<PauseCircle className="h-5 w-5" />} title="Your affiliate account is suspended">
+          Your link does not earn commission right now.{affiliate.reviewNote ? ` ${affiliate.reviewNote}` : ''}
+        </Notice>
+      ) : null}
+
+      {affiliate && affiliate.status === 'approved' && !program.open ? (
+        <Notice tone="info" icon={<PauseCircle className="h-5 w-5 text-[var(--sera-muted)]" />} title="The program is paused">
+          Links do not earn commission until it reopens. Your earnings so far are kept.
+        </Notice>
+      ) : null}
+
+      {approved ? (
+        <section className={`${panel} relative isolate overflow-hidden p-6 sm:p-8`}>
+          <div className="pointer-events-none absolute -right-20 -top-24 -z-10 h-64 w-64 rounded-full bg-[var(--sera-orange)]/15 blur-3xl" />
+          <div className="flex flex-wrap items-end justify-between gap-6">
+            <div>
+              <div className="h-1 w-12 rounded-full bg-[var(--sera-orange)]" />
+              <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--sera-muted)]">Your affiliate code</p>
+              <p className="mt-1 font-display text-4xl font-semibold tracking-tight text-[var(--sera-ink)]">{code}</p>
+              <p className="mt-2 text-sm text-[var(--sera-muted)]">
+                {rate ? `${rate} commission · ` : ''}links last {program.attributionDays} days
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <CopyButton text={homeLink} label="Copy store link" className={primary} />
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {affiliate && affiliate.status !== 'rejected' && affiliate.status !== 'pending' && data.totals ? (
+        <section className="grid gap-4 sm:grid-cols-3">
+          {[
+            { label: 'Pending', value: data.totals.pending, hint: 'Paid orders, not confirmed yet', icon: <Clock3 className="h-5 w-5" />, tone: 'bg-amber-50 text-amber-700' },
+            { label: 'Confirmed', value: data.totals.confirmed, hint: 'Waiting for the next transfer', icon: <BadgeCheck className="h-5 w-5" />, tone: 'bg-sky-50 text-sky-700' },
+            { label: 'Paid to you', value: data.totals.paid, hint: 'Sent to your bank', icon: <Wallet className="h-5 w-5" />, tone: 'bg-emerald-50 text-emerald-700' },
+          ].map((box) => (
+            <div key={box.label} className={`${panel} p-5`}>
+              <div className="flex items-center gap-3">
+                <span className={`flex h-10 w-10 items-center justify-center rounded-2xl ${box.tone}`}>{box.icon}</span>
+                <p className="text-sm font-semibold text-[var(--sera-ink)]">{box.label}</p>
+              </div>
+              <p className="mt-4 font-display text-3xl font-semibold tracking-tight text-[var(--sera-ink)] tabular-nums">{rm(box.value)}</p>
+              <p className="mt-1 text-xs text-[var(--sera-muted)]">{box.hint}</p>
+            </div>
+          ))}
+        </section>
+      ) : null}
+
+      {approved ? (
+        <section className={`${panel} p-6 sm:p-8`}>
+          <SectionTitle eyebrow="Make a link" title="Pick what you want to share" hint="Choose a product, or paste the address of any Serapod page." />
+
+          <div className="mt-6 grid gap-6 lg:grid-cols-[1.4fr_1fr]">
+            <div>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--sera-muted)]" />
+                <input className={`${field} pl-11`} value={productQuery} placeholder="Search products" onChange={(e) => setProductQuery(e.target.value)} />
+              </div>
+              <div className="mt-3 grid max-h-[340px] grid-cols-2 gap-3 overflow-y-auto pr-1 sm:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={() => { setProductPath(''); setAddress('') }}
+                  className={`flex flex-col items-center justify-center gap-2 rounded-2xl border p-3 text-center text-xs font-semibold transition-all ${!productPath && !address.trim() ? 'border-[var(--sera-orange)] bg-[var(--sera-orange)]/5 text-[var(--sera-ink)] ring-2 ring-[var(--sera-orange)]/20' : 'border-[var(--sera-line)] bg-white text-[var(--sera-muted)] hover:border-[var(--sera-muted)]/40'}`}
+                >
+                  <span className="flex aspect-square w-full items-center justify-center rounded-xl bg-[var(--sera-surface)]"><ShoppingBag className="h-7 w-7 text-[var(--sera-orange)]" /></span>
+                  Store home
+                </button>
+                {products === null ? (
+                  <div className="col-span-2 flex items-center justify-center py-10 sm:col-span-2"><Loader2 className="h-5 w-5 animate-spin text-[var(--sera-muted)]" /></div>
+                ) : (
+                  shownProducts.map((p) => {
+                    const img = mediaUrl(p.imageUrl)
+                    const active = productPath === p.path && !address.trim()
+                    return (
+                      <button
+                        key={`${p.channel}-${p.id}`}
+                        type="button"
+                        onClick={() => { setProductPath(p.path); setAddress('') }}
+                        className={`group flex flex-col gap-2 rounded-2xl border p-2 text-left transition-all ${active ? 'border-[var(--sera-orange)] bg-[var(--sera-orange)]/5 ring-2 ring-[var(--sera-orange)]/20' : 'border-[var(--sera-line)] bg-white hover:border-[var(--sera-muted)]/40'}`}
+                      >
+                        <span className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl bg-[var(--sera-surface)]">
+                          {img ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={img} alt="" className="h-full w-full object-contain p-2 transition-transform group-hover:scale-105" />
+                          ) : (
+                            <Package className="h-7 w-7 text-[var(--sera-muted)]/50" />
+                          )}
+                          {p.channel === 'outdoor' ? (
+                            <span className="absolute left-1.5 top-1.5 rounded-full bg-[var(--sera-ink)]/85 px-2 py-0.5 text-[10px] font-semibold text-white">Outdoor</span>
+                          ) : null}
+                        </span>
+                        <span className="line-clamp-2 px-1 text-xs font-semibold text-[var(--sera-ink)]">{p.name}</span>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+              {products !== null && shownProducts.length === 0 ? (
+                <p className="mt-3 text-sm text-[var(--sera-muted)]">No products match “{productQuery}”.</p>
+              ) : null}
+            </div>
+
+            <div className="flex flex-col gap-4 rounded-3xl bg-[var(--sera-surface)] p-5">
+              <label className="block">
+                <span className="text-xs font-semibold text-[var(--sera-ink)]/80">Or paste a Serapod page address</span>
+                <input className={`${field} mt-1.5 bg-white`} value={address} placeholder={`${origin}/store/products/…`} onChange={(e) => setAddress(e.target.value)} />
+                {addressInvalid ? <span className="mt-1 block text-xs text-red-600">Paste an address from the Serapod site.</span> : null}
+              </label>
+              <label className="block">
+                <span className="text-xs font-semibold text-[var(--sera-ink)]/80">Where will you post it? <span className="font-normal text-[var(--sera-muted)]">(optional)</span></span>
+                <input className={`${field} mt-1.5 bg-white`} value={sub} maxLength={40} placeholder="e.g. tiktok, instagram"
+                  onChange={(e) => setSub(e.target.value.replace(/[^A-Za-z0-9_-]/g, ''))} />
+                <span className="mt-1 block text-xs text-[var(--sera-muted)]">Shown next to each order, so you know which post sold it.</span>
+              </label>
+
+              <div className="mt-auto rounded-2xl border border-[var(--sera-line)] bg-white p-4">
+                <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--sera-muted)]">
+                  <Link2 className="h-3.5 w-3.5" /> Your link{selectedProduct && !address.trim() ? ` · ${selectedProduct.name}` : ''}
+                </p>
+                <p className="mt-2 break-all text-sm font-medium text-[var(--sera-ink)]">{link || '—'}</p>
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <CopyButton text={link} label="Copy link" className={`${primary} h-11`} />
+                  <button type="button" className={secondary} disabled={!link}
+                    onClick={() => {
+                      if (typeof navigator !== 'undefined' && 'share' in navigator) navigator.share({ url: link }).catch(() => undefined)
+                      else navigator.clipboard?.writeText(link).catch(() => undefined)
+                    }}>
+                    <Share2 className="h-4 w-4" /> Share
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {affiliate && affiliate.status !== 'rejected' && affiliate.status !== 'pending' && data.totals ? (
+        <>
+          <section className={`${panel} p-6 sm:p-8`}>
+            <SectionTitle title="Orders from your links" hint={`Commission is confirmed ${program.confirmAfterDays} days after delivery.`} />
             {data.commissions && data.commissions.length > 0 ? (
-              <div className="mt-3 overflow-x-auto">
-                <table className="w-full min-w-[560px] text-left text-sm">
-                  <thead className="text-xs uppercase text-[var(--sera-muted)]">
-                    <tr>
-                      <th className="py-2 pr-3">Date</th>
-                      <th className="py-2 pr-3">Order</th>
-                      <th className="py-2 pr-3">Post</th>
-                      <th className="py-2 pr-3 text-right">Products</th>
-                      <th className="py-2 pr-3 text-right">Commission</th>
-                      <th className="py-2">Status</th>
+              <div className="mt-5 overflow-x-auto">
+                <table className="w-full min-w-[600px] text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--sera-line)] text-xs uppercase tracking-wide text-[var(--sera-muted)]">
+                      <th className="pb-3 pr-3 font-semibold">Date</th>
+                      <th className="pb-3 pr-3 font-semibold">Order</th>
+                      <th className="pb-3 pr-3 font-semibold">Posted on</th>
+                      <th className="pb-3 pr-3 text-right font-semibold">Products</th>
+                      <th className="pb-3 pr-3 text-right font-semibold">You earn</th>
+                      <th className="pb-3 font-semibold">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[var(--sera-line)]">
                     {data.commissions.map((c, i) => (
                       <tr key={`${c.order}-${i}`}>
-                        <td className="py-2 pr-3 whitespace-nowrap">{day(c.orderedAt)}</td>
-                        <td className="py-2 pr-3 whitespace-nowrap">{c.channel} {c.order}</td>
-                        <td className="py-2 pr-3">{c.subId || '—'}</td>
-                        <td className="py-2 pr-3 text-right whitespace-nowrap">{rm(c.goods)}</td>
-                        <td className="py-2 pr-3 text-right whitespace-nowrap font-medium">{rm(c.amount)}</td>
-                        <td className="py-2 whitespace-nowrap">{COMMISSION_STATUS_LABELS[c.status] || c.status}</td>
+                        <td className="py-3 pr-3 whitespace-nowrap text-[var(--sera-muted)]">{day(c.orderedAt)}</td>
+                        <td className="py-3 pr-3 whitespace-nowrap">{c.channel} <span className="text-[var(--sera-muted)]">{c.order}</span></td>
+                        <td className="py-3 pr-3">{c.subId || '—'}</td>
+                        <td className="py-3 pr-3 text-right whitespace-nowrap tabular-nums">{rm(c.goods)}</td>
+                        <td className="py-3 pr-3 text-right whitespace-nowrap font-semibold tabular-nums">{rm(c.amount)}</td>
+                        <td className="py-3 whitespace-nowrap">
+                          <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${STATUS_TONE[c.status] || STATUS_TONE.cancelled}`}>
+                            {COMMISSION_STATUS_LABELS[c.status] || c.status}
+                          </span>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             ) : (
-              <p className="mt-2 text-sm text-[var(--sera-muted)]">No orders from your links yet.</p>
+              <div className="mt-5 flex flex-col items-center rounded-2xl border border-dashed border-[var(--sera-line)] py-10 text-center">
+                <ShoppingBag className="h-8 w-8 text-[var(--sera-muted)]/50" />
+                <p className="mt-3 text-sm font-semibold text-[var(--sera-ink)]">No orders yet</p>
+                <p className="mt-1 max-w-xs text-sm text-[var(--sera-muted)]">Share your link. Paid orders from it show up here.</p>
+              </div>
             )}
-          </div>
+          </section>
 
-          {data.payouts && data.payouts.length > 0 ? (
-            <div className={card}>
-              <h2 className="text-sm font-semibold text-[var(--sera-ink)]">Transfers</h2>
-              <ul className="mt-3 divide-y divide-[var(--sera-line)] text-sm">
-                {data.payouts.map((p, i) => (
-                  <li key={`${p.reference}-${i}`} className="flex flex-wrap justify-between gap-2 py-2">
-                    <span>{day(p.paidAt)} · Ref {p.reference}</span>
-                    <span className="font-medium">{rm(p.amount)}</span>
-                  </li>
-                ))}
-              </ul>
+          <section className="grid gap-4 lg:grid-cols-2">
+            <div className={`${panel} p-6 sm:p-8`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <SectionTitle title="Bank account" hint="Where we send your commission." />
+                {!editBank ? (
+                  <button type="button" className={secondary} onClick={() => setEditBank(true)}>Change</button>
+                ) : null}
+              </div>
+              {editBank ? (
+                <>
+                  <div className="mt-5">
+                    <BankFields value={bank} onChange={setBank} />
+                  </div>
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    <button type="button" className={primary} disabled={busy} onClick={() => post({ action: 'update_bank', ...bank }, 'Bank details saved.')}>
+                      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      className={secondary}
+                      onClick={() => {
+                        setEditBank(false)
+                        setBank({ bankName: affiliate.bankName, bankAccountNo: affiliate.bankAccountNo, bankAccountName: affiliate.bankAccountName })
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="mt-5 flex items-center gap-4 rounded-2xl bg-[var(--sera-surface)] p-4">
+                  <span className="flex h-11 w-11 flex-none items-center justify-center rounded-2xl bg-white text-[var(--sera-ink)]"><Landmark className="h-5 w-5" /></span>
+                  {affiliate.bankName ? (
+                    <div className="min-w-0 text-sm">
+                      <p className="font-semibold text-[var(--sera-ink)]">{affiliate.bankName} <span className="font-normal tabular-nums text-[var(--sera-muted)]">{maskAccountNo(affiliate.bankAccountNo)}</span></p>
+                      <p className="truncate text-[var(--sera-muted)]">{affiliate.bankAccountName}</p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-[var(--sera-muted)]">Not added yet.</p>
+                  )}
+                </div>
+              )}
             </div>
-          ) : null}
 
-          <div className={card}>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold text-[var(--sera-ink)]">Bank account for payouts</h2>
-              {!editBank ? (
-                <button type="button" className="text-sm font-medium text-[var(--sera-orange)]" onClick={() => setEditBank(true)}>
-                  Change
-                </button>
-              ) : null}
+            <div className={`${panel} p-6 sm:p-8`}>
+              <SectionTitle title="Transfers" hint={program.minPayoutAmount > 0 ? `Sent once your confirmed commission reaches ${rm(program.minPayoutAmount)}.` : 'Confirmed commission sent to your bank.'} />
+              {data.payouts && data.payouts.length > 0 ? (
+                <ul className="mt-5 divide-y divide-[var(--sera-line)] text-sm">
+                  {data.payouts.map((p, i) => (
+                    <li key={`${p.reference}-${i}`} className="flex items-center justify-between gap-3 py-3">
+                      <span>
+                        <span className="block font-semibold text-[var(--sera-ink)]">{day(p.paidAt)}</span>
+                        <span className="text-xs text-[var(--sera-muted)]">Ref {p.reference} · {p.count} order{p.count === 1 ? '' : 's'}</span>
+                      </span>
+                      <span className="font-display text-lg font-semibold tabular-nums text-[var(--sera-ink)]">{rm(p.amount)}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-5 rounded-2xl bg-[var(--sera-surface)] p-4 text-sm text-[var(--sera-muted)]">No transfers yet.</p>
+              )}
             </div>
-            {editBank ? (
-              <>
-                <div className="mt-3">
-                  <BankFields value={bank} onChange={setBank} />
-                </div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <button type="button" className={primary} disabled={busy} onClick={() => post({ action: 'update_bank', ...bank }, 'Bank details saved.')}>
-                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    className={secondary}
-                    onClick={() => {
-                      setEditBank(false)
-                      setBank({ bankName: affiliate.bankName, bankAccountNo: affiliate.bankAccountNo, bankAccountName: affiliate.bankAccountName })
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </>
-            ) : (
-              <p className="mt-2 text-sm text-[var(--sera-muted)]">
-                {affiliate.bankName ? `${affiliate.bankName} · ${maskAccountNo(affiliate.bankAccountNo)} · ${affiliate.bankAccountName}` : 'Not added yet.'}
-              </p>
-            )}
-          </div>
+          </section>
         </>
       ) : null}
     </Shell>
@@ -499,14 +734,12 @@ export default function StoreAffiliateClient() {
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8 sm:py-12">
-      <Link href="/store/account" className="mb-6 inline-flex items-center gap-1 text-sm text-[var(--sera-muted)] hover:text-[var(--sera-ink)]/80">
+    <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
+      <Link href="/store/account" className="mb-6 inline-flex items-center gap-1.5 text-sm text-[var(--sera-muted)] transition-colors hover:text-[var(--sera-orange)]">
         <ArrowLeft className="h-4 w-4" />
         My Account
       </Link>
-      <h1 className="font-display text-2xl font-semibold text-[var(--sera-ink)]">Affiliate program</h1>
-      <p className="mt-1 mb-6 text-sm text-[var(--sera-muted)]">Share Serapod products with your own link and earn commission on paid orders.</p>
-      <div className="space-y-5">{children}</div>
+      <div className="space-y-6">{children}</div>
     </div>
   )
 }
