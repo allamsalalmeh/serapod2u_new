@@ -302,9 +302,12 @@ function LinkStage({ rate, days, code, photos }: { rate: string; days: number; c
             </div>
           ))}
         </div>
-      </motion.div>
 
-      <div className="absolute left-1/2 top-[46%] z-20 w-[74%] max-w-[300px] -translate-x-1/2 -translate-y-1/2">
+        {/* In front of the orbit in depth, so the products always pass behind it. */}
+        <div
+          className="absolute left-1/2 top-1/2 w-[58%] max-w-[210px]"
+          style={{ transform: 'translate(-50%, -50%) translateZ(calc(var(--s2u-r) + 70px))' }}
+        >
         <div className="s2u-device-float">
           <div className="relative overflow-hidden rounded-3xl bg-white/95 p-5 shadow-[0_40px_80px_-32px_rgba(18,20,23,0.45)] ring-1 ring-black/5 backdrop-blur">
             <div className="flex items-center justify-between">
@@ -331,7 +334,8 @@ function LinkStage({ rate, days, code, photos }: { rate: string; days: number; c
             </div>
           </div>
         </div>
-      </div>
+        </div>
+      </motion.div>
 
       <div className="s2u-chip-bob absolute right-[4%] top-[14%] z-30 flex items-center gap-2 rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-[var(--sera-ink)] shadow-[0_18px_40px_-18px_rgba(18,20,23,0.35)] ring-1 ring-black/5">
         <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600"><ShoppingBag className="h-3.5 w-3.5" /></span>
