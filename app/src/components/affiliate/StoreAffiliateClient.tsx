@@ -57,6 +57,16 @@ type Data = {
 
 type LinkProduct = { id: string; name: string; imageUrl: string | null; channel: 'store' | 'outdoor'; path: string }
 
+const SIGNED_OUT_PROGRAM: Program = {
+  open: false,
+  joinMode: 'open',
+  commissionPercent: null,
+  attributionDays: 30,
+  confirmAfterDays: 7,
+  minPayoutAmount: 0,
+  terms: '',
+}
+
 const card = 'rounded-2xl border border-[var(--sera-line)] bg-white p-5 sm:p-6'
 const field = 'h-11 w-full rounded-xl border border-[var(--sera-line)] bg-white px-3 text-sm text-[var(--sera-ink)] focus:outline-none focus:ring-2 focus:ring-[var(--sera-orange)]/25'
 const primary =
@@ -154,6 +164,10 @@ export default function StoreAffiliateClient() {
     try {
       const res = await fetch('/api/affiliate/me', { cache: 'no-store' })
       const json = await res.json().catch(() => null)
+      if (res.status === 401) {
+        setData({ signedIn: false, program: SIGNED_OUT_PROGRAM, affiliate: null })
+        return
+      }
       if (!res.ok || !json) throw new Error(json?.error || 'Could not load.')
       setData(json)
       const a: Account | null = json.affiliate
