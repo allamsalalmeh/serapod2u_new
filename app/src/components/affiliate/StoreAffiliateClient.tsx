@@ -228,8 +228,7 @@ function Hero({ rate, program, children }: { rate: string; program: Program; chi
             <span className="text-[var(--sera-orange)]">Earn on every paid order.</span>
           </h1>
           <p className="mt-4 max-w-xl text-sm leading-relaxed text-[var(--sera-muted)] sm:text-base">
-            Send your own link to friends or followers. When they buy within {program.attributionDays} days, you earn
-            {rate ? ` ${rate}` : ' commission'} of the products&apos; price.
+            {`Send your own link to friends or followers. When they buy within ${program.attributionDays} days, you earn ${rate || 'commission'} of the products' price.`}
           </p>
           {children}
         </div>
