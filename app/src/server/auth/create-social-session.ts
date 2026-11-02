@@ -1,6 +1,7 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requestAuthCookieOptions } from '@/lib/supabase/server'
 import { ensureUserRow } from '@/server/auth/ensureUserRow'
 import { getPostLoginRedirect } from '@/server/auth/getPostLoginRedirect'
 import { syntheticSocialEmail } from '@/lib/auth/social-oauth'
@@ -47,6 +48,7 @@ export async function createSessionForSocialProfile(profile: {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      ...(await requestAuthCookieOptions()),
       cookies: {
         get(name: string) {
           return cookieStore.get(name)?.value

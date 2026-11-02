@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { resolvePortalHomePath } from '@/lib/serapp/access'
 import { getRequestHostname, resolveMarketingHostRewrite, resolveSiteSplitRoute } from '@/lib/hosts/site-hosts'
 import { phoneAppSignInKeepsMainSite } from '@/lib/hosts/site-split'
+import { authCookieOptionsForHost, isSharedAuthCookie, sharedAuthCookieForHost } from '@/lib/supabase/auth-cookie-scope'
 import {
   extractQRCodeFromPath,
   extractTokenFromQRCode,
@@ -136,10 +137,12 @@ export async function middleware(request: NextRequest) {
   response.headers.set('Pragma', 'no-cache')
   response.headers.set('Expires', '0')
 
+  const sharedAuthCookie = sharedAuthCookieForHost(getRequestHostname(request))
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      ...authCookieOptionsForHost(getRequestHostname(request)),
       cookies: {
         get(name: string) {
           return request.cookies.get(name)?.value
@@ -248,6 +251,12 @@ export async function middleware(request: NextRequest) {
               request.cookies.delete(name)
             }
           })
+          // The shared shopper login lives on the parent domain: it is only cleared with that domain.
+          for (const { name } of request.cookies.getAll()) {
+            if (isSharedAuthCookie(name, sharedAuthCookie)) {
+              response.cookies.set({ name, value: '', path: '/', domain: sharedAuthCookie!.domain, maxAge: 0 })
+            }
+          }
 
           return response
         }

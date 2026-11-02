@@ -1,5 +1,6 @@
 import 'server-only'
 import { createServerClient } from '@supabase/ssr'
+import { sharedAuthCookieName } from '@/lib/supabase/auth-cookie-scope'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { checkRateLimit } from '@/lib/security/rate-limit'
 import {
@@ -214,8 +215,16 @@ async function actorFromCookieHeader(cookieHeader: string | undefined): Promise<
     const i = part.indexOf('=')
     if (i > 0) jar.set(part.slice(0, i).trim(), decodeURIComponent(part.slice(i + 1).trim()))
   }
+  // The host-only portal login wins; the shared shopper login (main site + store) is read only without it.
+  const shopName = sharedAuthCookieName()
+  const names = [...jar.keys()]
+  const hasPortal = names.some((n) => /^sb-[^=]*-auth-token(\.\d+)?$/.test(n) && !n.startsWith(shopName))
+  const useShop = !hasPortal && names.some((n) => n === shopName || n.startsWith(`${shopName}.`))
   try {
-    const supabase = createServerClient(url, key, { cookies: { get: (n: string) => jar.get(n), set() {}, remove() {} } })
+    const supabase = createServerClient(url, key, {
+      ...(useShop ? { cookieOptions: { name: shopName } } : {}),
+      cookies: { get: (n: string) => jar.get(n), set() {}, remove() {} },
+    })
     const { data } = await supabase.auth.getUser()
     return data.user?.id ?? null
   } catch {
