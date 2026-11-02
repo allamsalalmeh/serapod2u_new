@@ -12,6 +12,7 @@ import {
   Play,
 } from 'lucide-react'
 import { useCart } from '@/lib/storefront/cart-context'
+import AffiliateShareButton from '@/components/affiliate/AffiliateShareButton'
 import type {
   StorefrontProductDetail,
   StorefrontVariant,
@@ -448,6 +449,8 @@ export default function ProductDetailClient({ product }: Props) {
             </>
           )}
         </button>
+
+        <AffiliateShareButton productId={product.id} />
 
         {/* Description */}
         {product.product_description && (

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import StoreAccountClient from './StoreAccountClient'
+import AffiliateAccountCard from '@/components/affiliate/AffiliateAccountCard'
 
 export const metadata: Metadata = {
   title: 'My Account',
@@ -7,5 +8,10 @@ export const metadata: Metadata = {
 }
 
 export default function StoreAccountPage() {
-  return <StoreAccountClient />
+  return (
+    <>
+      <StoreAccountClient />
+      <AffiliateAccountCard />
+    </>
+  )
 }

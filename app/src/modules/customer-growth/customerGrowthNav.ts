@@ -29,6 +29,7 @@ import {
     Map,
     Music2,
     CalendarRange,
+    Link2,
     type LucideIcon,
 } from 'lucide-react'
 import { isCrmViewId } from '@/modules/crm/crmNav'
@@ -156,6 +157,7 @@ export const customerGrowthNavGroups: CustomerGrowthNavGroup[] = [
             { id: 'store-orders', label: 'Store Orders', icon: ShoppingBag, route: '/ecommerce/store-orders', description: 'View and manage online store orders', href: '/ecommerce/store-orders' },
             { id: 'ecommerce/tiktok-shop', label: 'TikTok Shop', icon: Music2, route: '/ecommerce/tiktok-shop', description: 'TikTok Shop sales, settlements and payouts', href: '/ecommerce/tiktok-shop' },
             { id: 'ecommerce/payment-gateway', label: 'Payment Gateway', icon: CreditCard, route: '/ecommerce/payment-gateway', description: 'Configure payment providers for checkout', href: '/ecommerce/payment-gateway' },
+            { id: 'ecommerce/affiliates', label: 'Affiliates', icon: Link2, route: '/ecommerce/affiliates', description: 'Affiliate links, commission and payouts', href: '/ecommerce/affiliates' },
         ],
     },
 ]
@@ -192,7 +194,7 @@ export function describeCustomerGrowthFunctions(groups: readonly { id: string }[
 // ── Helpers ────────────────────────────────────────────────────
 
 /** E-commerce view IDs */
-const ecommerceViewIds = new Set(['ecommerce', 'hero-banners', 'store-banner-manager', 'login-hero-banner', 'store-orders', 'ecommerce/tiktok-shop', 'ecommerce/payment-gateway'])
+const ecommerceViewIds = new Set(['ecommerce', 'hero-banners', 'store-banner-manager', 'login-hero-banner', 'store-orders', 'ecommerce/tiktok-shop', 'ecommerce/payment-gateway', 'ecommerce/affiliates'])
 export function isEcommerceViewId(viewId: string): boolean {
     return ecommerceViewIds.has(viewId)
 }
@@ -205,6 +207,7 @@ export const ecommerceViewToPath: Record<string, string> = {
     'store-orders': 'store-orders',
     'ecommerce/tiktok-shop': 'tiktok-shop',
     'ecommerce/payment-gateway': 'payment-gateway',
+    'ecommerce/affiliates': 'affiliates',
 }
 
 export const ecommercePathToView: Record<string, string> = {
@@ -213,6 +216,7 @@ export const ecommercePathToView: Record<string, string> = {
     'store-orders': 'store-orders',
     'tiktok-shop': 'ecommerce/tiktok-shop',
     'payment-gateway': 'ecommerce/payment-gateway',
+    'affiliates': 'ecommerce/affiliates',
 }
 
 export function ecommerceHrefForView(viewId: string): string | null {

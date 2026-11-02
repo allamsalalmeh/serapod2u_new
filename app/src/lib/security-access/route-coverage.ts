@@ -19,6 +19,7 @@ export type RouteCoverage =
 export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
   "payment-gateway/access": { kind: 'ENTERPRISE', permissions: ["ecommerce.channel.manage"] },
   "security-access/governance/legacy-preview": { kind: 'ENTERPRISE', permissions: ["security.audit.view"] },
+  "affiliate/me": { kind: 'CONSUMER', reason: "Signed-in shopper's own affiliate account, links, commission and bank details (own row only)" },
   "accounting/accounts": { kind: 'ENTERPRISE', permissions: ["finance.account.manage", "finance.ledger.view"] },
   "accounting/accounts/[id]": { kind: 'ENTERPRISE', permissions: ["finance.account.manage", "finance.ledger.view"] },
   "accounting/accounts/[id]/toggle-active": { kind: 'ENTERPRISE', permissions: ["finance.account.manage"] },
@@ -97,6 +98,7 @@ export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
   "admin/store/customer-messages": { kind: 'ENTERPRISE', permissions: ["ecommerce.order.manage"] },
   "admin/store/hero-config": { kind: 'ENTERPRISE', permissions: ["ecommerce.store.manage"] },
   "admin/store/orders": { kind: 'ENTERPRISE', permissions: ["ecommerce.order.manage"] },
+  "admin/affiliates": { kind: 'ENTERPRISE', permissions: ["ecommerce.order.manage"] },
   "admin/store/requests": { kind: 'ENTERPRISE', permissions: ["ecommerce.order.manage"], via: ["lib/storefront/admin-access.ts"] },
   "admin/support/admins": { kind: 'ENTERPRISE', permissions: ["customer.support.manage", "customer.support.administer"] },
   "admin/support/blast": { kind: 'ENTERPRISE', permissions: ["customer.support.manage", "customer.support.administer"] },

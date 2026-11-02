@@ -57,10 +57,11 @@ async function loadVariants(admin: any) {
 async function loadAffiliates(admin: any) {
   const { data, error } = await admin
     .from('outdoor_affiliates')
-    .select('id, code, name, kind, commission_percent, is_active, notes, created_at')
+    .select('*')
     .order('created_at', { ascending: true })
   if (error) return []
-  return (data || []).map((a: any) => ({
+  // Shoppers who joined the affiliate program are managed in E-commerce › Affiliates.
+  return (data || []).filter((a: any) => a.source !== 'self').map((a: any) => ({
     id: String(a.id),
     code: String(a.code),
     name: String(a.name),
@@ -82,7 +83,8 @@ async function loadReport(admin: any, from: string, to: string, affiliates: Arra
     .order('created_at', { ascending: false })
     .limit(5000)
   if (error) return { from, to, rows: [], orders: [] }
-  const orders = data || []
+  const listed = new Set(affiliates.map((a) => a.id))
+  const orders = (data || []).filter((o: any) => listed.has(String(o.affiliate_id)))
   const rows = summarizeAffiliateOrders(orders, new Map(affiliates.map((a) => [a.id, a.commissionPercent])))
   return {
     from,
@@ -210,6 +212,10 @@ export async function POST(request: NextRequest) {
         updated_at: now,
       }
       const id = text(body.id, 64)
+      if (id) {
+        const { data: current } = await admin.from('outdoor_affiliates').select('*').eq('id', id).maybeSingle()
+        if (current?.source === 'self') return bad('This affiliate joined the program; manage them in E-commerce › Affiliates.')
+      }
       const { error } = id
         ? await admin.from('outdoor_affiliates').update(row).eq('id', id)
         : await admin.from('outdoor_affiliates').insert(row)

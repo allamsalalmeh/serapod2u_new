@@ -154,6 +154,7 @@ import { ecommerceHrefForView, isCustomerGrowthViewId, isEcommerceViewId } from 
 import HeroBannersUnifiedView from '@/modules/ecommerce/components/HeroBannersUnifiedView'
 import StoreOrdersView from '@/modules/ecommerce/components/StoreOrdersView'
 import TikTokShopView from '@/modules/ecommerce/components/TikTokShopView'
+import AffiliateProgramView from '@/modules/ecommerce/components/AffiliateProgramView'
 // RoadTour Module Components
 import { RoadtourLandingView } from '@/modules/roadtour/components/RoadtourLandingView'
 import { RoadtourCampaignsView } from '@/modules/roadtour/components/RoadtourCampaignsView'
@@ -774,6 +775,8 @@ function DashboardShell({ userProfile: inputProfile, initialView, initialOrderId
         return <StoreOrdersView userProfile={userProfile} onViewChange={handleViewChange} />
       case 'ecommerce/tiktok-shop':
         return <TikTokShopView userProfile={userProfile} onViewChange={handleViewChange} />
+      case 'ecommerce/affiliates':
+        return <AffiliateProgramView />
       case 'ecommerce/payment-gateway':
         return (
           <PaymentGatewaySettingsView
