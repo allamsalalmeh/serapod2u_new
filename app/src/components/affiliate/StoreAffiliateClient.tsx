@@ -1,7 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type PointerEvent, type ReactNode } from 'react'
 import Link from 'next/link'
+import { motion, useMotionValue, useReducedMotion, useSpring, useTransform } from 'framer-motion'
+import '@/app/corporate/serapod2u/serapod2u.css'
 import {
   ArrowLeft,
   BadgeCheck,
@@ -204,53 +206,215 @@ function CopyButton({ text, label = 'Copy', className = secondary }: { text: str
   )
 }
 
-function Hero({ rate, program, children }: { rate: string; program: Program; children?: React.ReactNode }) {
+const EASE = [0.22, 1, 0.36, 1] as const
+
+/** The same product photos the serapod2u.com home page orbits (no vape products). */
+const STAGE_PHOTOS = [
+  '/outdoor/products/tumbler-burgundy.png',
+  '/outdoor/products/mat-grey.png',
+  '/outdoor/products/tumbler-pink.png',
+  '/outdoor/products/mat-burgundy.png',
+  '/outdoor/products/tumbler-grey.png',
+  '/outdoor/products/mat-pink.png',
+]
+
+function stagePhotos(products: LinkProduct[] | null) {
+  const store = (products || []).map((p) => mediaUrl(p.imageUrl)).filter(Boolean).slice(0, 4) as string[]
+  const out: string[] = []
+  for (let i = 0; out.length < 8 && (i < STAGE_PHOTOS.length || i < store.length); i++) {
+    if (STAGE_PHOTOS[i]) out.push(STAGE_PHOTOS[i])
+    if (store[i] && out.length < 8) out.push(store[i])
+  }
+  return out
+}
+
+function Reveal({ children, delay = 0, className }: { children: ReactNode; delay?: number; className?: string }) {
   return (
-    <section className={`${panel} relative isolate overflow-hidden p-6 sm:p-10`}>
-      <div className="pointer-events-none absolute -right-24 -top-24 -z-10 h-72 w-72 rounded-full bg-[var(--sera-orange)]/15 blur-3xl" />
-      <div
-        className="pointer-events-none absolute inset-0 -z-10 opacity-[0.35]"
-        style={{
-          backgroundImage:
-            'linear-gradient(var(--sera-line) 1px, transparent 1px), linear-gradient(90deg, var(--sera-line) 1px, transparent 1px)',
-          backgroundSize: '44px 44px',
-          maskImage: 'radial-gradient(ellipse at 85% 0%, black 0%, transparent 65%)',
-          WebkitMaskImage: 'radial-gradient(ellipse at 85% 0%, black 0%, transparent 65%)',
-        }}
-      />
-      <div className="grid items-center gap-8 lg:grid-cols-[1.4fr_1fr]">
-        <div>
-          <div className="h-1 w-12 rounded-full bg-[var(--sera-orange)]" />
-          <p className="mt-5 text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--sera-muted)]">Affiliate program</p>
-          <h1 className="mt-2 font-display text-3xl font-semibold leading-[1.1] tracking-tight text-[var(--sera-ink)] sm:text-4xl">
-            Share Serapod products.
-            <br />
-            <span className="text-[var(--sera-orange)]">Earn on every paid order.</span>
-          </h1>
-          <p className="mt-4 max-w-xl text-sm leading-relaxed text-[var(--sera-muted)] sm:text-base">
-            {`Send your own link to friends or followers. When they buy within ${program.attributionDays} days, you earn ${rate || 'commission'} of the products' price.`}
-          </p>
-          {children}
-        </div>
-        {rate ? (
-          <div className="relative rounded-3xl bg-[var(--sera-ink)] p-6 text-white">
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-white/60">Your commission</p>
-            <p className="mt-2 font-display text-6xl font-semibold tracking-tight">{rate}</p>
-            <p className="mt-1 text-sm text-white/70">of the products&apos; price, delivery not included</p>
-            <div className="mt-6 grid grid-cols-2 gap-3 text-sm">
-              <div className="rounded-2xl bg-white/10 p-3">
-                <p className="font-semibold">{program.attributionDays} days</p>
-                <p className="text-xs text-white/60">link stays yours</p>
-              </div>
-              <div className="rounded-2xl bg-white/10 p-3">
-                <p className="font-semibold">Bank transfer</p>
-                <p className="text-xs text-white/60">
-                  {program.minPayoutAmount > 0 ? `from ${rm(program.minPayoutAmount)}` : 'to your account'}
-                </p>
+    <motion.div
+      className={className}
+      initial={{ opacity: 0, y: 28 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: '-60px' }}
+      transition={{ duration: 0.8, ease: EASE, delay }}
+    >
+      {children}
+    </motion.div>
+  )
+}
+
+/** Card that leans toward the pointer in 3D. */
+function TiltCard({ children, className, max = 8 }: { children: ReactNode; className?: string; max?: number }) {
+  const reduce = useReducedMotion()
+  const rx = useSpring(0, { stiffness: 180, damping: 18 })
+  const ry = useSpring(0, { stiffness: 180, damping: 18 })
+  const onMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (reduce) return
+    const r = e.currentTarget.getBoundingClientRect()
+    ry.set(((e.clientX - r.left) / r.width - 0.5) * max * 2)
+    rx.set(-((e.clientY - r.top) / r.height - 0.5) * max * 2)
+  }
+  return (
+    <div style={{ perspective: 900 }} className={className}>
+      <motion.div
+        onPointerMove={onMove}
+        onPointerLeave={() => { rx.set(0); ry.set(0) }}
+        style={{ rotateX: rx, rotateY: ry, transformStyle: 'preserve-3d' }}
+        className="h-full"
+      >
+        {children}
+      </motion.div>
+    </div>
+  )
+}
+
+/** Products orbiting a floating link card, tilting with the pointer (as on the serapod2u.com home page). */
+function LinkStage({ rate, days, code, photos }: { rate: string; days: number; code: string; photos: string[] }) {
+  const reduce = useReducedMotion()
+  const px = useMotionValue(0)
+  const py = useMotionValue(0)
+  const rotateY = useSpring(useTransform(px, [-0.5, 0.5], [-14, 14]), { stiffness: 120, damping: 18 })
+  const rotateX = useSpring(useTransform(py, [-0.5, 0.5], [6, -14]), { stiffness: 120, damping: 18 })
+  const step = 360 / Math.max(1, photos.length)
+  const onMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (reduce) return
+    const r = e.currentTarget.getBoundingClientRect()
+    px.set((e.clientX - r.left) / r.width - 0.5)
+    py.set((e.clientY - r.top) / r.height - 0.5)
+  }
+  return (
+    <div
+      className="s2u-stage relative mx-auto aspect-square w-full max-w-[520px]"
+      onPointerMove={onMove}
+      onPointerLeave={() => { px.set(0); py.set(0) }}
+    >
+      <div className="absolute inset-[14%] rounded-full bg-[radial-gradient(circle,rgba(232,93,4,0.22),rgba(232,93,4,0.05)_45%,transparent_70%)] blur-2xl" />
+      <div className="s2u-ring s2u-ring--1" style={{ top: '62%' }}><span className="s2u-ring-dot" /></div>
+      <div className="s2u-ring s2u-ring--2" style={{ top: '62%' }} />
+
+      <motion.div className="s2u-carousel absolute inset-0" style={{ rotateX, rotateY, transformStyle: 'preserve-3d' }}>
+        <div className="s2u-carousel-spin">
+          {photos.map((src, i) => (
+            <div key={`${src}-${i}`} className="s2u-carousel-card" style={{ ['--a' as string]: `${i * step}deg` }}>
+              <div className="flex h-full items-center justify-center overflow-hidden rounded-2xl bg-white shadow-[0_28px_50px_-26px_rgba(18,20,23,0.35)] ring-1 ring-black/5">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={src} alt="" className="h-full w-full object-contain p-3" loading={i < 4 ? 'eager' : 'lazy'} />
               </div>
             </div>
+          ))}
+        </div>
+      </motion.div>
+
+      <div className="absolute left-1/2 top-[46%] z-20 w-[74%] max-w-[300px] -translate-x-1/2 -translate-y-1/2">
+        <div className="s2u-device-float">
+          <div className="relative overflow-hidden rounded-3xl bg-white/95 p-5 shadow-[0_40px_80px_-32px_rgba(18,20,23,0.45)] ring-1 ring-black/5 backdrop-blur">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-2 text-xs font-semibold text-[var(--sera-ink)]">
+                <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-[var(--sera-orange)]/10 text-[var(--sera-orange)]"><Link2 className="h-3.5 w-3.5" /></span>
+                Your link
+              </span>
+              <span className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {days} days
+              </span>
+            </div>
+            <div className="relative mt-4 overflow-hidden rounded-2xl bg-[var(--sera-surface)] px-3 py-2.5">
+              <p className="truncate font-mono text-[11px] text-[var(--sera-ink)]/80">serapod2u.com/store?ref={code || 'YOURCODE'}</p>
+              <span className="s2u-sheen pointer-events-none absolute inset-0" aria-hidden="true" />
+            </div>
+            <div className="mt-4 flex items-end justify-between gap-3">
+              <div>
+                <p className="font-display text-4xl font-semibold leading-none tracking-tight text-[var(--sera-orange)]">{rate || '—'}</p>
+                <p className="mt-1 text-[11px] text-[var(--sera-muted)]">of every paid order</p>
+              </div>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--sera-ink)] px-3 py-1.5 text-[11px] font-semibold text-white">
+                <Copy className="h-3 w-3" /> Copy
+              </span>
+            </div>
           </div>
-        ) : null}
+        </div>
+      </div>
+
+      <div className="s2u-chip-bob absolute right-[4%] top-[14%] z-30 flex items-center gap-2 rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-[var(--sera-ink)] shadow-[0_18px_40px_-18px_rgba(18,20,23,0.35)] ring-1 ring-black/5">
+        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600"><ShoppingBag className="h-3.5 w-3.5" /></span>
+        Paid order
+      </div>
+      <div className="s2u-chip-bob absolute bottom-[16%] left-[2%] z-30 flex items-center gap-2 rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-[var(--sera-ink)] shadow-[0_18px_40px_-18px_rgba(18,20,23,0.35)] ring-1 ring-black/5" style={{ animationDelay: '1.2s' }}>
+        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-[var(--sera-orange)]/10 text-[var(--sera-orange)]"><Banknote className="h-3.5 w-3.5" /></span>
+        Bank transfer
+      </div>
+      <div className="absolute bottom-[8%] left-1/2 h-8 w-2/3 -translate-x-1/2 rounded-[50%] bg-[rgba(18,20,23,0.12)] blur-2xl" />
+    </div>
+  )
+}
+
+/** Full-width hero in the serapod2u.com home page style: light warm gradient, aurora, grid, words rising in. */
+function Hero({
+  words,
+  sub,
+  rate,
+  program,
+  code,
+  photos,
+  children,
+}: {
+  words: string[]
+  sub: string
+  rate: string
+  program: Program
+  code: string
+  photos: string[]
+  children?: ReactNode
+}) {
+  return (
+    <section className="relative isolate overflow-hidden bg-[linear-gradient(180deg,#fff6ef_0%,#fbfaf8_55%,var(--sera-paper)_100%)] pb-16 pt-6 sm:pb-24 sm:pt-8">
+      <div className="s2u-aurora" aria-hidden="true" />
+      <div className="s2u-grid" aria-hidden="true" />
+      <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <Link href="/store/account" className="inline-flex items-center gap-1.5 text-sm text-[var(--sera-muted)] transition-colors hover:text-[var(--sera-orange)]">
+          <ArrowLeft className="h-4 w-4" />
+          My Account
+        </Link>
+        <div className="mt-6 grid items-center gap-10 lg:grid-cols-[1.05fr_1fr]">
+          <div>
+            <motion.span
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, ease: EASE }}
+              className="inline-flex items-center gap-2 rounded-full border border-[var(--sera-orange)]/20 bg-white/70 px-3 py-1 text-xs font-semibold text-[var(--sera-ink)] backdrop-blur"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-[var(--sera-orange)]" /> Affiliate program
+            </motion.span>
+            <h1 className="mt-5 font-display text-[2.6rem] font-semibold leading-[0.98] tracking-tight text-[var(--sera-ink)] sm:text-6xl lg:text-[4.4rem]">
+              {words.map((word, i) => (
+                <span key={`${word}-${i}`} className="mr-[0.22em] inline-block overflow-hidden pb-2 align-bottom">
+                  <motion.span
+                    className={`inline-block ${i === words.length - 1 ? 'text-[var(--sera-orange)]' : ''}`}
+                    initial={{ y: '110%' }}
+                    animate={{ y: 0 }}
+                    transition={{ duration: 0.9, ease: EASE, delay: 0.15 + i * 0.09 }}
+                  >
+                    {word}
+                  </motion.span>
+                </span>
+              ))}
+            </h1>
+            <motion.p
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8, ease: EASE, delay: 0.55 }}
+              className="mt-6 max-w-xl text-base leading-relaxed text-[var(--sera-muted)] sm:text-lg"
+            >
+              {sub}
+            </motion.p>
+            {children ? (
+              <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8, ease: EASE, delay: 0.7 }} className="mt-8">
+                {children}
+              </motion.div>
+            ) : null}
+          </div>
+          <motion.div initial={{ opacity: 0, scale: 0.92 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 1.1, ease: EASE, delay: 0.25 }}>
+            <LinkStage rate={rate} days={program.attributionDays} code={code} photos={photos} />
+          </motion.div>
+        </div>
       </div>
     </section>
   )
@@ -271,17 +435,32 @@ function Steps({ program }: { program: Program }) {
     },
   ]
   return (
-    <section className="grid gap-4 md:grid-cols-3">
-      {steps.map((s, i) => (
-        <div key={s.title} className={`${panel} p-5`}>
-          <div className="flex items-center justify-between">
-            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--sera-orange)]/10 text-[var(--sera-orange)]">{s.icon}</span>
-            <span className="font-display text-3xl font-semibold text-[var(--sera-line)]">0{i + 1}</span>
-          </div>
-          <p className="mt-4 font-semibold text-[var(--sera-ink)]">{s.title}</p>
-          <p className="mt-1 text-sm leading-relaxed text-[var(--sera-muted)]">{s.text}</p>
+    <section>
+      <Reveal className="max-w-2xl">
+        <h2 className="font-display text-3xl font-semibold tracking-tight text-[var(--sera-ink)] sm:text-4xl">How it works</h2>
+        <p className="mt-3 text-[var(--sera-muted)]">Three steps, from your link to your bank account.</p>
+      </Reveal>
+      <div className="relative mt-10">
+        <svg className="pointer-events-none absolute left-[16%] right-[16%] top-[52px] hidden h-2 w-[68%] md:block" viewBox="0 0 100 2" preserveAspectRatio="none" aria-hidden="true">
+          <line x1="0" y1="1" x2="100" y2="1" className="s2u-flow" stroke="#e85d04" strokeOpacity="0.55" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        </svg>
+        <div className="grid gap-4 md:grid-cols-3">
+          {steps.map((s, i) => (
+            <Reveal key={s.title} delay={i * 0.1}>
+              <TiltCard className="h-full">
+                <div className={`${panel} h-full p-6`}>
+                  <div className="flex items-center justify-between">
+                    <span className="relative flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-[var(--sera-orange)] shadow-[0_16px_32px_-16px_rgba(232,93,4,0.55)] ring-1 ring-[var(--sera-orange)]/15">{s.icon}</span>
+                    <span className="font-display text-4xl font-semibold text-[var(--sera-line)]">0{i + 1}</span>
+                  </div>
+                  <p className="mt-5 text-lg font-semibold text-[var(--sera-ink)]">{s.title}</p>
+                  <p className="mt-1.5 text-sm leading-relaxed text-[var(--sera-muted)]">{s.text}</p>
+                </div>
+              </TiltCard>
+            </Reveal>
+          ))}
         </div>
-      ))}
+      </div>
     </section>
   )
 }
@@ -382,15 +561,25 @@ export default function StoreAffiliateClient() {
 
   const { program, affiliate } = data
   const rate = percentText(program.commissionPercent)
+  const photos = stagePhotos(products)
+  const joinWords = ['Share', 'Serapod.', 'Get', 'paid.']
+  const joinSub = `Send your own link to friends or followers. When they buy within ${program.attributionDays} days, you earn ${rate || 'commission'} of the products' price.`
+  const heroFor = (words: string[], sub: string, children?: ReactNode) => (
+    <Hero words={words} sub={sub} rate={rate} program={program} code={code} photos={photos}>{children}</Hero>
+  )
 
   if (!data.signedIn) {
     return (
-      <Shell>
-        <Hero rate={rate} program={program}>
-          <Link href="/login?next=/store/affiliate" className={`${primary} mt-6`}>Sign in to join</Link>
-          <p className="mt-3 text-xs text-[var(--sera-muted)]">Use your store account. New here? You can create one on the sign-in page.</p>
-        </Hero>
-      </Shell>
+      <Shell
+        hero={heroFor(
+          joinWords,
+          joinSub,
+          <>
+            <Link href="/login?next=/store/affiliate" className={`${primary} rounded-full`}>Sign in to join</Link>
+            <p className="mt-3 text-xs text-[var(--sera-muted)]">Use your store account. New here? You can create one on the sign-in page.</p>
+          </>,
+        )}
+      />
     )
   }
 
@@ -405,9 +594,37 @@ export default function StoreAffiliateClient() {
   }
 
   const showJoin = !affiliate || affiliate.status === 'rejected'
+  const hero =
+    showJoin && program.open
+      ? heroFor(
+          joinWords,
+          joinSub,
+          <a href="#join" className={`${primary} rounded-full`}>{program.joinMode === 'approval' ? 'Apply now' : 'Join and get my link'}</a>,
+        )
+      : affiliate?.status === 'pending'
+        ? heroFor(
+            ['Application', 'received.'],
+            'We are reviewing it. Your link and code appear here as soon as it is approved.',
+            <span className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 ring-1 ring-amber-200">
+              <Clock3 className="h-4 w-4" /> Waiting for approval
+            </span>,
+          )
+        : approved
+          ? heroFor(
+              ['Your', 'link', 'is', 'ready.'],
+              `Share it anywhere. Orders paid within ${program.attributionDays} days of a click earn you ${rate || 'commission'}.`,
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="inline-flex items-center gap-3 rounded-full bg-white px-5 py-3 shadow-[0_18px_40px_-20px_rgba(18,20,23,0.35)] ring-1 ring-black/5">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--sera-muted)]">Code</span>
+                  <span className="font-display text-xl font-semibold tracking-tight text-[var(--sera-ink)]">{code}</span>
+                </span>
+                <CopyButton text={homeLink} label="Copy store link" className={`${primary} rounded-full`} />
+              </div>,
+            )
+          : heroFor(['Your', 'affiliate', 'account.'], 'Your earnings and transfers are below.')
 
   return (
-    <Shell>
+    <Shell hero={hero}>
       {message ? (
         <Notice tone={message.ok ? 'ok' : 'error'} icon={message.ok ? <BadgeCheck className="h-5 w-5" /> : <ShieldAlert className="h-5 w-5" />}>
           {message.text}
@@ -416,7 +633,6 @@ export default function StoreAffiliateClient() {
 
       {showJoin && program.open ? (
         <>
-          <Hero rate={rate} program={program} />
           <Steps program={program} />
 
           {affiliate?.status === 'rejected' ? (
@@ -425,7 +641,8 @@ export default function StoreAffiliateClient() {
             </Notice>
           ) : null}
 
-          <section className={`${panel} overflow-hidden`}>
+          <Reveal>
+          <section id="join" className={`${panel} scroll-mt-24 overflow-hidden`}>
             <div className="grid lg:grid-cols-[1.5fr_1fr]">
               <div className="p-6 sm:p-8">
                 <SectionTitle eyebrow="Join" title="Where should we send your commission?" hint="We pay confirmed commission by bank transfer to this account. You can change it later." />
@@ -468,15 +685,8 @@ export default function StoreAffiliateClient() {
               </div>
             </div>
           </section>
+          </Reveal>
         </>
-      ) : null}
-
-      {affiliate && affiliate.status === 'pending' ? (
-        <section className={`${panel} p-6 sm:p-10 text-center`}>
-          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-50 text-amber-700"><Clock3 className="h-7 w-7" /></span>
-          <h1 className="mt-4 font-display text-2xl font-semibold text-[var(--sera-ink)]">Application received</h1>
-          <p className="mx-auto mt-2 max-w-md text-sm text-[var(--sera-muted)]">We are reviewing it. Your link and code appear here as soon as it is approved.</p>
-        </section>
       ) : null}
 
       {affiliate && affiliate.status === 'suspended' ? (
@@ -491,45 +701,31 @@ export default function StoreAffiliateClient() {
         </Notice>
       ) : null}
 
-      {approved ? (
-        <section className={`${panel} relative isolate overflow-hidden p-6 sm:p-8`}>
-          <div className="pointer-events-none absolute -right-20 -top-24 -z-10 h-64 w-64 rounded-full bg-[var(--sera-orange)]/15 blur-3xl" />
-          <div className="flex flex-wrap items-end justify-between gap-6">
-            <div>
-              <div className="h-1 w-12 rounded-full bg-[var(--sera-orange)]" />
-              <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--sera-muted)]">Your affiliate code</p>
-              <p className="mt-1 font-display text-4xl font-semibold tracking-tight text-[var(--sera-ink)]">{code}</p>
-              <p className="mt-2 text-sm text-[var(--sera-muted)]">
-                {rate ? `${rate} commission · ` : ''}links last {program.attributionDays} days
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <CopyButton text={homeLink} label="Copy store link" className={primary} />
-            </div>
-          </div>
-        </section>
-      ) : null}
-
       {affiliate && affiliate.status !== 'rejected' && affiliate.status !== 'pending' && data.totals ? (
         <section className="grid gap-4 sm:grid-cols-3">
           {[
             { label: 'Pending', value: data.totals.pending, hint: 'Paid orders, not confirmed yet', icon: <Clock3 className="h-5 w-5" />, tone: 'bg-amber-50 text-amber-700' },
             { label: 'Confirmed', value: data.totals.confirmed, hint: 'Waiting for the next transfer', icon: <BadgeCheck className="h-5 w-5" />, tone: 'bg-sky-50 text-sky-700' },
             { label: 'Paid to you', value: data.totals.paid, hint: 'Sent to your bank', icon: <Wallet className="h-5 w-5" />, tone: 'bg-emerald-50 text-emerald-700' },
-          ].map((box) => (
-            <div key={box.label} className={`${panel} p-5`}>
-              <div className="flex items-center gap-3">
-                <span className={`flex h-10 w-10 items-center justify-center rounded-2xl ${box.tone}`}>{box.icon}</span>
-                <p className="text-sm font-semibold text-[var(--sera-ink)]">{box.label}</p>
-              </div>
-              <p className="mt-4 font-display text-3xl font-semibold tracking-tight text-[var(--sera-ink)] tabular-nums">{rm(box.value)}</p>
-              <p className="mt-1 text-xs text-[var(--sera-muted)]">{box.hint}</p>
-            </div>
+          ].map((box, i) => (
+            <Reveal key={box.label} delay={i * 0.08}>
+              <TiltCard className="h-full" max={6}>
+                <div className={`${panel} h-full p-5`}>
+                  <div className="flex items-center gap-3">
+                    <span className={`flex h-10 w-10 items-center justify-center rounded-2xl ${box.tone}`}>{box.icon}</span>
+                    <p className="text-sm font-semibold text-[var(--sera-ink)]">{box.label}</p>
+                  </div>
+                  <p className="mt-4 font-display text-3xl font-semibold tracking-tight text-[var(--sera-ink)] tabular-nums">{rm(box.value)}</p>
+                  <p className="mt-1 text-xs text-[var(--sera-muted)]">{box.hint}</p>
+                </div>
+              </TiltCard>
+            </Reveal>
           ))}
         </section>
       ) : null}
 
       {approved ? (
+        <Reveal>
         <section className={`${panel} p-6 sm:p-8`}>
           <SectionTitle eyebrow="Make a link" title="Pick what you want to share" hint="Choose a product, or paste the address of any Serapod page." />
 
@@ -615,10 +811,12 @@ export default function StoreAffiliateClient() {
             </div>
           </div>
         </section>
+        </Reveal>
       ) : null}
 
       {affiliate && affiliate.status !== 'rejected' && affiliate.status !== 'pending' && data.totals ? (
         <>
+          <Reveal>
           <section className={`${panel} p-6 sm:p-8`}>
             <SectionTitle title="Orders from your links" hint={`Commission is confirmed ${program.confirmAfterDays} days after delivery.`} />
             {data.commissions && data.commissions.length > 0 ? (
@@ -660,7 +858,9 @@ export default function StoreAffiliateClient() {
               </div>
             )}
           </section>
+          </Reveal>
 
+          <Reveal>
           <section className="grid gap-4 lg:grid-cols-2">
             <div className={`${panel} p-6 sm:p-8`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -725,20 +925,28 @@ export default function StoreAffiliateClient() {
               )}
             </div>
           </section>
+          </Reveal>
         </>
       ) : null}
     </Shell>
   )
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({ hero, children }: { hero?: ReactNode; children?: ReactNode }) {
   return (
-    <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
-      <Link href="/store/account" className="mb-6 inline-flex items-center gap-1.5 text-sm text-[var(--sera-muted)] transition-colors hover:text-[var(--sera-orange)]">
-        <ArrowLeft className="h-4 w-4" />
-        My Account
-      </Link>
-      <div className="space-y-6">{children}</div>
+    <div className="s2u">
+      {hero}
+      {children ? (
+        <div className={`mx-auto max-w-6xl space-y-8 px-4 pb-16 sm:px-6 ${hero ? 'pt-2' : 'pt-8 sm:pt-12'}`}>
+          {!hero ? (
+            <Link href="/store/account" className="inline-flex items-center gap-1.5 text-sm text-[var(--sera-muted)] transition-colors hover:text-[var(--sera-orange)]">
+              <ArrowLeft className="h-4 w-4" />
+              My Account
+            </Link>
+          ) : null}
+          {children}
+        </div>
+      ) : null}
     </div>
   )
 }
