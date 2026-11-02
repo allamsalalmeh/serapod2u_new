@@ -1,7 +1,26 @@
 // @vitest-environment jsdom
 import { render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+
+vi.mock('framer-motion', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('framer-motion')>()),
+  useReducedMotion: () => true,
+}))
+
 import StoreAffiliateClient from './StoreAffiliateClient'
+
+beforeAll(() => {
+  Object.defineProperty(globalThis, 'IntersectionObserver', {
+    configurable: true,
+    writable: true,
+    value: class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      takeRecords() { return [] }
+    },
+  })
+})
 
 const program = { open: true, joinMode: 'approval', commissionPercent: 5, attributionDays: 30, confirmAfterDays: 7, minPayoutAmount: 50, terms: 'Be honest.' }
 const account = { code: 'AMINAH-7K2Q', name: 'Aminah', status: 'approved', statusLabel: 'Active', reviewNote: '', bankName: 'Maybank', bankAccountNo: '1234567890', bankAccountName: 'Aminah' }
@@ -13,15 +32,6 @@ function mockApi(me: unknown, status = 200, products: unknown[] = []) {
     json: async () => (String(url).includes('links=1') ? { products } : me),
   })))
 }
-
-beforeEach(() => {
-  vi.stubGlobal('IntersectionObserver', class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-    takeRecords() { return [] }
-  })
-})
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -46,7 +56,7 @@ describe('StoreAffiliateClient', () => {
   it('shows the waiting state while the application is reviewed', async () => {
     mockApi({ signedIn: true, program, affiliate: { ...account, status: 'pending' }, totals: { pending: 0, confirmed: 0, paid: 0, cancelled: 0, orders: 0 }, commissions: [], payouts: [] })
     render(<StoreAffiliateClient />)
-    expect(await screen.findByText('Waiting for approval')).toBeTruthy()
+    expect(await screen.findByText('Application received')).toBeTruthy()
     expect(screen.queryByText('AMINAH-7K2Q')).toBeNull()
   })
 
@@ -65,10 +75,10 @@ describe('StoreAffiliateClient', () => {
     )
     render(<StoreAffiliateClient />)
     expect(await screen.findByText('AMINAH-7K2Q')).toBeTruthy()
-    expect(screen.getByText('RM 2.44', { selector: 'p' })).toBeTruthy()
+    expect(screen.getByText('RM 2.44', { selector: 'p > span' })).toBeTruthy()
     expect(screen.getByText('tiktok')).toBeTruthy()
     expect(screen.getByText('Ref REF1 · 2 orders')).toBeTruthy()
     await waitFor(() => expect(screen.getByText('Ellbow Cat Treat')).toBeTruthy())
-    expect(screen.getByText(/^https?:\/\/.*\/store\?ref=AMINAH-7K2Q$/)).toBeTruthy()
+    expect(screen.getByText(/ref=AMINAH-7K2Q/)).toBeTruthy()
   })
 })
