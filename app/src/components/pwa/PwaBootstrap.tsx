@@ -1,12 +1,30 @@
-import Script from 'next/script'
+'use client'
 
-/** Site-wide PWA bootstrap — runs before React so install prompt is not missed. */
+import { useSyncExternalStore } from 'react'
+
+const subscribe = () => () => {}
+const getClientSnapshot = () => false
+const getServerSnapshot = () => true
+
+/** Site-wide PWA bootstrap — server-rendered before React so install prompt is not missed. */
 export default function PwaBootstrap() {
   const enableSw = process.env.NODE_ENV === 'production'
+  // React 19.3 (bundled by Next.js 16) rejects script elements created by
+  // post-hydration client renders. Keep the SSR/hydration script, then drop it.
+  const shouldRenderScript = useSyncExternalStore(
+    subscribe,
+    getClientSnapshot,
+    getServerSnapshot,
+  )
+
+  if (!shouldRenderScript) return null
 
   return (
-    <Script id="pwa-bootstrap" strategy="beforeInteractive">
-      {`(function(){try{
+    <script
+      id="pwa-bootstrap"
+      dangerouslySetInnerHTML={{
+        __html: `(function(){try{
+if(window.__pwaBootstrapInitialized) return;
 window.__pwaInstall=window.__pwaInstall||{prompt:null};
 window.__serappInstall=window.__pwaInstall;
 window.addEventListener('beforeinstallprompt',function(e){
@@ -18,6 +36,7 @@ window.addEventListener('appinstalled',function(){
   window.__pwaInstall.prompt=null;
   window.dispatchEvent(new Event('pwa-install-ready'));
 });
+window.__pwaBootstrapInitialized=true;
 if(!('serviceWorker' in navigator)) return;
 var enableSw=${enableSw ? 'true' : 'false'};
 var host=location.hostname;
@@ -44,7 +63,8 @@ navigator.serviceWorker.getRegistrations().then(function(regs){
   if(!enableSw) return;
   return navigator.serviceWorker.register('/sw.js',{scope:'/'});
 }).catch(function(){});
-}catch(e){}})();`}
-    </Script>
+}catch(e){}})();`
+      }}
+    />
   )
 }
