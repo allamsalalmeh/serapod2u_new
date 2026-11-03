@@ -99,6 +99,17 @@ describe('GET /api/reporting/stats/drilldown', () => {
     ]))
   })
 
+  it('returns the cancelled D2H/S2D orders of the month, reading only cancelled orders, and reconciles with the card', async () => {
+    const { drilldown } = await (await drill('?metric=cancelled_orders&month=2026-09')).json()
+    const { report } = await (await stats('?month=2026-09')).json()
+    expect(drilldown.rows.map((r: any) => r.orderNo)).toEqual(['SO6'])
+    expect(drilldown.total).toBe(report.summary.cancelledOrders)
+    expect(drilldown.totalValue).toBe(report.summary.cancelledValue)
+    expect(drilldown).toMatchObject({ headline: 1, headlineValue: 700, reconciled: true })
+    const read = calls.filter((c) => c.table === 'orders' && c.filters.some((f) => f.startsWith('status in')))
+    expect(read[0].filters).toEqual(expect.arrayContaining(['status in cancelled', 'order_date>=2026-09-01', 'order_date<2026-10-01']))
+  })
+
   it('returns unique active buyers that reconcile with the Active Buyers card', async () => {
     const { drilldown } = await (await drill('?metric=active_buyers&month=2026-09')).json()
     const { report } = await (await stats('?month=2026-09')).json()

@@ -29,6 +29,7 @@ import {
   APPROVED_SALES_STATUSES,
   isApprovedSalesStatus,
   isSalesOrderType,
+  salesClassOf,
   summarizeSales,
   type SalesSummary,
 } from './sales-kpi'
@@ -180,6 +181,9 @@ export function activeBuyerCounts(orders: readonly OverviewOrderInput[]) {
 
 /** Confirmed Sales Orders population: D2H/S2D in an approved-sales status (sales-kpi.ts). */
 export const isApprovedSale = (order: OverviewOrderInput) => isSalesOrderType(order.orderType) && isApprovedSalesStatus(order.status)
+
+/** Cancelled Orders population: D2H/S2D in status cancelled — exactly what `summarizeSales` counts as cancelled. */
+export const isCancelledSale = (order: OverviewOrderInput) => isSalesOrderType(order.orderType) && salesClassOf(order.status) === 'cancelled'
 
 /** Orders whose business date falls in the report window [start, end) — the window every headline card reads. */
 export function ordersInReportWindow(period: ExecutiveOverviewPeriod, orders: readonly OverviewOrderInput[]): OverviewOrderInput[] {
