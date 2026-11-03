@@ -21,12 +21,13 @@ describe('storeStatusEmailFor', () => {
 describe('buildStoreStatusEmail', () => {
   const order = { order_ref: 'ORD-1', customer_name: 'Aminah Ali', total_amount: 48.8, currency: 'MYR' }
 
-  it('delivered: thanks, how to report a problem, shop again', () => {
+  it('delivered: thanks, how to report a problem from My Purchases', () => {
     const email = buildStoreStatusEmail('delivered', order)
     expect(email.subject).toBe('Order ORD-1 has been delivered')
     expect(email.text).toContain('Hi Aminah,')
-    expect(email.text).toContain('store@serapod.com within 7 days')
-    expect(email.html).toContain('Shop again')
+    expect(email.text).toContain('Report a problem within 7 days')
+    expect(email.html).toContain('/store/orders')
+    expect(email.html).toContain('My Purchases')
   })
 
   it('cancelled says whether money went back', () => {

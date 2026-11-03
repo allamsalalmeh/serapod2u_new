@@ -1,5 +1,6 @@
 import { sendTransactionalHtmlEmail } from '@/lib/email/transactional-html-email'
 import { resolveOrgForEmail } from '@/server/auth/passwordResetService'
+import { storeOrigin } from '@/lib/storefront/order-paid-email'
 import { withStorageApiKey } from '@/lib/utils'
 import {
   ORDER_REQUEST_CUSTOMER_LABELS,
@@ -316,7 +317,7 @@ async function send(admin: any, request: OrderRequestView, to: string, subject: 
 }
 
 function accountLink(request: OrderRequestView, origin: string) {
-  return request.salesChannel === 'outdoor' ? `${origin}/outdoor/account?tab=orders` : ''
+  return request.salesChannel === 'outdoor' ? `${origin}/outdoor/account?tab=orders` : `${storeOrigin()}/store/orders`
 }
 
 async function notifyNewRequest(admin: any, request: OrderRequestView, origin: string) {

@@ -55,9 +55,9 @@ export function buildStoreStatusEmail(
       title = 'Your order has arrived'
       lines = [
         `Order ${ref} has been delivered. We hope you enjoy it!`,
-        `If anything is wrong with it, email us at ${STORE_CONTACT_EMAIL} within 7 days with your order number and photos.`,
+        'If anything is wrong with it, open My Purchases and choose Report a problem within 7 days.',
       ]
-      cta = { href: `${storeOrigin()}/store`, label: 'Shop again' }
+      cta = { href: `${storeOrigin()}/store/orders`, label: 'My Purchases' }
       break
     case 'cancelled':
       subject = `Order ${ref} was cancelled`
