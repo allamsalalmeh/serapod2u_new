@@ -30,8 +30,12 @@ export async function GET(request: NextRequest) {
       if (saDenied) return saDenied
     }
 
+    // Delivery Orders are always generated fresh: a stored copy may predate the current content (and show prices), and
+    // Received By changes with the acknowledgement.
+    const cacheable = type !== 'delivery_order'
+
     // Try to serve cached PDF first (unless nocache=true)
-    if (!noCache && documentId) {
+    if (cacheable && !noCache && documentId) {
       try {
         const { createClient } = await import('@/lib/supabase/server')
         const supabase = await createClient()
@@ -96,7 +100,7 @@ export async function GET(request: NextRequest) {
     })
 
     // Cache the generated PDF if documentId is provided
-    if (documentId && buffer) {
+    if (cacheable && documentId && buffer) {
       try {
         const { createClient } = await import('@/lib/supabase/server')
         const { createClient: createServiceClient } = await import('@supabase/supabase-js')

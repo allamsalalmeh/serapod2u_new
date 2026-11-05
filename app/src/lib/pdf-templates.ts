@@ -16,6 +16,14 @@ import { qrCaseTotals } from '@/lib/orders/qr-buffer'
 import { formatDateKey, isDateKey } from '@/lib/orders/order-date'
 import { purchaseOrderHidesPrices } from '@/lib/orders/po-price-visibility'
 import {
+  DELIVERY_NOTES_HEADING,
+  buildDeliveryAcknowledgement,
+  buildDeliveryLines,
+  buildDeliveryNotes,
+  relatedSalesOrderNo,
+  resolveDeliveryRecipient,
+} from '@/lib/documents/delivery-order-content'
+import {
   salesOrderLineDescription,
   sortSalesOrderLinesForDisplay,
 } from '@/lib/orders/sales-order-line-presentation'
@@ -30,6 +38,8 @@ export type DocumentTemplateType = 'detailed' | 'classic'
 
 export interface TemplateOrderData {
   order_no: string
+  display_doc_no?: string | null
+  notes?: string | null
   order_type: string
   status: string
   created_at: string
@@ -115,6 +125,11 @@ export interface TemplateDocumentData {
   total_amount?: number
   payment_percentage?: number
   payload?: Record<string, any>
+  acknowledged_at?: string | null
+  acknowledger?: { full_name?: string | null } | null
+  acknowledger_signature_image?: string | null
+  /** The user who created this document (Delivery Order only). */
+  prepared_by?: { full_name?: string | null; signature_image?: string | null } | null
 }
 
 export interface TemplateSignatureData {
@@ -323,6 +338,7 @@ export class ClassicTemplate {
     let y = 20
 
     const isSalesOrderDoc = (documentData.doc_type || '').toUpperCase() === 'SO'
+    const isDeliveryOrderDoc = (documentData.doc_type || '').toUpperCase() === 'DO'
 
     // 1. Header Section - 2 Column Grid
     // Left Column (65%): Logo + Company Info (Side-by-side, vertically centered)
@@ -339,7 +355,13 @@ export class ClassicTemplate {
     let detailsY = y + 15
     this.doc.setFontSize(9)
 
-    const details = [
+    const details = isDeliveryOrderDoc ? [
+      { label: 'DO No.:', value: documentData.display_doc_no || documentData.doc_no },
+      { label: 'DO Date:', value: this.formatDate(documentData.created_at) },
+      { label: 'Sales Order:', value: relatedSalesOrderNo(orderData) },
+      // The full name is in the footer; here it must stop short of its label.
+      { label: 'Prepared By:', value: String(this.doc.splitTextToSize(documentData.prepared_by?.full_name || '', 30)[0] ?? '') }
+    ] : [
       { label: 'PO#:', value: documentData.display_doc_no || documentData.doc_no },
       // A Sales Order is dated with the order's business SO date (order_date);
       // every other document keeps its own issue date.
@@ -452,7 +474,7 @@ export class ClassicTemplate {
     // organization's own type, so a distributor reads as "Distributor:" rather
     // than the previous hardcoded "Supplier:" (which, on a seller-issued
     // document such as an invoice, also repeated the letterhead org).
-    const counterparty = resolveCounterparty(orderData, docTitle)
+    const counterparty = isDeliveryOrderDoc ? resolveDeliveryRecipient(orderData) : resolveCounterparty(orderData, docTitle)
 
     this.doc.setFontSize(9)
     this.doc.setFont('helvetica', 'bold')
@@ -472,7 +494,11 @@ export class ClassicTemplate {
 
     // Address then contact lines; every entry is already non-empty, so a
     // sparsely filled organization simply renders fewer lines.
-    counterparty.detailLines.forEach(line => {
+    // An address typed on the order is one long line, so a Delivery Order wraps it clear of the status box.
+    const counterpartyLines = isDeliveryOrderDoc
+      ? counterparty.detailLines.flatMap((line) => this.doc.splitTextToSize(line, this.pageWidth - this.margin * 2 - 45) as string[])
+      : counterparty.detailLines
+    counterpartyLines.forEach(line => {
       this.doc.text(line, this.margin, suppAddrY)
       suppAddrY += 4
     })
@@ -490,19 +516,22 @@ export class ClassicTemplate {
 
     this.doc.setFontSize(7)
     this.doc.setTextColor(128, 128, 128)
-    this.doc.text('STATUS', boxX + (boxWidth / 2), boxY + 5, { align: 'center' })
+    this.doc.text(isDeliveryOrderDoc ? 'DELIVERY STATUS' : 'STATUS', boxX + (boxWidth / 2), boxY + 5, { align: 'center' })
 
     this.doc.setFontSize(10)
     this.doc.setFont('helvetica', 'bold')
     this.doc.setTextColor(34, 197, 94) // Green color
-    this.doc.text(orderData.status.toUpperCase(), boxX + (boxWidth / 2), boxY + 11, { align: 'center' })
+    this.doc.text((isDeliveryOrderDoc ? documentData.status : orderData.status).toUpperCase(), boxX + (boxWidth / 2), boxY + 11, { align: 'center' })
 
     y = Math.max(suppAddrY, boxY + boxHeight) + 5
 
     // 3. Items Table
     // Simple table with no borders, just lines
     const hidePrices = purchaseOrderHidesPrices(orderData.order_type, documentData.doc_type)
-    const headers = hidePrices ? ['No', 'Description', 'Unit'] : ['No', 'Description', 'Unit', 'Price', 'Amount']
+    const headers = isDeliveryOrderDoc
+      ? ['No.', 'Product Description', 'Quantity', 'Unit']
+      : hidePrices ? ['No', 'Description', 'Unit'] : ['No', 'Description', 'Unit', 'Price', 'Amount']
+    const deliveryLines = isDeliveryOrderDoc ? buildDeliveryLines(orderData.order_items) : null
 
     // Sales Orders group the lines Hero first, then Zero, then anything else;
     // every other document keeps the stored sequence. Presentation only — the
@@ -511,7 +540,7 @@ export class ClassicTemplate {
       ? sortSalesOrderLinesForDisplay(orderData.order_items, (item) => item.product?.product_name)
       : orderData.order_items
 
-    const tableData = lineItems.map((item, index) => {
+    const tableData = deliveryLines ? deliveryLines.rows.map((row) => [row.no, row.description, row.quantity, row.unit]) : lineItems.map((item, index) => {
       const qty = item.qty || 0
       const unitPrice = item.unit_price || 0
       const total = item.line_total || (qty * unitPrice)
@@ -560,15 +589,15 @@ export class ClassicTemplate {
       columnStyles: {
         0: { cellWidth: 12, halign: 'center' },   // No column - centered
         1: { cellWidth: 'auto', halign: 'left', fontStyle: 'normal' }, // Description - left aligned, not bold
-        2: { cellWidth: 18, halign: 'center' },   // Unit - center aligned (header & data)
-        3: { cellWidth: 22, halign: 'right' },    // Price - right aligned (header & data)
+        2: { cellWidth: isDeliveryOrderDoc ? 24 : 18, halign: 'center' },   // Unit - center aligned (header & data)
+        3: { cellWidth: 22, halign: isDeliveryOrderDoc ? 'center' : 'right' },    // Price - right aligned (header & data)
         4: { cellWidth: 28, halign: 'right' }     // Amount - right aligned (header & data)
       },
       margin: { left: this.margin, right: this.margin },
       didParseCell: (data) => {
         // Make headers for columns 2,3,4 center/right aligned to match data
         if (data.section === 'head') {
-          if (data.column.index === 2) {
+          if (data.column.index === 2 || (isDeliveryOrderDoc && data.column.index === 3)) {
             data.cell.styles.halign = 'center'
           } else if (data.column.index >= 3) {
             data.cell.styles.halign = 'right'
@@ -590,6 +619,8 @@ export class ClassicTemplate {
         }
       },
       didDrawPage: (data) => {
+        // A Delivery Order can run long: on later pages this fixed position would cut through its rows.
+        if (isDeliveryOrderDoc && data.pageNumber > 1) return
         // Header line
         this.doc.setDrawColor(230, 230, 230)
         this.doc.setLineWidth(0.1)
@@ -598,6 +629,18 @@ export class ClassicTemplate {
     })
 
     y = (this.doc as any).lastAutoTable.finalY + 5
+
+    // A Delivery Order states quantities only, then its own notes and acknowledgement block.
+    if (isDeliveryOrderDoc) {
+      this.doc.setFontSize(9)
+      this.doc.setFont('helvetica', 'bold')
+      this.doc.setTextColor(0, 0, 0)
+      const quantityColumnCenter = this.pageWidth - this.margin - 22 - 24 / 2
+      this.doc.text('Total Quantity', quantityColumnCenter - 24 / 2 - 2, y, { align: 'right' })
+      this.doc.text(deliveryLines!.totalQuantity, quantityColumnCenter, y, { align: 'center' })
+      y = this.addTermsSection(buildDeliveryNotes(orderData.notes), y + 6, DELIVERY_NOTES_HEADING)
+      return this.finishDeliveryOrder(orderData, documentData, y + 24)
+    }
 
     // 4. Footer / Totals
     const totalAmount = orderData.order_items.reduce((sum, item) => sum + (item.line_total || 0), 0)
@@ -772,6 +815,83 @@ export class ClassicTemplate {
   }
 
   /**
+   * The Delivery Order's footer: the same organization stamp and signature styling as every other document, with the
+   * Prepared / Delivered / Received columns. A field with nothing recorded stays empty: no placeholder name or squiggle.
+   */
+  private finishDeliveryOrder(orderData: TemplateOrderData, documentData: TemplateDocumentData, yPosition: number): Blob {
+    let footerY = yPosition
+    const footerBlockHeight = 50
+    if (footerY + footerBlockHeight > this.doc.internal.pageSize.getHeight() - this.margin) {
+      this.doc.addPage()
+      footerY = this.margin + 10
+    }
+
+    this.doc.setFontSize(9)
+    this.doc.setFont('helvetica', 'bold')
+    this.doc.setTextColor(0, 0, 0)
+    this.doc.text('Issued by:', this.margin, footerY)
+
+    const stampX = this.margin + 14
+    const stampY = footerY + 14
+    const stampSize = 16
+    if (orderData.issuer_signature_image) {
+      try {
+        this.doc.addImage(orderData.issuer_signature_image, 'PNG', stampX - stampSize / 2, stampY - stampSize / 2, stampSize, stampSize)
+      } catch (e) {
+        console.error('Error adding organization stamp:', e)
+        this.drawDefaultStamp(stampX, stampY, orderData.seller_org.org_name, stampSize / 2)
+      }
+    } else {
+      this.drawDefaultStamp(stampX, stampY, orderData.seller_org.org_name, stampSize / 2)
+    }
+
+    const columnWidth = (this.pageWidth - this.margin * 2) / 4
+    const nameY = footerY + 4.5
+    const nameLineHeight = 4
+    // The stamp above changes the font size, and wrapping measures with the current one.
+    this.doc.setFontSize(9)
+    this.doc.setFont('helvetica', 'normal')
+    const parties = buildDeliveryAcknowledgement(documentData).map((party) => ({
+      ...party,
+      nameLines: party.name ? this.doc.splitTextToSize(party.name, columnWidth - 6) as string[] : [],
+    }))
+    const nameLineCount = Math.max(...parties.map((party) => party.nameLines.length), 1)
+    const signatureY = nameY + nameLineCount * nameLineHeight + 1
+    const signatureLineY = signatureY + 13
+    const dateY = signatureLineY + 7
+
+    parties.forEach((party, index) => {
+      const centerX = this.margin + columnWidth * (index + 1.5)
+      this.doc.setFontSize(9)
+      this.doc.setFont('helvetica', 'normal')
+      this.doc.setTextColor(100, 100, 100)
+      this.doc.text(party.label, centerX, footerY, { align: 'center' })
+      if (party.nameLines.length) {
+        this.doc.text(party.nameLines, centerX, nameY, { align: 'center', lineHeightFactor: nameLineHeight / 3.175 })
+      }
+      if (party.signatureImage) {
+        try {
+          this.doc.addImage(party.signatureImage, 'PNG', centerX - 15, signatureY, 30, 12)
+        } catch (e) {
+          console.error('Error adding delivery order signature:', e)
+        }
+      }
+      this.doc.setDrawColor(200, 200, 200)
+      this.doc.setLineWidth(0.5)
+      this.doc.line(centerX - 15, signatureLineY, centerX + 15, signatureLineY)
+      this.doc.setFontSize(8)
+      this.doc.setTextColor(100, 100, 100)
+      this.doc.text(party.date ? this.formatDateLong(party.date) : 'Date:', centerX, dateY, { align: 'center' })
+    })
+
+    this.doc.setFontSize(7)
+    this.doc.setTextColor(180, 180, 180)
+    this.doc.text('This is a computer generated document.', this.margin, dateY + 18)
+
+    return this.doc.output('blob')
+  }
+
+  /**
    * The issuing organization's Terms & Conditions, rendered exactly as saved.
    *
    * Sits between the totals and the signature footer, matching the browser
@@ -779,7 +899,7 @@ export class ClassicTemplate {
    * no default or placeholder text - and pages long terms rather than letting
    * them run over the footer.
    */
-  private addTermsSection(terms: string | null | undefined, yPosition: number): number {
+  private addTermsSection(terms: string | null | undefined, yPosition: number, heading: string = 'TERMS & CONDITIONS'): number {
     const value = (terms || '')
     if (!value.trim()) return yPosition
 
@@ -797,7 +917,7 @@ export class ClassicTemplate {
     this.doc.setFontSize(9)
     this.doc.setFont('helvetica', 'bold')
     this.doc.setTextColor(0, 0, 0)
-    this.doc.text('TERMS & CONDITIONS', this.margin, y)
+    this.doc.text(heading, this.margin, y)
     y += 5
 
     this.doc.setFont('helvetica', 'normal')
