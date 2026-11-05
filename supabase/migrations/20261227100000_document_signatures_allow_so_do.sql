@@ -8,7 +8,7 @@
 -- Existing rows all satisfy the wider list. Signature access (RLS, the no-direct-write policies) goes by document, not by
 -- type, so nothing else changes.
 --
--- Applied on staging by 2026-11-05 (verified from the catalog). Not applied on production. Apply once per environment, in one transaction.
+-- Applied on staging and production by 2026-11-05 (verified from the catalog). Do not re-run there. Apply once per environment, in one transaction.
 
 BEGIN;
 

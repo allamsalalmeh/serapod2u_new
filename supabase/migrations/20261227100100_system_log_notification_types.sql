@@ -2,7 +2,7 @@
 -- Catalog rows only and switched off: no notification_settings rows are created, so nothing is sent until an
 -- administrator enables a type and chooses its channel and recipients. Saved settings are not touched.
 --
--- Present on staging since 2026-11-05 (verified from the catalog). Not applied on production. The Notification Types page also upserts these rows when opened.
+-- Present on staging and production since 2026-11-05 (verified from the catalog). Do not re-run there. The Notification Types page also upserts these rows when opened.
 
 INSERT INTO public.notification_types (
   category, event_code, event_name, event_description,
