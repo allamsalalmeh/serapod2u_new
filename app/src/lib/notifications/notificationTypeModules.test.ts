@@ -17,7 +17,7 @@ describe('groupByModule', () => {
     // Unmapped order/document events stay visible under neutral labels; mapped ones use the display groups.
     expect(sections[0].categories.map((c) => c.label)).toEqual(['Other order notifications', 'Other document notifications', 'Inventory & Stock', 'Returns'])
     expect(sections[1].categories.map((c) => c.label)).toEqual(['QR & Consumer', 'RoadTour', 'E-Commerce'])
-    expect(sections[2].categories.map((c) => c.label)).toEqual(['Security & OTP', 'User Account', 'Delete Organization Masterdata', 'System Check'])
+    expect(sections[2].categories.map((c) => c.label)).toEqual(['Security & OTP', 'User Account', 'Delete Organization Masterdata', 'System Check', 'System Log'])
     expect(sections.flatMap((s) => s.categories.flatMap((c) => c.types)).length).toBe(types.length)
   })
 

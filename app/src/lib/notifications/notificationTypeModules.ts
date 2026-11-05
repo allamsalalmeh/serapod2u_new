@@ -28,6 +28,7 @@ export const CATEGORY_MODULE: Record<string, string> = {
   user: 'platform_settings',
   'Delete Organization Masterdata': 'platform_settings',
   system: 'platform_settings',
+  system_log: 'platform_settings',
 }
 
 export const CATEGORY_LABELS: Record<string, string> = {
@@ -42,10 +43,11 @@ export const CATEGORY_LABELS: Record<string, string> = {
   user: 'User Account',
   'Delete Organization Masterdata': 'Delete Organization Masterdata',
   system: 'System Check',
+  system_log: 'System Log',
 }
 
 /** Category order inside each module; unknown categories follow alphabetically. */
-const CATEGORY_ORDER = ['sales_orders', 'purchase_orders', 'production_receiving', 'documents_payments', 'order', 'document', 'inventory', 'return', 'qr', 'roadtour', 'ecommerce', 'security', 'user', 'Delete Organization Masterdata', 'system']
+const CATEGORY_ORDER = ['sales_orders', 'purchase_orders', 'production_receiving', 'documents_payments', 'order', 'document', 'inventory', 'return', 'qr', 'roadtour', 'ecommerce', 'security', 'user', 'Delete Organization Masterdata', 'system', 'system_log']
 
 export const categoryLabel = (category: string) => DISPLAY_GROUPS[category]?.label || CATEGORY_LABELS[category] || category
 export const categoryModule = (category: string) => CATEGORY_MODULE[category] || CATEGORY_MODULE[DISPLAY_GROUPS[category]?.routingCategory || ''] || OTHER_MODULE.id

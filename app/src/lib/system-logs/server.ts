@@ -8,6 +8,7 @@ import {
 } from './contract'
 import { describeUserAgent, sanitizeDetails, sanitizeLabel, sanitizePath, sanitizeStack, sanitizeText } from './sanitize'
 import { appBuild, resolveRuntimeEnvironment } from './environment'
+import { classifySystemFailure, type SystemFailureClass } from './system-failure-class'
 
 /**
  * Server / API / worker side of the System Logs contract.
@@ -26,6 +27,8 @@ import { appBuild, resolveRuntimeEnvironment } from './environment'
  */
 export const REQUEST_ID_HEADER = 'x-request-id'
 
+/** PostgreSQL's constraint errors quote the row's values here ("Failing row contains (…)", "Key (x)=(…)"). Never stored. */
+const ROW_VALUES_DETAIL = /^\s*(Failing row contains|Key \()/i
 const STORAGE_MISSING = new Set(['PGRST202', '42883', 'PGRST205', '42P01'])
 const STORE_TIMEOUT_MS = 3_000
 const PER_FINGERPRINT_PER_MINUTE = 30
@@ -67,6 +70,10 @@ export interface ServerReportInput {
   correlationId?: string | null
   details?: Record<string, unknown>
   userAgent?: string | null
+  /** Queue an administrator alert after the log is stored (only qualifying failures; see alerts.ts). */
+  alert?: boolean
+  /** Which System Log notification type applies when `alert` is set; derived from the error when absent. */
+  failureClass?: SystemFailureClass
 }
 
 function warnOnce(message: string, extra?: Record<string, unknown>) {
@@ -106,7 +113,7 @@ export function buildServerPayload(input: ServerReportInput): IngestPayload | nu
   const apiRoute = input.apiRoute ? sanitizePath(input.apiRoute) : null
   const stack = f.stack ? sanitizeStack(f.stack) : null
   const details = sanitizeDetails({
-    ...(f.details ? { db_details: f.details } : {}),
+    ...(f.details && !ROW_VALUES_DETAIL.test(f.details) ? { db_details: f.details } : {}),
     ...(f.hint ? { db_hint: f.hint } : {}),
     ...(input.details ?? {}),
   })
@@ -186,11 +193,40 @@ export async function reportServerError(input: ServerReportInput): Promise<strin
     const payload = buildServerPayload(input)
     if (!payload) return null
     if (payload.actor_id && !payload.organization_id) payload.organization_id = await organizationOf(payload.actor_id)
-    await storeDiagnostic(payload)
+    const outcome = await storeDiagnostic(payload)
+    if (input.alert && outcome.stored) queueSystemAlert(payload, input.failureClass ?? classifySystemFailure(payload.code))
     return payload.reference_id
   } catch {
     return null
   }
+}
+
+/**
+ * Hands a stored failure to the alert flow without making the caller wait. Nothing here can reach the caller, and
+ * nothing in alerts.ts reports back into System Logs, so a failing notification system cannot log or alert about itself.
+ */
+function queueSystemAlert(payload: IngestPayload, failureClass: SystemFailureClass) {
+  void import('./alerts')
+    .then(({ dispatchSystemAlert }) => dispatchSystemAlert(payload, failureClass))
+    .catch(() => warnOnce('alert dispatch failed'))
+}
+
+/**
+ * An unexpected system failure behind a user action: always recorded with a user-quotable SYS- reference, and eligible
+ * for a configured administrator alert. Expected outcomes (validation, wrong password, access denied) do not belong
+ * here. Returns null only when nothing was reported (cancellation or hot-reload noise); never throws.
+ */
+export async function reportSystemFailure(input: Omit<ServerReportInput, 'referenceId' | 'source' | 'alert'>): Promise<string | null> {
+  const referenceId = newReferenceId('SYS')
+  // A constraint or other database error reaching this point is our failure, not bad user input, so it must not be
+  // filed as a validation warning. Timeouts and network failures keep their own category.
+  const facts = errorFacts(input.error)
+  const observed = classifyFailure({ status: input.status, name: facts.name, message: input.message ?? facts.message, code: input.code ?? facts.code })
+  const category = input.category ?? (observed === 'timeout' || observed === 'network' ? observed : 'server')
+  const reported = await reportServerError({ ...input, category, referenceId, alert: true })
+  // Without the database the System Log cannot hold it, so the server console keeps the reference and the code.
+  if (reported) console.error(`[system-failure] ${reported}`, { module: input.module ?? null, action: input.action ?? null, code: input.code ?? facts.code ?? null })
+  return reported
 }
 
 /** Background job failure through the existing worker infrastructure (no user; organization unknown unless given). */
@@ -240,6 +276,7 @@ export async function reportRequestError(
       error,
       status: 500,
       category: f.status ? undefined : 'unexpected',
+      alert: true,
       module: moduleFromPath(context.routePath ?? request.path ?? ''),
       action: `${context.routeType ?? 'request'} ${context.routePath ?? ''}`.trim(),
       apiRoute: isRoute ? request.path : null,

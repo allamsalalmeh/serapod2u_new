@@ -1,5 +1,6 @@
 import { getSmsTemplatesForEvent } from './smsTemplates'
 import { REQUIRED_NOTIFICATION_TYPES } from '@/lib/notifications/notificationEventCatalog'
+import { SYSTEM_LOG_ALERT_BODY } from '@/lib/notifications/systemLogAlertCopy'
 
 /**
  * WhatsApp and email templates for system events.
@@ -54,6 +55,11 @@ export interface Template {
     subject?: string; // For email
     body: string;
 }
+
+const SYSTEM_LOG_ALERT_TEMPLATES: Template[] = [
+    { id: 'system_log_wa_1', name: 'System Log Alert', channel: 'whatsapp', body: SYSTEM_LOG_ALERT_BODY },
+    { id: 'system_log_email_1', name: 'System Log Alert', channel: 'email', subject: '[{{environment_label}}] Serapod2U {{alert_title}} {{reference_id}}', body: SYSTEM_LOG_ALERT_BODY },
+]
 
 export const notificationTemplates: Record<string, Template[]> = {
 
@@ -1141,6 +1147,10 @@ export const notificationTemplates: Record<string, Template[]> = {
             body: `*New paid {{shop_name}} order*\n\n*Order:* {{order_ref}}\n*Total:* {{total}}\n*Customer:* {{buyer_name}}\n*Paid:* {{paid_at}}\n\n{{item_summary}}`
         },
     ],
+
+    'system_error_critical': SYSTEM_LOG_ALERT_TEMPLATES,
+    'system_error_application': SYSTEM_LOG_ALERT_TEMPLATES,
+    'system_error_database': SYSTEM_LOG_ALERT_TEMPLATES,
 
     // ══════════════════════════════════════════════════════════
     // SYSTEM CHECK

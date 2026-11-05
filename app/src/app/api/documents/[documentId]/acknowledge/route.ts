@@ -6,6 +6,13 @@ import {
   canAcknowledgeOrderDocument,
   describeAcknowledgementDenial
 } from '@/lib/documents/acknowledge-authorization'
+import {
+  ACK_SYSTEM_FAILURE_MESSAGE,
+  acknowledgeFailure,
+  expectedRpcFailure,
+  type AcknowledgeFailure
+} from '@/lib/documents/acknowledge-failure'
+import { referenceHeaders, reportSystemFailure } from '@/lib/system-logs/server'
 
 /**
  * Server-side acknowledgement gate.
@@ -28,15 +35,51 @@ type AcknowledgeableDocType = 'PO' | 'SO' | 'DO' | 'INVOICE' | 'PAYMENT'
 
 const RPC_DOC_TYPES: readonly string[] = ['PO', 'INVOICE', 'PAYMENT']
 
+const failed = (failure: AcknowledgeFailure, reason?: string) =>
+  NextResponse.json({ error: failure.message, code: failure.code, ...(reason ? { reason } : {}) }, { status: failure.status })
+
+/**
+ * An unexpected failure: the technical detail goes to System Logs on the server, the user gets the reference.
+ * Only the error's code and message are passed: a database error's `details` can quote row values.
+ */
+async function systemFailure(
+  request: NextRequest,
+  step: string,
+  error: unknown,
+  context: { documentId?: string; docType?: string; actorId?: string; organizationId?: string | null } = {}
+) {
+  const e = (error ?? {}) as { name?: string; code?: string; message?: string; stack?: string }
+  console.error(`[acknowledge] ${step} failed:`, { code: e.code ?? null, name: e.name ?? null })
+  const referenceId = await reportSystemFailure({
+    error: { name: e.name, code: e.code, message: e.message, stack: e.stack },
+    status: 500,
+    module: 'Supply Chain',
+    action: `document.acknowledge.${step}`,
+    apiRoute: request.nextUrl?.pathname ?? null,
+    method: 'POST',
+    pagePath: request.headers?.get('referer') ?? null,
+    actorId: context.actorId ?? null,
+    organizationId: context.organizationId ?? null,
+    userAgent: request.headers?.get('user-agent') ?? null,
+    details: { step, document_id: context.documentId, doc_type: context.docType }
+  })
+  return NextResponse.json(
+    { error: ACK_SYSTEM_FAILURE_MESSAGE, code: 'ack_system_failure', referenceId },
+    { status: 500, headers: referenceHeaders(referenceId) }
+  )
+}
+
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ documentId: string }> }
 ) {
+  let documentId: string | undefined
+  let actorId: string | undefined
   try {
-    const { documentId } = await context.params
+    documentId = (await context.params).documentId
 
     if (!documentId) {
-      return NextResponse.json({ error: 'Document id is required' }, { status: 400 })
+      return failed(acknowledgeFailure('ack_invalid_request'))
     }
 
     const supabase = await createClient()
@@ -46,8 +89,9 @@ export async function POST(
     } = await supabase.auth.getUser()
 
     if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return failed(acknowledgeFailure('ack_unauthenticated'))
     }
+    actorId = user.id
 
     let body: { paymentProofUrl?: string | null } = {}
     try {
@@ -76,18 +120,22 @@ export async function POST(
       ])
 
     if (documentError) {
-      console.error('[acknowledge] Failed to load document:', documentError)
-      return NextResponse.json({ error: 'Failed to load document' }, { status: 500 })
+      return systemFailure(request, 'load_document', documentError, { documentId, actorId })
     }
     if (!document) {
-      return NextResponse.json({ error: 'Document not found' }, { status: 404 })
+      return failed(acknowledgeFailure('ack_not_found'))
     }
     if (profileError) {
-      console.error('[acknowledge] Failed to load user profile:', profileError)
-      return NextResponse.json({ error: 'Failed to load user profile' }, { status: 500 })
+      return systemFailure(request, 'load_profile', profileError, { documentId, actorId })
     }
     if (!profile) {
-      return NextResponse.json({ error: 'User profile not found' }, { status: 403 })
+      return failed(acknowledgeFailure('ack_access_denied'))
+    }
+    const reportContext = {
+      documentId,
+      actorId,
+      docType: String((document as any).doc_type),
+      organizationId: (profile as any).organization_id ?? null
     }
 
     const { data: order, error: orderError } = await admin
@@ -97,8 +145,7 @@ export async function POST(
       .maybeSingle()
 
     if (orderError) {
-      console.error('[acknowledge] Failed to load order:', orderError)
-      return NextResponse.json({ error: 'Failed to load order' }, { status: 500 })
+      return systemFailure(request, 'load_order', orderError, reportContext)
     }
 
     const organization = Array.isArray((profile as any).organizations)
@@ -122,10 +169,7 @@ export async function POST(
     // the S&A decision for the organization the document is issued to (a
     // trusted row), with the historical rule as the legacy evaluator.
     if (!decision.allowed && decision.reason === 'not_pending') {
-      return NextResponse.json(
-        { error: describeAcknowledgementDenial(decision.reason), reason: decision.reason },
-        { status: 409 }
-      )
+      return failed(acknowledgeFailure('ack_already_acknowledged'), decision.reason)
     }
     const saDenied = await guardUserOperation(user.id, 'supply_chain.document.acknowledge', {
       organizationId: (document as any).issued_to_org_id ?? null,
@@ -135,7 +179,10 @@ export async function POST(
     if (saDenied) {
       return decision.allowed
         ? saDenied
-        : NextResponse.json({ error: describeAcknowledgementDenial(decision.reason), reason: decision.reason }, { status: 403 })
+        : NextResponse.json(
+            { error: describeAcknowledgementDenial(decision.reason), code: acknowledgeFailure('ack_access_denied').code, reason: decision.reason },
+            { status: 403 }
+          )
     }
 
     const docType = String((document as any).doc_type).toUpperCase() as AcknowledgeableDocType
@@ -154,18 +201,15 @@ export async function POST(
             : await (supabase as any).rpc('payment_acknowledge', { p_document_id: documentId })
 
       if (rpcResult.error) {
-        const { message, details, hint, code } = rpcResult.error
-        return NextResponse.json(
-          { error: message || details || hint || `Acknowledgement failed (code ${code})` },
-          { status: 400 }
-        )
+        const expected = expectedRpcFailure(rpcResult.error)
+        return expected ? failed(expected) : systemFailure(request, 'rpc', rpcResult.error, reportContext)
       }
 
       return NextResponse.json({ success: true, documentId, docType })
     }
 
     if (docType !== 'SO' && docType !== 'DO') {
-      return NextResponse.json({ error: 'This document type cannot be acknowledged' }, { status: 400 })
+      return failed(acknowledgeFailure('ack_invalid_request'))
     }
 
     // SO / DO: no RPC exists, and RLS would block the issued-to organization
@@ -177,11 +221,7 @@ export async function POST(
     } as any)
 
     if (signatureError) {
-      console.error('[acknowledge] Failed to record signature:', signatureError)
-      return NextResponse.json(
-        { error: signatureError.message || 'Failed to record document signature' },
-        { status: 400 }
-      )
+      return systemFailure(request, 'record_signature', signatureError, reportContext)
     }
 
     const acknowledgedAt = new Date().toISOString()
@@ -200,26 +240,15 @@ export async function POST(
       .maybeSingle()
 
     if (updateError) {
-      console.error('[acknowledge] Failed to acknowledge document:', updateError)
-      return NextResponse.json(
-        { error: updateError.message || 'Failed to acknowledge document' },
-        { status: 400 }
-      )
+      return systemFailure(request, 'update_document', updateError, reportContext)
     }
 
     if (!updated) {
-      return NextResponse.json(
-        { error: 'This document has already been acknowledged.', reason: 'not_pending' },
-        { status: 409 }
-      )
+      return failed(acknowledgeFailure('ack_already_acknowledged'), 'not_pending')
     }
 
     return NextResponse.json({ success: true, documentId, docType, document: updated })
   } catch (error: any) {
-    console.error('[acknowledge] Unexpected error:', error)
-    return NextResponse.json(
-      { error: error?.message || 'Failed to acknowledge document' },
-      { status: 500 }
-    )
+    return systemFailure(request, 'unexpected', error, { documentId, actorId })
   }
 }

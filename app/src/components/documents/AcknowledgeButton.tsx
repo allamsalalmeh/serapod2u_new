@@ -10,6 +10,8 @@ import {
   type AcknowledgementOrder,
   type Document
 } from '@/lib/document-permissions'
+import { acknowledgeToast, type AcknowledgeToast } from '@/lib/documents/acknowledge-failure'
+import { reportClientError } from '@/lib/system-logs/client'
 
 interface AcknowledgeButtonProps {
   document: Document
@@ -81,6 +83,19 @@ export default function AcknowledgeButton({
     return null
   }
 
+  function showFailure({ title, description, reference }: AcknowledgeToast) {
+    toast({
+      title,
+      description: reference ? (
+        <>
+          <span className="block">{description}</span>
+          <span className="mt-1 block font-mono text-xs">Reference: {reference}</span>
+        </>
+      ) : description,
+      variant: 'destructive'
+    })
+  }
+
   async function handleAcknowledge() {
     try {
       if (document.doc_type === 'PAYMENT' && document.issued_to_org_id !== userProfile.organization_id) {
@@ -134,7 +149,8 @@ export default function AcknowledgeButton({
 
       const successMessage = successMessages[document.doc_type]
       if (!successMessage) {
-        throw new Error('Invalid document type for acknowledgment')
+        showFailure(acknowledgeToast({ code: 'ack_invalid_request' }))
+        return
       }
 
       // Single acknowledgement endpoint: it re-checks authorization server-side
@@ -147,10 +163,20 @@ export default function AcknowledgeButton({
         body: JSON.stringify({ paymentProofUrl: paymentProofUrl ?? null })
       })
 
-      const payload = await response.json().catch(() => ({}))
+      const payload = await response.json().catch(() => null)
 
       if (!response.ok) {
-        throw new Error(payload?.error || 'Failed to acknowledge document')
+        // A failure the server recorded carries its own reference. One that never reached
+        // the route (gateway error page) is recorded here so the user still has one to quote.
+        const fallback = typeof payload?.code === 'string' ? null : reportClientError(new Error(`Acknowledge failed: HTTP ${response.status}`), {
+          response,
+          module: 'Supply Chain',
+          action: 'document.acknowledge',
+          method: 'POST',
+          details: { doc_type: document.doc_type }
+        })
+        showFailure(acknowledgeToast(payload, fallback, response.status))
+        return
       }
 
       toast({
@@ -161,33 +187,13 @@ export default function AcknowledgeButton({
       onSuccess()
     } catch (error: any) {
       console.error('Error acknowledging document:', error)
-
-      const errorDetails = error?.message || error?.details || error?.hint || error?.code
-      const fallbackMessage = typeof errorDetails === 'string' && errorDetails.trim().length > 0
-        ? errorDetails
-        : 'Failed to acknowledge document'
-      
-      // Handle authorization errors before payment proof messaging
-      const message = typeof error?.message === 'string' ? error.message.toLowerCase() : ''
-      if (message.includes('for this organization') || message.includes('not permitted')) {
-        toast({
-          title: 'Not Authorized',
-          description: 'Your organization is not permitted to acknowledge this document. Please contact the assigned team for assistance.',
-          variant: 'destructive'
-        })
-      } else if (error.message && error.message.includes('Payment proof is required')) {
-        toast({
-          title: 'Payment Proof Required',
-          description: 'Please upload payment proof above before acknowledging this invoice.',
-          variant: 'destructive'
-        })
-      } else {
-        toast({
-          title: 'Error',
-          description: fallbackMessage,
-          variant: 'destructive'
-        })
-      }
+      // No response at all (network failure): only the browser can record it.
+      showFailure(acknowledgeToast(null, reportClientError(error, {
+        module: 'Supply Chain',
+        action: 'document.acknowledge',
+        method: 'POST',
+        details: { doc_type: document.doc_type }
+      })))
     } finally {
       setAcknowledging(false)
     }
