@@ -10,6 +10,7 @@ import { WORKER_NAMES, withWorkerLease } from '@/lib/cron/lease'
 import { recordSmsDelivery, refreshOpenSmsStatuses, sendSmsWithActiveProvider } from '@/lib/notifications/sms-send'
 import { getSmsTemplateBody, getSmsTemplatesForEvent } from '@/config/smsTemplates'
 import { queueRoutingFallback } from '@/lib/notifications/outbox-fallback'
+import { SYSTEM_LOG_ALERT_BODY } from '@/lib/notifications/systemLogAlertCopy'
 import { deliveryChainForPreset, independentChannelsForPreset, isMultiChannelPreset, isRoutingFallbackPayload, resolveNotificationRoutingPreset, shouldAdvanceFallback, type NotificationDeliveryChannel } from '@/lib/notifications/routing'
 import { isSingleCreatorSource, ownerEmailFromPayload, ownerPhoneFromPayload, resolveRecipientTargets } from '@/lib/notifications/orderOwnerNotify'
 import { notificationPhoneKey } from '@/lib/notifications/manualPhoneNumbers'
@@ -450,6 +451,8 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                         templateBody = `🎉 Your product return {{return_no}} has been completed.`
                     } else if (event_code === 'system_sms_check') {
                         templateBody = `Serapod2U SMS check. If you received this, Local Malaysian SMS is working.`
+                    } else if (String(event_code).startsWith('system_error_')) {
+                        templateBody = SYSTEM_LOG_ALERT_BODY
                     } else if (event_code === 'tiktok_shop_daily_report') {
                         templateBody = `{{report_text}}`
                     } else if (event_code === 'tiktok_shop_daily_report_sms') {
@@ -850,6 +853,8 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                 } else if (channel === 'email') {
                     const emailSubject = String(event_code).startsWith('tiktok_shop_daily_report') && payload.email_subject
                         ? String(payload.email_subject)
+                        : String(event_code).startsWith('system_error_')
+                        ? `[${String(payload.environment_label || 'SYSTEM')}] Serapod2U ${String(payload.alert_title || 'system error')} ${String(payload.reference_id || '')}`.trim()
                         : event_code === 'roadtour_qr_delivery'
                         ? `RoadTour QR — ${String(payload.campaign_name || 'Campaign')}`
                         : String(event_code).startsWith('return_')

@@ -41,12 +41,11 @@ describe('server-generated documents carry the organization Terms & Conditions',
   })
 })
 
-describe('every document type renders the section', () => {
+describe('every commercial document type renders the section', () => {
   const documentTypes = [
     'generateOrderPDF',
     'generatePurchaseOrderPDF',
     'generateSalesOrderPDF',
-    'generateDeliveryOrderPDF',
     'generateInvoicePDF',
     'generateReceiptPDF',
     'generatePaymentPDF',

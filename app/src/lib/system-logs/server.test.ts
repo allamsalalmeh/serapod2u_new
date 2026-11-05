@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ rpc: vi.fn(), userOrg: 'org-1' as string | null, adminThrows: false }))
 
+const alertMocks = vi.hoisted(() => ({ dispatch: vi.fn() }))
+vi.mock('./alerts', () => ({ dispatchSystemAlert: alertMocks.dispatch }))
+
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => {
     if (mocks.adminThrows) throw new Error('Missing Supabase admin environment variables')
@@ -12,7 +15,7 @@ vi.mock('@/lib/supabase/admin', () => ({
   },
 }))
 
-import { __resetReporterForTests, buildServerPayload, referenceHeaders, reportRequestError, reportServerError, reportWorkerFailure, storeDiagnostic } from './server'
+import { __resetReporterForTests, buildServerPayload, referenceHeaders, reportRequestError, reportServerError, reportSystemFailure, reportWorkerFailure, storeDiagnostic } from './server'
 import { resetRateLimitsForTests } from '@/lib/security/rate-limit'
 
 beforeEach(() => {
@@ -22,6 +25,9 @@ beforeEach(() => {
   mocks.rpc.mockResolvedValue({ data: { stored: true }, error: null })
   mocks.adminThrows = false
   mocks.userOrg = 'org-1'
+  alertMocks.dispatch.mockReset()
+  alertMocks.dispatch.mockResolvedValue(0)
+  vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 afterEach(() => vi.restoreAllMocks())
@@ -114,5 +120,69 @@ describe('server reporter delivery never changes the caller outcome', () => {
     expect(mocks.rpc).not.toHaveBeenCalled()
     mocks.adminThrows = true
     await expect(reportRequestError(new Error('y'), { path: '/x' }, {})).resolves.toBeUndefined()
+  })
+})
+
+describe('reportSystemFailure', () => {
+  const constraintError = {
+    code: '23514',
+    message: 'new row for relation "document_signatures" violates check constraint "document_signatures_document_type_check"',
+    details: 'Failing row contains (11111111-1111-1111-1111-111111111111, SO, https://x.test/sig.png, Ali, 0123456789).',
+  }
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+  const stored = () => mocks.rpc.mock.calls[0][1].p
+
+  it('records a SYS- reference that System Logs can be searched by', async () => {
+    const reference = await reportSystemFailure({ error: constraintError, module: 'Supply Chain', action: 'document.acknowledge.record_signature', actorId: 'user-1' })
+    expect(reference).toMatch(/^SYS-[0-9A-Z]{8}$/)
+    expect(mocks.rpc).toHaveBeenCalledWith('system_log_ingest', expect.anything())
+    expect(stored()).toMatchObject({ reference_id: reference, source: 'server', environment: 'test', module: 'Supply Chain', action: 'document.acknowledge.record_signature', actor_id: 'user-1', organization_id: 'org-1', code: '23514' })
+  })
+
+  it('files a constraint failure as a system error, not a validation warning', async () => {
+    await reportSystemFailure({ error: constraintError })
+    expect(stored()).toMatchObject({ category: 'server', severity: 'error' })
+  })
+
+  it('never stores the row values a database error quotes', async () => {
+    await reportSystemFailure({ error: constraintError })
+    const text = JSON.stringify(stored())
+    expect(text).not.toContain('Failing row')
+    expect(text).not.toContain('sig.png')
+    expect(text).not.toContain('0123456789')
+  })
+
+  it('hands the stored failure to the alert flow with its class', async () => {
+    await reportSystemFailure({ error: constraintError })
+    await flush()
+    expect(alertMocks.dispatch).toHaveBeenCalledWith(expect.objectContaining({ code: '23514' }), 'database')
+  })
+
+  it('classes a lost connection as critical and an ordinary exception as application', async () => {
+    await reportSystemFailure({ error: { code: '08006', message: 'connection failure' } })
+    await reportSystemFailure({ error: new TypeError('x is not a function') })
+    await flush()
+    expect(alertMocks.dispatch.mock.calls.map(([, failureClass]) => failureClass)).toEqual(['critical', 'application'])
+  })
+
+  it('still records the failure when the alert flow fails, and the caller never sees it', async () => {
+    alertMocks.dispatch.mockRejectedValue(new Error('outbox down'))
+    await expect(reportSystemFailure({ error: constraintError })).resolves.toMatch(/^SYS-/)
+    await flush()
+    expect(mocks.rpc).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not alert when the log could not be stored, but still returns the reference', async () => {
+    mocks.rpc.mockResolvedValue({ data: null, error: { code: 'XX000', message: 'ingest refused' } })
+    await expect(reportSystemFailure({ error: constraintError })).resolves.toMatch(/^SYS-/)
+    await flush()
+    expect(alertMocks.dispatch).not.toHaveBeenCalled()
+  })
+
+  it('does not alert from an ordinary server report or a worker failure', async () => {
+    await reportServerError({ error: constraintError })
+    await reportWorkerFailure('notification-outbox-worker', { error: new Error('send failed') })
+    await flush()
+    expect(alertMocks.dispatch).not.toHaveBeenCalled()
   })
 })

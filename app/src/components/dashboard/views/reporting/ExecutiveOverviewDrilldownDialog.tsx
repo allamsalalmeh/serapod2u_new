@@ -24,6 +24,14 @@ const STATUS_LABEL: Record<string, string> = {
   warehouse_packed: 'Packed',
   shipped_distributor: 'Shipped',
   closed: 'Closed',
+  cancelled: 'Cancelled',
+}
+
+/** Empty-state wording per metric. */
+const EMPTY_LABEL: Record<OverviewDrilldownMetric, string> = {
+  confirmed_orders: 'No confirmed sales orders',
+  active_buyers: 'No active buyers',
+  cancelled_orders: 'No cancelled orders',
 }
 
 function formatRm(value: number) {
@@ -48,8 +56,8 @@ export interface OverviewDrilldownTarget {
 type AnyDrilldown = OverviewDrilldown<ConfirmedOrderRow | ActiveBuyerRow>
 
 /**
- * Drill-down modal for the Executive Overview's Confirmed Sales Orders and
- * Active Buyers cards. Always reads the dashboard's CURRENT Reporting Month;
+ * Drill-down modal for the Executive Overview's Confirmed Sales Orders, Active
+ * Buyers and Cancelled Orders cards (the two order lists share one table). Always reads the dashboard's CURRENT Reporting Month;
  * a slower earlier response (other page, month or metric) is dropped.
  */
 export default function ExecutiveOverviewDrilldownDialog({ target, month, onTargetChange }: {
@@ -113,7 +121,9 @@ export default function ExecutiveOverviewDrilldownDialog({ target, month, onTarg
   const busy = loading || (metric !== null && !shown && !error)
   const title = metric ? OVERVIEW_DRILLDOWN_TITLE[metric] : ''
   const periodLabel = shown?.period.label ?? monthLabel(month)
-  const isOrders = metric === 'confirmed_orders'
+  // Confirmed and Cancelled Orders are both order lists; Active Buyers is the only buyer list.
+  const isOrders = metric !== null && metric !== 'active_buyers'
+  const isCancelled = metric === 'cancelled_orders'
   const th = 'px-3 py-2 font-medium whitespace-nowrap'
   const td = 'px-3 py-2.5 align-top'
   const num = 'px-3 py-2.5 text-right tabular-nums align-top whitespace-nowrap'
@@ -166,14 +176,16 @@ export default function ExecutiveOverviewDrilldownDialog({ target, month, onTarg
                 <Badge variant="secondary" className="px-2 py-1 text-xs" data-testid="overview-drilldown-total">
                   {formatCount(shown.total)} {isOrders ? (shown.total === 1 ? 'order' : 'orders') : (shown.total === 1 ? 'buyer' : 'buyers')}
                 </Badge>
-                <Badge variant="secondary" className="px-2 py-1 text-xs">Total {formatRm(shown.totalValue)}</Badge>
+                <Badge variant="secondary" className="px-2 py-1 text-xs" data-testid="overview-drilldown-value">
+                  Total{isCancelled ? ' cancelled value' : ''} {formatRm(shown.totalValue)}
+                </Badge>
               </div>
               <p className="text-xs text-[var(--sera-muted)]">{shown.definition}</p>
 
               {!shown.reconciled ? (
                 <div role="alert" className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  These records ({formatCount(shown.total)}) do not reconcile with the dashboard figure ({formatCount(shown.headline)}). Please report this.
+                  These records ({formatCount(shown.total)}) do not reconcile with the dashboard figure ({formatCount(shown.headline)}{shown.headlineValue != null ? `, ${formatRm(shown.headlineValue)}` : ''}). Please report this.
                 </div>
               ) : null}
               {!isOrders && shown.ordersWithoutBuyer > 0 ? (
@@ -184,7 +196,7 @@ export default function ExecutiveOverviewDrilldownDialog({ target, month, onTarg
 
               {shown.total === 0 ? (
                 <div className="rounded-lg border border-[var(--sera-line)] bg-[var(--sera-mist)] p-6 text-center text-sm text-[var(--sera-muted)]" data-testid="overview-drilldown-empty">
-                  {isOrders ? 'No confirmed sales orders' : 'No active buyers'} in {shown.period.label}.
+                  {metric ? EMPTY_LABEL[metric] : ''} in {shown.period.label}.
                 </div>
               ) : (
                 <>

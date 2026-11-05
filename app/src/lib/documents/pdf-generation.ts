@@ -510,6 +510,26 @@ export async function generatePdfForOrderDocument(
       }
     }
 
+    // Prepared By on a Delivery Order: the user who created the DO. Left blank if that is not recorded.
+    if (docType === 'DO' && documentData.created_by) {
+      const { data: preparer } = await supabase
+        .from('users')
+        .select('full_name, signature_url')
+        .eq('id', documentData.created_by)
+        .maybeSingle()
+      if (preparer) {
+        enrichedDocumentData = {
+          ...enrichedDocumentData,
+          prepared_by: {
+            full_name: preparer.full_name,
+            signature_image: preparer.signature_url
+              ? await fetchUserSignatureAsDataUrl(preparer.signature_url, documentData.created_by)
+              : null
+          }
+        }
+      }
+    }
+
     if (docType === 'PAYMENT') {
       const paymentPayload = (documentData.payload ?? {}) as Record<string, any>
       let linkedInvoice: any = null

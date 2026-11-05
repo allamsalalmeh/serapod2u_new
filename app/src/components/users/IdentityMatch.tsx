@@ -88,7 +88,9 @@ interface NoticeProps {
 
 export function IdentityMatchNotice({ state, link, currentName, onLink, onUnlink, onOpenUser, disabled }: NoticeProps) {
   const [confirming, setConfirming] = useState(false)
-  useEffect(() => { setConfirming(false) }, [state, link])
+  // The lookup view wrapper changes on unrelated form renders; only a new lookup or link invalidates confirmation.
+  const result = state.phase === 'done' ? state.result : null
+  useEffect(() => { setConfirming(false) }, [state.phase, result, link])
 
   if (link) {
     return <div role="status" className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">

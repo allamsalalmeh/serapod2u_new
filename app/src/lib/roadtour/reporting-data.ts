@@ -32,11 +32,13 @@ import {
 import { bucketScansAroundAnchor, resolveVisitAnchorIso } from '@/modules/roadtour/lib/reporting/scanWindow'
 import { reportingCutoffDate, resolveReportingMonth } from '@/modules/roadtour/lib/reporting/month'
 import { resolveShopDisplay } from '@/modules/roadtour/lib/reporting/shopDisplay'
+import { selectInChunks } from '@/modules/roadtour/lib/reporting/chunkedIn'
 import type {
     ReportingFilterOption,
     RoadtourReportingDataset,
     RoadtourVisitReportRow,
 } from '@/modules/roadtour/lib/reporting/types'
+import { AM_NAME_NOT_LOADED_LABEL } from '@/modules/roadtour/lib/reporting/types'
 
 /** Visit statuses that represent a real field visit. */
 const REPORTABLE_VISIT_STATUSES = ['official', 'manual']
@@ -217,10 +219,13 @@ export async function loadRoadtourReportingDataset(params: LoadReportingParams):
     // fetch any that are still missing so every row keeps a real anchor.
     const missingOfficialScanIds = officialScanIds.filter((id) => !officialScanById.has(id))
     if (missingOfficialScanIds.length > 0) {
-        const { data: extraScans, error: extraScanError } = await params.admin
-            .from('roadtour_scan_events')
-            .select('id, shop_id, scan_time, scanned_by_user_id, consumer_phone')
-            .in('id', missingOfficialScanIds)
+        const { data: extraScans, error: extraScanError } = await selectInChunks<ScanEventRecord>(
+            missingOfficialScanIds,
+            (chunk) => params.admin
+                .from('roadtour_scan_events')
+                .select('id, shop_id, scan_time, scanned_by_user_id, consumer_phone')
+                .in('id', chunk),
+        )
         if (extraScanError) {
             warnings.push('Some official visit scans could not be loaded — those visits fall back to the visit date.')
         }
@@ -228,6 +233,8 @@ export async function loadRoadtourReportingDataset(params: LoadReportingParams):
     }
 
     // ── Identity + shop enrichment (service role: RLS-complete) ─────────────
+    // Every `.in(...)` lookup is chunked: a month with a few hundred participants
+    // otherwise exceeds the gateway URL limit (HTTP 414) and loses every name.
     const amIds = Array.from(new Set(visits.map((visit) => visit.account_manager_user_id).filter(Boolean))) as string[]
     const participantIds = Array.from(new Set(
         Array.from(officialScanById.values()).map((scan) => scan.scanned_by_user_id).filter(Boolean),
@@ -235,18 +242,18 @@ export async function loadRoadtourReportingDataset(params: LoadReportingParams):
     const userIds = Array.from(new Set([...amIds, ...participantIds]))
 
     const [userResult, shopResult] = await Promise.all([
-        userIds.length > 0
-            ? params.admin.from('users').select('id, full_name, phone').in('id', userIds)
-            : Promise.resolve({ data: [], error: null }),
-        shopIds.length > 0
-            ? params.admin
-                .from('organizations')
-                .select('id, org_name, branch, org_code, city, state_id, states:state_id(state_name)')
-                .in('id', shopIds)
-            : Promise.resolve({ data: [], error: null }),
+        selectInChunks<any>(userIds, (chunk) => params.admin
+            .from('users')
+            .select('id, full_name, phone')
+            .in('id', chunk)),
+        selectInChunks<any>(shopIds, (chunk) => params.admin
+            .from('organizations')
+            .select('id, org_name, branch, org_code, city, state_id, states:state_id(state_name)')
+            .in('id', chunk)),
     ])
 
     if (userResult.error) {
+        console.warn('[roadtour-reporting] users lookup failed', userResult.error)
         warnings.push('Account manager and participant names could not be loaded for this report.')
     }
     if (shopResult.error) {
@@ -270,10 +277,13 @@ export async function loadRoadtourReportingDataset(params: LoadReportingParams):
     ))
     const phoneMatchedUsers: IdentityUser[] = []
     if (participantPhones.length > 0) {
-        const { data: phoneUsers, error: phoneUserError } = await params.admin
-            .from('users')
-            .select('id, full_name, phone')
-            .in('phone', participantPhones)
+        const { data: phoneUsers, error: phoneUserError } = await selectInChunks<any>(
+            participantPhones,
+            (chunk) => params.admin
+                .from('users')
+                .select('id, full_name, phone')
+                .in('phone', chunk),
+        )
         if (phoneUserError) {
             warnings.push('Participant lookup by phone failed — some participants may show without a name.')
         }
@@ -395,6 +405,10 @@ export async function loadRoadtourReportingDataset(params: LoadReportingParams):
         })
 
         const amUser = visit.account_manager_user_id ? usersById.get(visit.account_manager_user_id) || null : null
+        // A failed lookup proves nothing about the assignment, so the visit keeps
+        // its AM instead of silently moving into Unassigned.
+        const amNotLoaded = !amUser && Boolean(visit.account_manager_user_id)
+            && userResult.failedValues.has(visit.account_manager_user_id as string)
 
         return {
             visit_id: visit.id,
@@ -403,8 +417,8 @@ export async function loadRoadtourReportingDataset(params: LoadReportingParams):
             visit_at_from_official_scan: Boolean(officialScan?.scan_time),
             campaign_id: visit.campaign_id,
             campaign_name: campaignNameById.get(visit.campaign_id) || 'Untitled campaign',
-            account_manager_user_id: amUser ? amUser.id : null,
-            account_manager_name: amUser?.full_name ?? null,
+            account_manager_user_id: amUser ? amUser.id : amNotLoaded ? visit.account_manager_user_id : null,
+            account_manager_name: amUser?.full_name ?? (amNotLoaded ? AM_NAME_NOT_LOADED_LABEL : null),
             shop_id: visit.shop_id,
             shop_name: shopDisplay.fullLabel,
             shop_name_primary: shopDisplay.primaryName,
@@ -450,7 +464,10 @@ export async function loadRoadtourReportingDataset(params: LoadReportingParams):
         row.is_attributed_for_shop = attributedVisitIds.has(row.visit_id)
     }
 
-    const unresolvedAmIds = amIds.filter((id) => !usersById.has(id))
+    // An AM whose lookup request failed is "not loaded", already covered by the
+    // names warning above; only a completed lookup that found no user row proves
+    // the record cannot be resolved.
+    const unresolvedAmIds = amIds.filter((id) => !usersById.has(id) && !userResult.failedValues.has(id))
     if (unresolvedAmIds.length > 0) {
         warnings.push(`${unresolvedAmIds.length} account manager record(s) could not be resolved; their visits are reported as Unassigned.`)
     }

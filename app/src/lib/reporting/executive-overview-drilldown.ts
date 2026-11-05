@@ -1,5 +1,5 @@
 /**
- * Executive Overview metric drill-downs — the records behind two Overview cards:
+ * Executive Overview metric drill-downs — the records behind three Overview cards:
  *
  *   - Confirmed Sales Orders (`summary.approvedSalesOrders`): every D2H / S2D
  *     order in an approved-sales status (approved, warehouse_packed,
@@ -7,17 +7,23 @@
  *     (`orders.order_date`, Malaysia) falls in the report window.
  *   - Active Buyers (`summary.activeBuyers`): the DISTINCT buyer organisation
  *     ids on exactly those orders. An order without a buyer id is not a buyer.
+ *   - Cancelled Orders (`summary.cancelledOrders` / `cancelledValue`): every
+ *     D2H / S2D order in status cancelled whose SO date (`orders.order_date`,
+ *     Malaysia) falls in the report window. The month is the SO date, NOT the
+ *     cancellation time: an order dated September and cancelled in October is a
+ *     September cancellation, exactly as the card counts it.
  *
- * Both lists are built from the same predicates and window as the card
- * (`isApprovedSale`, `ordersInReportWindow`, `activeBuyerCounts` in
- * executive-overview.ts) and carry the card's own figure as `headline`, so
- * `reconciled` is a real check, not an assumption.
+ * Every list is built from the same predicates and window as the card
+ * (`isApprovedSale`, `isCancelledSale`, `ordersInReportWindow`,
+ * `activeBuyerCounts` in executive-overview.ts) and carries the card's own
+ * figure as `headline`, so `reconciled` is a real check, not an assumption.
  *
  * Isomorphic and pure.
  */
 import {
   activeBuyerCounts,
   isApprovedSale,
+  isCancelledSale,
   orderUnits,
   orderValue,
   ordersInReportWindow,
@@ -25,9 +31,9 @@ import {
   type ExecutiveOverviewPeriod,
   type OverviewOrderInput,
 } from './executive-overview'
-import { APPROVED_SALES_STATUSES, summarizeSales } from './sales-kpi'
+import { APPROVED_SALES_STATUSES, CANCELLED_STATUS, summarizeSales } from './sales-kpi'
 
-export const OVERVIEW_DRILLDOWN_METRICS = ['confirmed_orders', 'active_buyers'] as const
+export const OVERVIEW_DRILLDOWN_METRICS = ['confirmed_orders', 'active_buyers', 'cancelled_orders'] as const
 export type OverviewDrilldownMetric = (typeof OVERVIEW_DRILLDOWN_METRICS)[number]
 
 export const OVERVIEW_DRILLDOWN_DEFAULT_PAGE_SIZE = 25
@@ -40,6 +46,14 @@ export function isOverviewDrilldownMetric(value: unknown): value is OverviewDril
 export const OVERVIEW_DRILLDOWN_TITLE: Record<OverviewDrilldownMetric, string> = {
   confirmed_orders: 'Confirmed Sales Orders',
   active_buyers: 'Active Buyers',
+  cancelled_orders: 'Cancelled Orders',
+}
+
+/** Statuses the drill-down route must read for a metric — the card's population is always a subset. */
+export const OVERVIEW_DRILLDOWN_STATUSES: Record<OverviewDrilldownMetric, readonly string[]> = {
+  confirmed_orders: APPROVED_SALES_STATUSES,
+  active_buyers: APPROVED_SALES_STATUSES,
+  cancelled_orders: [CANCELLED_STATUS],
 }
 
 export interface ConfirmedOrderRow {
@@ -75,7 +89,9 @@ export interface OverviewDrilldown<Row> {
   headline: number
   /** Rows across every page (before paging). */
   total: number
-  /** Whether `total` reproduces `headline`. Always true unless something upstream drifted. */
+  /** The card's own value for this scope (RM), when the card reports one; `reconciled` then checks it too. */
+  headlineValue: number | null
+  /** Whether `total` (and `totalValue`, when there is a `headlineValue`) reproduces the card. Always true unless something upstream drifted. */
   reconciled: boolean
   /** Sum of `value` across every row (not just this page), RM. */
   totalValue: number
@@ -99,6 +115,30 @@ const DEFINITION: Record<OverviewDrilldownMetric, string> = {
   active_buyers:
     'Distinct buyer organisations with at least one Confirmed Sales Order in the reporting window. ' +
     'A buyer with several orders is listed once; orders and sales are its confirmed orders only.',
+  cancelled_orders:
+    'D2H and S2D sales orders in status cancelled with an SO date in the reporting window (Malaysia time). ' +
+    'The month is the SO date, not the date of cancellation. Draft and submitted orders and H2M purchases are excluded. ' +
+    'Value is the sum of order lines; none of it is counted as sales.',
+}
+
+/** Order rows, newest SO date first (then entry time, then number). Shared by every order-list metric. */
+function toOrderRows(orders: readonly OverviewOrderInput[]): ConfirmedOrderRow[] {
+  return [...orders]
+    .sort((a, b) => b.orderDate.localeCompare(a.orderDate)
+      || String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''))
+      || a.orderNo.localeCompare(b.orderNo))
+    .map((order) => ({
+      orderId: order.id,
+      orderNo: order.orderNo,
+      orderDate: order.orderDate,
+      orderType: String(order.orderType).toUpperCase(),
+      status: order.status,
+      buyerId: order.buyerId,
+      buyerName: order.buyerName || 'Unknown buyer',
+      buyerCode: order.buyerCode ?? null,
+      units: orderUnits(order),
+      value: round2(orderValue(order)),
+    }))
 }
 
 function clampPage(page: number | undefined, pageSize: number | undefined, total: number) {
@@ -110,6 +150,15 @@ function clampPage(page: number | undefined, pageSize: number | undefined, total
 
 export function buildOverviewDrilldown(input: {
   metric: 'confirmed_orders'
+  month: string
+  orders: readonly OverviewOrderInput[]
+  buyerId?: string | null
+  page?: number
+  pageSize?: number
+  now?: Date
+}): OverviewDrilldown<ConfirmedOrderRow>
+export function buildOverviewDrilldown(input: {
+  metric: 'cancelled_orders'
   month: string
   orders: readonly OverviewOrderInput[]
   buyerId?: string | null
@@ -167,29 +216,44 @@ export function buildOverviewDrilldown(input: {
     ? { id: buyerFilter, name: confirmed.find((order) => order.buyerName)?.buyerName || 'Unknown buyer' }
     : null
 
+  if (input.metric === 'cancelled_orders') {
+    const cancelledAll = current.filter(isCancelledSale)
+    const cancelled = buyerFilter ? cancelledAll.filter((order) => order.buyerId === buyerFilter) : cancelledAll
+    const all = toOrderRows(cancelled)
+    const headline = buyerFilter ? cancelled.length : summary.cancelledOrders
+    // Rounded once over the raw line sums, exactly as summarizeSales rounds the card's value.
+    const totalValue = round2(cancelled.reduce((sum, order) => sum + orderValue(order), 0))
+    const headlineValue = buyerFilter ? totalValue : summary.cancelledValue
+    const { size, pageCount, index } = clampPage(input.page, input.pageSize, all.length)
+    return {
+      metric: 'cancelled_orders',
+      period: periodOut,
+      headline,
+      headlineValue,
+      total: all.length,
+      reconciled: all.length === headline && totalValue === headlineValue,
+      totalValue,
+      ordersWithoutBuyer: cancelled.filter((order) => !order.buyerId).length,
+      definition: DEFINITION.cancelled_orders,
+      page: index,
+      pageSize: size,
+      pageCount,
+      rows: all.slice(index * size, (index + 1) * size),
+      buyer: buyerFilter
+        ? { id: buyerFilter, name: cancelled.find((order) => order.buyerName)?.buyerName || 'Unknown buyer' }
+        : null,
+    }
+  }
+
   if (input.metric === 'confirmed_orders') {
-    const all: ConfirmedOrderRow[] = [...confirmed]
-      .sort((a, b) => b.orderDate.localeCompare(a.orderDate)
-        || String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''))
-        || a.orderNo.localeCompare(b.orderNo))
-      .map((order) => ({
-        orderId: order.id,
-        orderNo: order.orderNo,
-        orderDate: order.orderDate,
-        orderType: String(order.orderType).toUpperCase(),
-        status: order.status,
-        buyerId: order.buyerId,
-        buyerName: order.buyerName || 'Unknown buyer',
-        buyerCode: order.buyerCode ?? null,
-        units: orderUnits(order),
-        value: round2(orderValue(order)),
-      }))
+    const all = toOrderRows(confirmed)
     const headline = buyerFilter ? confirmed.length : summary.approvedSalesOrders
     const { size, pageCount, index } = clampPage(input.page, input.pageSize, all.length)
     return {
       metric: 'confirmed_orders',
       period: periodOut,
       headline,
+      headlineValue: null,
       total: all.length,
       reconciled: all.length === headline,
       totalValue: round2(all.reduce((sum, row) => sum + row.value, 0)),
@@ -235,6 +299,7 @@ export function buildOverviewDrilldown(input: {
     metric: 'active_buyers',
     period: periodOut,
     headline,
+    headlineValue: null,
     total: all.length,
     reconciled: all.length === headline,
     totalValue: round2(all.reduce((sum, row) => sum + row.value, 0)),
