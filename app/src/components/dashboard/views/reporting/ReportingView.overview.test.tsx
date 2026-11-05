@@ -33,6 +33,10 @@ const ORDERS = [
   o('S2D', 'shipped_distributor', '2026-09-20', ['s1', 'Kedai Satu'], 150.5),
   o('D2H', 'submitted', '2026-09-21', ['d2', 'Maju Jaya'], 999),
   o('D2H', 'approved', '2026-08-14', ['d2', 'Maju Jaya', 'MAJU'], 640),
+  o('D2H', 'cancelled', '2026-09-09', ['d2', 'Maju Jaya', 'MAJU'], 450.25),
+  o('S2D', 'cancelled', '2026-09-25', ['s1', 'Kedai Satu'], 75),
+  o('H2M', 'cancelled', '2026-09-12', ['hq', 'HQ'], 9000), // purchase — never a cancelled sales order
+  o('D2H', 'cancelled', '2026-08-02', ['d1', 'Infy Tech', 'INFY'], 60), // August
 ]
 
 const requests: string[] = []
@@ -107,12 +111,13 @@ describe('Executive Overview cards', () => {
     expect(spans[4]).toContain('sm:col-span-2')
   })
 
-  it('marks only the two drill-down cards as interactive', async () => {
+  it('marks only the three drill-down cards as interactive', async () => {
     await renderOverview()
     const interactive = document.querySelectorAll('[data-drilldown="true"]')
     expect(Array.from(interactive).map((el) => el.getAttribute('aria-label'))).toEqual([
       'View Confirmed Sales Orders details',
       'View Active Buyers details',
+      'View Cancelled Orders details',
     ])
     expect((interactive[0] as HTMLElement).className).toContain('cursor-pointer')
   })
@@ -226,5 +231,52 @@ describe('Active Buyers drill-down', () => {
     expect(within(dialog).getByText('Active Buyers — August 2026')).toBeTruthy()
     await within(dialog).findByTestId('overview-drilldown-table')
     expect(within(dialog).getAllByTestId('overview-drilldown-row').map((r) => r.textContent?.includes('Maju Jaya'))).toEqual([true])
+  })
+})
+
+describe('Cancelled Orders drill-down', () => {
+  it('opens the order modal for the selected month and reconciles count and value with the card', async () => {
+    await renderOverview()
+    const card = screen.getByRole('button', { name: 'View Cancelled Orders details' })
+    expect(card.textContent).toContain('RM 525.25 not counted as sales')
+    fireEvent.click(card)
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Cancelled Orders — September 2026')).toBeTruthy()
+    expect(within(dialog).getByText(/01 Sep 2026 – 30 Sep 2026 · Malaysia time/)).toBeTruthy()
+    await within(dialog).findByTestId('overview-drilldown-table')
+    const rows = within(dialog).getAllByTestId('overview-drilldown-row')
+    expect(rows).toHaveLength(2) // the H2M cancellation and the August one are not listed
+    expect(within(dialog).getByTestId('overview-drilldown-total').textContent).toBe('2 orders')
+    expect(within(dialog).getByTestId('overview-drilldown-value').textContent).toBe('Total cancelled value RM 525.25')
+    expect(rows[0].textContent).toContain('Kedai Satu')
+    expect(rows[0].textContent).toContain('Cancelled')
+    expect(rows[0].textContent).toContain('RM 75.00')
+    expect(rows[1].textContent).toContain('MAJU')
+    expect(rows[1].textContent).toContain('RM 450.25')
+    expect(dialog.textContent).not.toContain('HQ')
+    expect(within(dialog).queryByText(/do not reconcile/)).toBeNull()
+    expect(requests).toContain('/api/reporting/stats/drilldown?metric=cancelled_orders&month=2026-09&page=0&pageSize=25')
+    expect(within(dialog).getByRole('link', { name: 'View order SO-7' }).getAttribute('href')).toBe('/supply-chain/orders/order-7')
+  })
+
+  it('follows the Reporting Month', async () => {
+    await renderOverview()
+    fireEvent.click(screen.getByRole('button', { name: 'Previous month' }))
+    await waitFor(() => expect(requests).toContain('/api/reporting/stats?month=2026-08'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'View Cancelled Orders details' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'View Cancelled Orders details' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Cancelled Orders — August 2026')).toBeTruthy()
+    await within(dialog).findByTestId('overview-drilldown-table')
+    expect(within(dialog).getAllByTestId('overview-drilldown-row').map((r) => r.textContent?.includes('Infy Tech'))).toEqual([true])
+  })
+
+  it('shows an empty state for a month without cancelled orders', async () => {
+    window.history.replaceState(null, '', '/reporting?tab=overview&month=2026-06')
+    render(<ReportingView userProfile={{}} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'View Cancelled Orders details' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'View Cancelled Orders details' }))
+    const empty = await screen.findByTestId('overview-drilldown-empty')
+    expect(empty.textContent).toContain('No cancelled orders in June 2026')
   })
 })

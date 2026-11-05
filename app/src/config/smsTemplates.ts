@@ -6,12 +6,22 @@
  *
  * Placeholders use {{name}} and are filled by the outbox worker / OTP router.
  */
+import { SYSTEM_LOG_ALERT_SMS_BODY } from '@/lib/notifications/systemLogAlertCopy'
+
 export type SmsTemplate = {
     id: string
     name: string
     description?: string
     channel: 'sms'
     body: string
+}
+
+const SYSTEM_LOG_SMS_TEMPLATE: SmsTemplate = {
+    id: 'system_log_sms_1',
+    name: 'SMS System Log Alert',
+    description: 'Environment, type, reference, module, severity and time',
+    channel: 'sms',
+    body: SYSTEM_LOG_ALERT_SMS_BODY,
 }
 
 export const smsTemplates: Record<string, SmsTemplate[]> = {
@@ -278,6 +288,9 @@ export const smsTemplates: Record<string, SmsTemplate[]> = {
         channel: 'sms',
         body: `[Serapod2U] New paid {{shop_name}} order {{order_ref}}: {{total}}, {{item_count}} item(s) from {{buyer_name}}.`,
     }],
+    system_error_critical: [SYSTEM_LOG_SMS_TEMPLATE],
+    system_error_application: [SYSTEM_LOG_SMS_TEMPLATE],
+    system_error_database: [SYSTEM_LOG_SMS_TEMPLATE],
     generic: [{
         id: 'gen_sms_1',
         name: 'Generic SMS',

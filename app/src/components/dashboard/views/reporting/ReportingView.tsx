@@ -673,6 +673,7 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                                 color={COLORS.danger}
                                 subtitle={`${formatRm(summary?.cancelledValue ?? 0)} not counted as sales`}
                                 loading={loading}
+                                onClick={report ? () => setDrilldown({ metric: 'cancelled_orders' }) : undefined}
                             />
                         </div>
                         </section>

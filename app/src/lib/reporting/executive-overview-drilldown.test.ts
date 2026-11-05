@@ -123,6 +123,46 @@ describe('Executive Overview drill-down — Active Buyers', () => {
 it('accepts only the two supported metrics', () => {
   expect(isOverviewDrilldownMetric('confirmed_orders')).toBe(true)
   expect(isOverviewDrilldownMetric('active_buyers')).toBe(true)
+  expect(isOverviewDrilldownMetric('cancelled_orders')).toBe(true)
   expect(isOverviewDrilldownMetric('approved_sales_value')).toBe(false)
   expect(isOverviewDrilldownMetric(null)).toBe(false)
+})
+
+describe('Executive Overview drill-down — Cancelled Orders', () => {
+  const CANCELLED = [
+    ...SEPTEMBER,
+    o('D2H', 'cancelled', '2026-09-30', DA, 120.125, 2), // last day of the month
+    o('H2M', 'cancelled', '2026-09-12', HQ, 4000), // purchase — excluded
+    o(null, 'cancelled', '2026-09-13', DA, 40), // unclassified — excluded
+    o('S2D', 'cancelled', '2026-08-31', S1, 77), // previous month — excluded
+    o('D2H', 'cancelled', '2026-10-01', DB, 88), // next month — excluded
+  ]
+
+  it('lists exactly the cancelled D2H/S2D orders the card counts and reconciles count and value', () => {
+    const summary = card('2026-09', CANCELLED)
+    const d = buildOverviewDrilldown({ metric: 'cancelled_orders', month: '2026-09', orders: CANCELLED, now: NOW })
+    expect(summary.cancelledOrders).toBe(2)
+    expect(d).toMatchObject({ headline: 2, total: 2, headlineValue: summary.cancelledValue, totalValue: summary.cancelledValue, reconciled: true })
+    expect(d.rows.map((r) => [r.orderDate, r.orderType, r.status])).toEqual([
+      ['2026-09-30', 'D2H', 'cancelled'],
+      ['2026-09-11', 'S2D', 'cancelled'],
+    ])
+    expect(d.rows[0]).toMatchObject({ buyerName: 'Dist Alpha', buyerCode: 'DA01', value: 120.13 })
+    expect(d.definition).toContain('not the date of cancellation')
+  })
+
+  it('follows the selected month and returns an explicit empty list', () => {
+    const aug = buildOverviewDrilldown({ metric: 'cancelled_orders', month: '2026-08', orders: CANCELLED, now: NOW })
+    expect(aug.rows.map((r) => r.orderDate)).toEqual(['2026-08-31'])
+    expect(aug.headline).toBe(card('2026-08', CANCELLED).cancelledOrders)
+    const jun = buildOverviewDrilldown({ metric: 'cancelled_orders', month: '2026-06', orders: CANCELLED, now: NOW })
+    expect(jun).toMatchObject({ total: 0, headline: 0, totalValue: 0, headlineValue: 0, reconciled: true, rows: [] })
+  })
+
+  it('leaves the confirmed orders list unchanged', () => {
+    const d = buildOverviewDrilldown({ metric: 'confirmed_orders', month: '2026-09', orders: CANCELLED, now: NOW })
+    expect(d.rows.every((r) => r.status !== 'cancelled')).toBe(true)
+    expect(d.total).toBe(4)
+    expect(d.headlineValue).toBeNull()
+  })
 })

@@ -4,9 +4,8 @@ import { NextResponse } from 'next/server'
 import { legacyOrderDateNotice, resolveOrderDateColumn } from '@/lib/reporting/business-date-query'
 import { currentReportingMonthKey, isValidMonthKey } from '@/lib/reporting/consumer-analytics'
 import { overviewDateWindows, resolveExecutiveOverviewPeriod } from '@/lib/reporting/executive-overview'
-import { buildOverviewDrilldown, isOverviewDrilldownMetric } from '@/lib/reporting/executive-overview-drilldown'
+import { OVERVIEW_DRILLDOWN_STATUSES, buildOverviewDrilldown, isOverviewDrilldownMetric } from '@/lib/reporting/executive-overview-drilldown'
 import { readOverviewOrders, toOverviewOrderInput } from '@/lib/reporting/executive-overview-source'
-import { APPROVED_SALES_STATUSES } from '@/lib/reporting/sales-kpi'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,10 +13,10 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * GET /api/reporting/stats/drilldown
- *     ?metric=confirmed_orders|active_buyers&month=YYYY-MM[&buyer=<org uuid>][&page=0][&pageSize=25]
+ *     ?metric=confirmed_orders|active_buyers|cancelled_orders&month=YYYY-MM[&buyer=<org uuid>][&page=0][&pageSize=25]
  *
- * The records behind the Executive Overview's Confirmed Sales Orders and Active
- * Buyers cards, for the SAME month, window, statuses and buyer identity as
+ * The records behind the Executive Overview's Confirmed Sales Orders, Active
+ * Buyers and Cancelled Orders cards, for the SAME month, window, statuses and buyer identity as
  * `/api/reporting/stats` (see lib/reporting/executive-overview-drilldown.ts).
  * Same authentication and Security & Access operation as the Overview; reads
  * with the caller's own client so row-level security decides which orders and
@@ -52,9 +51,9 @@ export async function GET(request: Request) {
 
     const period = resolveExecutiveOverviewPeriod(month)
     const dateColumn = await resolveOrderDateColumn(supabase)
-    // Only the report window and only confirmed statuses: the card's population is a subset of this read.
+    // Only the report window and only the metric's statuses: the card's population is a subset of this read.
     const { start, end } = overviewDateWindows(period)
-    const rows = await readOverviewOrders(supabase, dateColumn, start, end, APPROVED_SALES_STATUSES)
+    const rows = await readOverviewOrders(supabase, dateColumn, start, end, OVERVIEW_DRILLDOWN_STATUSES[metric])
 
     const drilldown = buildOverviewDrilldown({
       metric,

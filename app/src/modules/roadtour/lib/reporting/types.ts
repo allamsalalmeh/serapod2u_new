@@ -8,6 +8,8 @@ import type { ShopOutcome } from './impactModel'
 
 export const UNASSIGNED_AM_ID = '__unassigned__'
 export const UNASSIGNED_AM_LABEL = 'Unassigned'
+/** An assigned AM whose user lookup failed: still assigned, never reported as Unassigned. */
+export const AM_NAME_NOT_LOADED_LABEL = 'Account manager (name not loaded)'
 export const UNREGISTERED_PARTICIPANT_LABEL = 'Unregistered Participant'
 
 export interface RoadtourVisitReportRow {

@@ -114,9 +114,12 @@ function randomChars(length: number): string {
   return out
 }
 
-/** Reference shown to users ("ERR-7K3M9QX2TB4R") and stored with the occurrence. */
-export function newReferenceId(prefix: 'ERR' | 'REQ' | 'JOB' = 'ERR'): string {
-  return `${prefix}-${randomChars(12)}`
+/**
+ * Reference shown to users ("ERR-7K3M9QX2TB4R") and stored with the occurrence.
+ * SYS references ("SYS-7K3M9QX2") are the short form read out to an administrator for server-recorded system failures.
+ */
+export function newReferenceId(prefix: 'ERR' | 'REQ' | 'JOB' | 'SYS' = 'ERR'): string {
+  return `${prefix}-${randomChars(prefix === 'SYS' ? 8 : 12)}`
 }
 
 export function isReferenceId(value: unknown): value is string {
@@ -137,7 +140,7 @@ export function normalizeForFingerprint(message: string): string {
   return message
     .toLowerCase()
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<id>')
-    .replace(/\b(err|req|job|act)-[0-9a-z]{6,}\b/g, '<ref>')
+    .replace(/\b(err|req|job|act|sys)-[0-9a-z]{6,}\b/g, '<ref>')
     .replace(/(["'`])(?:(?!\1).){1,120}\1/g, '<s>')
     .replace(/\b[0-9a-f]{12,}\b/g, '<hex>')
     .replace(/\d+/g, '<n>')
