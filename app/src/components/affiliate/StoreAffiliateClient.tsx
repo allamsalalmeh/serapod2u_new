@@ -731,7 +731,26 @@ export default function StoreAffiliateClient() {
           <section className={`${panel} p-6 sm:p-8`}>
             <SectionTitle title="Orders from your links" hint={`Commission is confirmed ${program.confirmAfterDays} days after delivery.`} />
             {data.commissions && data.commissions.length > 0 ? (
-              <div className="mt-5 overflow-x-auto">
+              <>
+              <ul className="mt-5 divide-y divide-[var(--sera-line)] sm:hidden">
+                {data.commissions.map((c, i) => (
+                  <li key={`${c.order}-${i}`} className="flex items-start justify-between gap-3 py-3 text-sm">
+                    <div className="min-w-0">
+                      <p className="font-medium text-[var(--sera-ink)]">{c.channel} <span className="text-[var(--sera-muted)]">{c.order}</span></p>
+                      <p className="mt-0.5 text-xs text-[var(--sera-muted)]">
+                        {day(c.orderedAt)} · Products {rm(c.goods)}{c.subId ? ` · ${c.subId}` : ''}
+                      </p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="font-semibold tabular-nums">{rm(c.amount)}</p>
+                      <span className={`mt-1 inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${STATUS_TONE[c.status] || STATUS_TONE.cancelled}`}>
+                        {COMMISSION_STATUS_LABELS[c.status] || c.status}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-5 hidden overflow-x-auto sm:block">
                 <table className="w-full min-w-[600px] text-left text-sm">
                   <thead>
                     <tr className="border-b border-[var(--sera-line)] text-xs uppercase tracking-wide text-[var(--sera-muted)]">
@@ -761,6 +780,7 @@ export default function StoreAffiliateClient() {
                   </tbody>
                 </table>
               </div>
+              </>
             ) : (
               <div className="mt-5 flex flex-col items-center rounded-2xl border border-dashed border-[var(--sera-line)] py-10 text-center">
                 <ShoppingBag className="h-8 w-8 text-[var(--sera-muted)]/50" />
