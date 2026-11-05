@@ -11,6 +11,14 @@ import {
   formatFileSize,
   type CompressionResult
 } from './pdf-optimizer'
+import {
+  DELIVERY_NOTES_HEADING,
+  buildDeliveryAcknowledgement,
+  buildDeliveryLines,
+  buildDeliveryNotes,
+  relatedSalesOrderNo,
+  resolveDeliveryRecipient,
+} from '@/lib/documents/delivery-order-content'
 
 interface PaymentTerms {
   deposit_pct?: number
@@ -1208,7 +1216,7 @@ export class PDFGenerator {
    * or placeholder text. Long terms wrap to the page width and spill onto
    * further pages rather than overrunning the footer or the signature boxes.
    */
-  private addTermsSection(terms: string | null | undefined, yPosition: number): number {
+  private addTermsSection(terms: string | null | undefined, yPosition: number, heading: string = 'TERMS & CONDITIONS'): number {
     const value = (terms || '')
     if (!value.trim()) return yPosition
 
@@ -1227,7 +1235,7 @@ export class PDFGenerator {
     this.doc.setFontSize(9)
     this.doc.setFont('helvetica', 'bold')
     this.doc.setTextColor(0, 0, 0)
-    this.doc.text('TERMS & CONDITIONS', this.margin, y)
+    this.doc.text(heading, this.margin, y)
     y += 5
 
     this.doc.setFont('helvetica', 'normal')
@@ -2445,43 +2453,117 @@ export class PDFGenerator {
     y += 5
 
     // Document Title
-    y = this.addDocumentHeader('DELIVERY ORDER (DO)', y)
+    y = this.addDocumentHeader('DELIVERY ORDER', y)
     y += 3
 
     // DO Information Table
+    const order = orderData as any
     const doInfo = [
-      { label: 'DO Number:', value: documentData.display_doc_no || documentData.doc_no },
+      { label: 'DO No.:', value: documentData.display_doc_no || documentData.doc_no },
       { label: 'DO Date:', value: this.formatDate(documentData.created_at) },
-      { label: 'Status:', value: documentData.status.toUpperCase() },
-      { label: 'Estimated ETA:', value: documentData.estimated_eta || '30 Oct 2025' },
-      { label: '', value: '' },
+      { label: 'Sales Order:', value: relatedSalesOrderNo(order) },
+      { label: 'Prepared By:', value: (documentData as any).prepared_by?.full_name || '' },
+      { label: 'Delivery Status:', value: documentData.status.toUpperCase() },
       { label: '', value: '' }
     ]
     y = this.addInfoTable(doInfo, y, 2)
 
-    // Parties Section
-    y = this.addPartiesSection(orderData, y, 'DO')
-
-    // Check if this is a DH (D2H) order - DO should not show pricing info for DH orders
-    const isDHOrder = orderData.order_type === 'DH' || orderData.order_type === 'D2H'
-
-    // Order Lines Section - use simplified version for DH orders (no pricing)
-    if (isDHOrder) {
-      y = this.addOrderLinesSectionNoPricing(orderData, y)
-      // Skip Summary Section for DH orders - DO is just for delivery tracking
-    } else {
-      y = this.addOrderLinesSection(orderData, y)
-      // Summary Section - only for non-DH orders
-      y = this.addSummarySection(orderData, y)
-    }
-
-    // Organization Terms & Conditions (verbatim, omitted when unset)
-    y = this.addTermsSection(orderData.organization_terms, y)
-
-    // Signatures / Approval Trail
-    y = await this.addSignaturesApprovalTrail(y, orderData, documentData)
+    // Delivery details, order lines, notes and acknowledgement. Quantities only: a DO states no commercial figures.
+    y = this.addDeliveryRecipientSection(order, y)
+    y = this.addDeliveryLinesSection(orderData, y)
+    y = this.addTermsSection(buildDeliveryNotes(order.notes), y, DELIVERY_NOTES_HEADING)
+    this.addDeliveryAcknowledgementSection(documentData, y)
 
     return this.doc.output('blob')
+  }
+
+  private addDeliveryRecipientSection(order: any, yPosition: number): number {
+    const recipient = resolveDeliveryRecipient(order)
+    let y = yPosition
+    this.doc.setFontSize(11)
+    this.doc.setFont('helvetica', 'bold')
+    this.doc.setTextColor(0, 0, 0)
+    this.doc.text('DELIVER TO', this.margin, y)
+    y += 6
+    this.doc.setFontSize(9)
+    this.doc.text(`${recipient.label} ${recipient.name ?? ''}`.trim(), this.margin, y)
+    y += 5
+    this.doc.setFont('helvetica', 'normal')
+    this.doc.setFontSize(8)
+    for (const line of recipient.detailLines) {
+      y = this.drawWrappedText(line, this.margin, y, this.pageWidth - 2 * this.margin)
+    }
+    return y + 4
+  }
+
+  private addDeliveryLinesSection(orderData: OrderData, yPosition: number): number {
+    const { rows, totalQuantity } = buildDeliveryLines(orderData.order_items as any)
+    autoTable(this.doc, {
+      startY: yPosition,
+      head: [['No.', 'Product Description', 'Quantity', 'Unit']],
+      body: rows.map((row) => [row.no, row.description, row.quantity, row.unit]),
+      foot: [[{ content: 'Total Quantity', colSpan: 2, styles: { halign: 'right' } }, totalQuantity, '']],
+      showFoot: 'lastPage',
+      theme: 'grid',
+      styles: { fontSize: 8, cellPadding: 2, lineColor: [100, 100, 100], lineWidth: 0.3 },
+      headStyles: { fillColor: [255, 255, 255], textColor: [0, 0, 0], fontStyle: 'bold', halign: 'left', lineWidth: 0.3, lineColor: [100, 100, 100] },
+      footStyles: { fillColor: [255, 255, 255], textColor: [0, 0, 0], fontStyle: 'bold', lineWidth: 0.3, lineColor: [100, 100, 100] },
+      columnStyles: {
+        0: { cellWidth: 12, halign: 'center' },
+        2: { cellWidth: 25, halign: 'right' },
+        3: { cellWidth: 25 }
+      },
+      margin: { left: this.margin, right: this.margin },
+      tableWidth: this.pageWidth - 2 * this.margin
+    })
+    return (this.doc as any).lastAutoTable.finalY + 8
+  }
+
+  /** Prepared / Delivered / Received. A field with nothing recorded stays empty, to be signed on paper. */
+  private addDeliveryAcknowledgementSection(documentData: DocumentData, yPosition: number): void {
+    const parties = buildDeliveryAcknowledgement(documentData as any)
+    let y = yPosition
+    if (y > 225) {
+      this.doc.addPage()
+      y = this.margin + 10
+    }
+    this.doc.setFontSize(11)
+    this.doc.setFont('helvetica', 'bold')
+    this.doc.setTextColor(0, 0, 0)
+    this.doc.text('DELIVERY ACKNOWLEDGEMENT', this.margin, y)
+    autoTable(this.doc, {
+      startY: y + 4,
+      head: [['', ...parties.map((party) => party.label.replace(':', ''))]],
+      body: [
+        ['Name', ...parties.map((party) => party.name)],
+        ['Signature', '', '', ''],
+        ['Date', ...parties.map((party) => (party.date ? this.formatDate(party.date) : ''))]
+      ],
+      theme: 'grid',
+      styles: { fontSize: 8, cellPadding: 2, lineColor: [100, 100, 100], lineWidth: 0.3 },
+      headStyles: { fillColor: [255, 255, 255], textColor: [0, 0, 0], fontStyle: 'bold', lineWidth: 0.3, lineColor: [100, 100, 100] },
+      columnStyles: {
+        0: { cellWidth: 22, fontStyle: 'bold' },
+        1: { cellWidth: (this.pageWidth - 2 * this.margin - 22) / 3 },
+        2: { cellWidth: (this.pageWidth - 2 * this.margin - 22) / 3 },
+        3: { cellWidth: (this.pageWidth - 2 * this.margin - 22) / 3 }
+      },
+      didParseCell: (data) => {
+        if (data.section === 'body' && data.row.index === 1) data.cell.styles.minCellHeight = 18
+      },
+      didDrawCell: (data) => {
+        const image = data.section === 'body' && data.row.index === 1 && data.column.index > 0
+          ? parties[data.column.index - 1].signatureImage
+          : null
+        if (!image) return
+        try {
+          this.doc.addImage(image, this.imageFormat(image), data.cell.x + 2, data.cell.y + 2, 30, 12)
+        } catch (error) {
+          console.error('Error adding delivery order signature:', error)
+        }
+      },
+      margin: { left: this.margin, right: this.margin }
+    })
   }
 
   /**

@@ -156,8 +156,18 @@ export function buildNotificationSampleData(type: PreviewType, sampleId = ''): R
         reference_id: sampleId || 'ORD26000048',
         ...(type.event_code.startsWith('tiktok_shop_daily_report') ? TIKTOK_DAILY_SAMPLE : {}),
         ...(type.event_code === 'storefront_order_paid' ? STOREFRONT_ORDER_PAID_SAMPLE : {}),
+        ...(type.event_code.startsWith('system_error_') ? systemLogSample(type) : {}),
     }
 }
+
+const systemLogSample = (type: { event_name?: string }): Record<string, string> => ({
+    environment_label: 'STAGING',
+    alert_title: type.event_name || 'System Error',
+    reference_id: 'SYS-7K3M9QX2',
+    module: 'Supply Chain',
+    severity: 'ERROR',
+    occurred_at: '5 Nov 2026, 10:30 am',
+})
 
 const STOREFRONT_ORDER_PAID_SAMPLE: Record<string, string> = {
     shop_name: 'Outdoor',
@@ -189,6 +199,7 @@ const TIKTOK_DAILY_SAMPLE: Record<string, string> = {
 //    from the order whose display number is in `order_no`.
 const ORDER_PAYLOAD = ['order_no', 'order_date', 'order_type', 'status', 'buyer_org', 'seller_org', 'customer_name', 'customer_phone', 'delivery_address', 'amount', 'total_cases', 'total_items', 'item_list', 'order_url']
 const ORDER_CREATOR = ['User', 'created_by']
+const SYSTEM_LOG_PAYLOAD = ['reference_id', 'alert_title', 'environment_label', 'module', 'severity', 'occurred_at']
 const TIKTOK_DAILY_PAYLOAD = ['report_title', 'report_date', 'report_time', 'shop_counts', 'total_parcels', 'total_items', 'summary_text']
 const RETURN_PAYLOAD = ['return_no', 'return_status', 'return_source_type', 'return_source_name', 'return_source_code', 'return_warehouse_name', 'reported_date', 'total_quantity', 'total_value', 'contact_name', 'updated_at']
 
@@ -227,6 +238,10 @@ const EVENT_VARIABLES: Record<string, string[]> = {
     tiktok_shop_daily_report_sms: TIKTOK_DAILY_PAYLOAD,
     // lib/storefront/order-paid-staff-alert
     storefront_order_paid: ['shop_name', 'order_ref', 'total', 'item_count', 'item_summary', 'buyer_name', 'paid_at'],
+    // lib/system-logs/alerts
+    system_error_critical: SYSTEM_LOG_PAYLOAD,
+    system_error_application: SYSTEM_LOG_PAYLOAD,
+    system_error_database: SYSTEM_LOG_PAYLOAD,
 }
 
 // trigger_document_notification (SQL) sends only these. Its order_no is the

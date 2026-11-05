@@ -8,6 +8,9 @@ export const DELETE_USER_OTP_EVENT = 'delete_user_otp'
 export const TIKTOK_DAILY_REPORT_EVENT = 'tiktok_shop_daily_report'
 export const TIKTOK_DAILY_SUMMARY_EVENT = 'tiktok_shop_daily_report_sms'
 export const STOREFRONT_ORDER_PAID_EVENT = 'storefront_order_paid'
+export const SYSTEM_ERROR_CRITICAL_EVENT = 'system_error_critical'
+export const SYSTEM_ERROR_APPLICATION_EVENT = 'system_error_application'
+export const SYSTEM_ERROR_DATABASE_EVENT = 'system_error_database'
 
 export const REQUIRED_NOTIFICATION_TYPES = [
     {
@@ -79,6 +82,21 @@ export const REQUIRED_NOTIFICATION_TYPES = [
         category: 'ecommerce', event_code: STOREFRONT_ORDER_PAID_EVENT, event_name: 'New Paid Website Order (staff alert)',
         event_description: 'Short alert to staff when a Serapod2U Store or Outdoor website order is paid. Only the recipients chosen here get it, never the customer.',
         default_enabled: false, available_channels: ['sms', 'whatsapp'], is_system: false, sort_order: 12,
+    },
+    {
+        category: 'system_log', event_code: SYSTEM_ERROR_CRITICAL_EVENT, event_name: 'Critical System Error',
+        event_description: 'Alert when the application cannot reach or use a core service, such as a lost database connection. Sends a System Logs reference, never technical details. Starts off; recipients are chosen here.',
+        default_enabled: false, available_channels: ['whatsapp', 'sms', 'email'], is_system: false, sort_order: 1,
+    },
+    {
+        category: 'system_log', event_code: SYSTEM_ERROR_APPLICATION_EVENT, event_name: 'Application / API Error',
+        event_description: 'Alert for an unexpected application or API failure. Normal validation errors, wrong passwords and denied access never send this. Starts off; recipients are chosen here.',
+        default_enabled: false, available_channels: ['whatsapp', 'sms', 'email'], is_system: false, sort_order: 2,
+    },
+    {
+        category: 'system_log', event_code: SYSTEM_ERROR_DATABASE_EVENT, event_name: 'Database Operation Failure',
+        event_description: 'Alert when a database operation fails unexpectedly, such as a rejected constraint. Sends a System Logs reference, never the database error. Starts off; recipients are chosen here.',
+        default_enabled: false, available_channels: ['whatsapp', 'sms', 'email'], is_system: false, sort_order: 3,
     },
 ] as const
 
