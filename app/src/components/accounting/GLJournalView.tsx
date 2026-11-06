@@ -27,6 +27,7 @@ import {
   AlertCircle
 } from 'lucide-react'
 import { useSaCapability } from '@/hooks/useSaCapability'
+import { defaultPostingDate } from '@/modules/finance/postingDate'
 
 interface GLJournalViewProps {
   userProfile: {
@@ -255,7 +256,8 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
         body: JSON.stringify({
           documentType: selectedPending.gl_doc_type,
           documentId: selectedPending.document_id,
-          postingDate: new Date().toISOString().split('T')[0]
+          // Post on the document's own date (Malaysia time), as Pending Postings does.
+          postingDate: defaultPostingDate(selectedPending.document_date)
         })
       })
 

@@ -35,6 +35,7 @@ import {
 } from 'lucide-react'
 import { POSTING_TYPE_COLORS, getPostingType } from '@/modules/finance/postingMap'
 import { useSaCapability } from '@/hooks/useSaCapability'
+import { defaultPostingDate, financeToday, isValidPostingDate } from '@/modules/finance/postingDate'
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -133,6 +134,9 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
   const [previewLoading, setPreviewLoading] = useState(false)
   const [postingPreview, setPostingPreview] = useState<PostingPreview | null>(null)
   const [selectedPending, setSelectedPending] = useState<PendingPosting | null>(null)
+  const [postingDate, setPostingDate] = useState('')
+  const today = financeToday()
+  const postingDateValid = isValidPostingDate(postingDate) && postingDate <= today
 
   // Batch posting
   const [batchPosting, setBatchPosting] = useState(false)
@@ -253,6 +257,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
     try {
       setPreviewLoading(true)
       setSelectedPending(pending)
+      setPostingDate(defaultPostingDate(pending.document_date))
       const response = await fetch(
         `/api/accounting/posting?documentType=${pending.gl_doc_type}&documentId=${pending.document_id}`
       )
@@ -275,7 +280,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
   // ── Single Post ───────────────────────────────────────────────
 
   const handlePostSingle = async () => {
-    if (!selectedPending || !canPost) return
+    if (!selectedPending || !canPost || !postingDateValid) return
     try {
       setPreviewLoading(true)
       const response = await fetch('/api/accounting/posting', {
@@ -284,7 +289,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
         body: JSON.stringify({
           documentType: selectedPending.gl_doc_type,
           documentId: selectedPending.document_id,
-          postingDate: new Date().toISOString().split('T')[0],
+          postingDate,
         }),
       })
       const data = await response.json()
@@ -317,7 +322,6 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
     setBatchConfirmOpen(false)
 
     const results = { success: 0, failed: 0, errors: [] as string[] }
-    const postingDate = new Date().toISOString().split('T')[0]
 
     // Resolve selected items
     const items = filteredPostings.filter((p) => selectedIds.has(uniqueKey(p)))
@@ -330,7 +334,8 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
           body: JSON.stringify({
             documentType: item.gl_doc_type,
             documentId: item.document_id,
-            postingDate,
+            // Each document is posted on its own date.
+            postingDate: defaultPostingDate(item.document_date),
           }),
         })
         const data = await response.json()
@@ -688,9 +693,27 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                 </div>
               </div>
 
-              <div>
-                <Label className="text-xs text-muted-foreground">Description</Label>
-                <p className="text-sm">{postingPreview.description}</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="sm:col-span-2">
+                  <Label className="text-xs text-muted-foreground">Description</Label>
+                  <p className="text-sm">{postingPreview.description}</p>
+                </div>
+                <div>
+                  <Label htmlFor="posting-date" className="text-xs text-muted-foreground">Posting Date</Label>
+                  <Input
+                    id="posting-date"
+                    type="date"
+                    value={postingDate}
+                    max={today}
+                    onChange={(e) => setPostingDate(e.target.value)}
+                    className="h-8 text-sm mt-1"
+                  />
+                  <p className={`text-xs mt-1 ${postingDateValid ? 'text-muted-foreground' : 'text-red-600'}`}>
+                    {postingDateValid
+                      ? `Document date: ${formatDate(selectedPending?.document_date || '')}`
+                      : 'Enter a valid date that is not in the future.'}
+                  </p>
+                </div>
               </div>
 
               <Separator />
@@ -738,7 +761,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                   Cancel
                 </Button>
                 {canPost && (
-                  <Button onClick={handlePostSingle} disabled={previewLoading} className="bg-emerald-600 hover:bg-emerald-700">
+                  <Button onClick={handlePostSingle} disabled={previewLoading || !postingDateValid} className="bg-emerald-600 hover:bg-emerald-700">
                     {previewLoading ? (
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     ) : (
@@ -776,7 +799,8 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                   <ul className="list-disc list-inside mt-1 space-y-0.5 text-xs">
                     <li>Create {selectedIds.size} GL journal entries</li>
                     <li>Each posting is idempotent (safe to retry)</li>
-                    <li>Use today&apos;s date as posting date</li>
+                    <li>Post each document on its own document date</li>
+                    <li>Fail for any document dated in a closed period</li>
                   </ul>
                 </div>
               </div>

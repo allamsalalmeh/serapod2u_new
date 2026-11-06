@@ -1,6 +1,7 @@
 import { financeAllowed } from '@/lib/security-access/finance'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { financeToday, isValidPostingDate } from '@/modules/finance/postingDate'
 
 /**
  * GET /api/accounting/posting/preview
@@ -88,12 +89,25 @@ export async function POST(request: Request) {
       }, { status: 400 })
     }
 
+    // The posting date is a Malaysian calendar date. It may be in the past (a
+    // document posted on its own date) but never in the future; closed periods
+    // are refused by the database.
+    const today = financeToday()
+    if (postingDate !== undefined && postingDate !== null && postingDate !== '') {
+      if (!isValidPostingDate(postingDate)) {
+        return NextResponse.json({ error: 'postingDate must be a valid date (YYYY-MM-DD)' }, { status: 400 })
+      }
+      if (postingDate > today) {
+        return NextResponse.json({ error: 'Posting date cannot be in the future' }, { status: 400 })
+      }
+    }
+
     // Call the post_document_to_gl RPC function
     // Using 'any' since RPC not in generated types yet
     const { data, error } = await (supabase as any).rpc('post_document_to_gl', {
       p_document_type: documentType,
       p_document_id: documentId,
-      p_posting_date: postingDate || new Date().toISOString().split('T')[0]
+      p_posting_date: postingDate || today
     })
 
     if (error) {
