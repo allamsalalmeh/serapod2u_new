@@ -22,6 +22,7 @@ import {
   type AffiliateStatus,
 } from '@/lib/affiliate/program'
 import { loadAffiliateProgramSettings, loadEligibilityProducts } from '@/lib/affiliate/server'
+import { ensureUserRow } from '@/server/auth/ensureUserRow'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,8 +43,9 @@ function programView(s: AffiliateProgramSettings) {
   }
 }
 
-function accountView(row: any) {
+function accountView(row: any, termsVersion: number) {
   const status = (row.status || 'approved') as AffiliateStatus
+  const termsRecorded = Object.prototype.hasOwnProperty.call(row, 'terms_version_accepted')
   return {
     code: String(row.code),
     name: String(row.name || ''),
@@ -53,9 +55,54 @@ function accountView(row: any) {
     bankName: row.bank_name || '',
     bankAccountNo: row.bank_account_no || '',
     bankAccountName: row.bank_account_name || '',
-    termsVersionAccepted: Number(row.terms_version_accepted) || null,
+    termsVersionAccepted: termsRecorded ? (Number(row.terms_version_accepted) || null) : termsVersion,
     joinedAt: row.applied_at || row.created_at,
   }
+}
+
+/** PostgREST/Postgres names a column that this database has not migrated yet. */
+function missingColumn(error: any): string | null {
+  const message = String(error?.message || '')
+  const unknown =
+    String(error?.code) === '42703' ||
+    String(error?.code) === 'PGRST204' ||
+    /does not exist|schema cache|could not find the '/i.test(message)
+  if (!unknown) return null
+  const postgrest = message.match(/could not find the '([^']+)' column/i)
+  if (postgrest) return postgrest[1]
+  const pg = message.match(/column "([^"]+)"/i)
+  return pg?.[1] || null
+}
+
+const OPTIONAL_AFFILIATE_COLUMNS = new Set(['terms_version_accepted', 'terms_accepted_at'])
+
+async function writeAffiliate(admin: any, existingId: string | null, userId: string, row: Record<string, unknown>) {
+  const payload = { ...row }
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const query = existingId
+      ? admin.from('outdoor_affiliates').update(payload).eq('id', existingId).eq('user_id', userId)
+      : admin.from('outdoor_affiliates').insert(payload)
+    const { error } = await query
+    if (!error) return null
+    const column = missingColumn(error)
+    if (column && OPTIONAL_AFFILIATE_COLUMNS.has(column) && Object.prototype.hasOwnProperty.call(payload, column)) {
+      delete payload[column]
+      continue
+    }
+    return error
+  }
+  return { code: '42703', message: 'Affiliate columns are missing.' }
+}
+
+function joinErrorMessage(error: any) {
+  const text = `${error?.code || ''} ${error?.message || ''}`
+  if (missingColumn(error) || /42703|PGRST204/.test(text)) {
+    return 'The affiliate program is not fully set up on this server yet.'
+  }
+  if (String(error?.code) === '23503' && /users/i.test(text)) {
+    return 'Your store profile is missing. Sign out and sign in again.'
+  }
+  return 'Could not send your application.'
 }
 
 function shortRef(ref: unknown) {
@@ -166,8 +213,9 @@ export async function GET(request: NextRequest) {
     if (!user) return NextResponse.json({ signedIn: false, program, affiliate: null })
 
     const row = await ownAffiliate(admin, user.id)
-    const affiliate = row ? accountView(row) : null
-    const acceptedCurrentTerms = Boolean(row && (row.source !== 'self' || Number(row.terms_version_accepted) === settings.termsVersion))
+    const affiliate = row ? accountView(row, settings.termsVersion) : null
+    const termsRecorded = Boolean(row && Object.prototype.hasOwnProperty.call(row, 'terms_version_accepted'))
+    const acceptedCurrentTerms = Boolean(row && (!termsRecorded || row.source !== 'self' || Number(row.terms_version_accepted) === settings.termsVersion))
     const approved = Boolean(row && row.status === 'approved' && row.is_active !== false && acceptedCurrentTerms)
     const params = request.nextUrl.searchParams
 
@@ -245,8 +293,16 @@ export async function POST(request: NextRequest) {
       const bank = validBankDetails({ bankName: body.bankName, accountNo: body.bankAccountNo, accountName: body.bankAccountName })
       if ('error' in bank) return bad(bank.error!)
 
+      const email = String(user.email || '').trim()
+      if (email) {
+        await ensureUserRow(user.id, email, {
+          fullName: typeof user.user_metadata?.full_name === 'string' ? user.user_metadata.full_name : undefined,
+          provider: typeof user.app_metadata?.provider === 'string' ? user.app_metadata.provider : 'email',
+        })
+      }
       const { data: profile } = await admin.from('users').select('full_name, email, phone').eq('id', user.id).maybeSingle()
-      const name = String(profile?.full_name || bank.accountName || String(user.email || '').split('@')[0] || 'Affiliate').trim().slice(0, 120)
+      if (!profile) return bad('Your store profile is missing. Sign out and sign in again.', 409)
+      const name = String(profile?.full_name || bank.accountName || email.split('@')[0] || 'Affiliate').trim().slice(0, 120)
       const approved = settings.joinMode === 'open'
       const status = approved ? 'approved' : 'pending'
       const program = {
@@ -264,31 +320,35 @@ export async function POST(request: NextRequest) {
         updated_at: now,
       }
 
+      const application = {
+        ...program,
+        name,
+        kind: 'affiliate',
+        source: 'self',
+        commission_mode: 'program',
+        commission_percent: 0,
+        user_id: user.id,
+        contact_email: String(profile?.email || email).trim().toLowerCase() || null,
+        contact_phone: profile?.phone || null,
+        notes: null,
+      }
+
       if (existing) {
-        const { error } = await admin.from('outdoor_affiliates').update(program).eq('id', existing.id).eq('user_id', user.id)
-        if (error) return bad('Could not send your application.', 500)
+        const error = await writeAffiliate(admin, String(existing.id), user.id, application)
+        if (error) {
+          console.error('[affiliate/me join]', error)
+          return bad(joinErrorMessage(error), 500)
+        }
         return NextResponse.json({ ok: true, status })
       }
 
       for (let attempt = 0; attempt < 6; attempt += 1) {
         const code = suggestAffiliateCode(name)
-        const { error } = await admin.from('outdoor_affiliates').insert({
-          ...program,
-          code,
-          name,
-          kind: 'affiliate',
-          source: 'self',
-          commission_mode: 'program',
-          commission_percent: 0,
-          user_id: user.id,
-          contact_email: String(profile?.email || user.email || '').trim().toLowerCase() || null,
-          contact_phone: profile?.phone || null,
-          notes: null,
-        })
+        const error = await writeAffiliate(admin, null, user.id, { ...application, code })
         if (!error) return NextResponse.json({ ok: true, status })
         if (String(error.code) !== '23505') {
           console.error('[affiliate/me join]', error)
-          return bad('Could not send your application.', 500)
+          return bad(joinErrorMessage(error), 500)
         }
         if (/user_uidx|user_id/i.test(String(error.message || ''))) return NextResponse.json({ ok: true })
       }
