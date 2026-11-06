@@ -144,6 +144,14 @@ export async function POST(request: NextRequest) {
       // Function might not exist yet, ignore
     }
 
+    // 1c. Clear reversal records and journal-to-journal links so journals can be deleted.
+    try {
+      const { error: reversalsError } = await supabase.rpc('fin_reset_journal_reversals')
+      if (reversalsError) console.error('Error clearing journal reversals:', reversalsError)
+    } catch (e) {
+      // Function might not exist yet, ignore
+    }
+
     // 2. Delete gl_document_postings (if table exists)
     try {
       const { data: postings, error: postingsError } = await supabase

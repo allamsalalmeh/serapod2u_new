@@ -1,6 +1,7 @@
 import { financeAllowed } from '@/lib/security-access/finance'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { parseManualJournalInput } from '@/modules/finance/manualJournal'
 
 /**
  * GET /api/accounting/journals
@@ -9,7 +10,7 @@ import { NextResponse } from 'next/server'
 export async function GET(request: Request) {
   try {
     const supabase = await createClient()
-    
+
     const { data: { user }, error: authError } = await supabase.auth.getUser()
     if (authError || !user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -58,14 +59,78 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
+    // Manual / reversal flags (columns newer than the view)
+    const ids = (journals || []).map((j: any) => j.id)
+    const extra: Record<string, any> = {}
+    if (ids.length > 0) {
+      const { data: rows } = await (supabase as any)
+        .from('gl_journals')
+        .select('id, is_manual, reference, is_reversal, reversal_journal_id, reversed_journal_id')
+        .in('id', ids)
+      for (const r of rows || []) extra[r.id] = r
+    }
+
     return NextResponse.json({
-      journals: journals || [],
+      journals: (journals || []).map((j: any) => ({
+        ...j,
+        is_manual: !!extra[j.id]?.is_manual,
+        reference: extra[j.id]?.reference ?? null,
+        is_reversal: !!extra[j.id]?.is_reversal,
+        reversal_journal_id: extra[j.id]?.reversal_journal_id ?? null,
+        reversed_journal_id: extra[j.id]?.reversed_journal_id ?? null,
+      })),
       total: count || 0,
       limit,
       offset
     })
   } catch (error) {
     console.error('Error in journals API:', error)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
+
+/**
+ * POST /api/accounting/journals
+ * Create a manual journal draft (finance.journal.post).
+ * Body: { journalDate, description, reference?, lines: [{ account_id, description?, debit?, credit? }] }
+ */
+export async function POST(request: Request) {
+  try {
+    const supabase = await createClient()
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    const { data: financeActor } = await (supabase as any).from('users').select('organization_id').eq('id', user.id).maybeSingle()
+    if (!(await financeAllowed(user.id, 'finance.journal.post', () => true, financeActor?.organization_id))) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
+    const parsed = parseManualJournalInput(await request.json().catch(() => ({})))
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 })
+    }
+    const input = parsed.value
+
+    const { data, error } = await (supabase as any).rpc('fin_save_manual_journal', {
+      p_journal_id: null,
+      p_journal_date: input.journalDate,
+      p_description: input.description,
+      p_reference: input.reference,
+      p_lines: input.lines,
+    })
+
+    if (error) {
+      console.error('Error creating manual journal:', error)
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+    if (!data?.success) {
+      return NextResponse.json({ error: data?.error || 'Failed to save the journal' }, { status: 400 })
+    }
+    return NextResponse.json(data)
+  } catch (error) {
+    console.error('Error in journals API (POST):', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

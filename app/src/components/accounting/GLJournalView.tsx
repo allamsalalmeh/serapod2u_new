@@ -24,10 +24,17 @@ import {
   Filter,
   ChevronLeft,
   ChevronRight,
-  AlertCircle
+  AlertCircle,
+  Plus,
+  Pencil,
+  Trash2,
+  Undo2
 } from 'lucide-react'
 import { useSaCapability } from '@/hooks/useSaCapability'
 import { defaultPostingDate } from '@/modules/finance/postingDate'
+import { canReverseJournal } from '@/modules/finance/manualJournal'
+import ManualJournalDialog, { ManualJournalDraft } from '@/components/accounting/ManualJournalDialog'
+import ReverseJournalDialog from '@/components/accounting/ReverseJournalDialog'
 
 interface GLJournalViewProps {
   userProfile: {
@@ -55,6 +62,14 @@ interface Journal {
   company_name: string
   created_by_name: string
   created_at: string
+  is_manual?: boolean
+  reference?: string | null
+  is_reversal?: boolean
+  reversal_reason?: string | null
+  reversal_journal_id?: string | null
+  reversal_journal_number?: string | null
+  reversed_journal_id?: string | null
+  reversed_journal_number?: string | null
 }
 
 interface JournalLine {
@@ -78,6 +93,7 @@ interface JournalDetail {
     document_number: string
     posted_amount: number
   } | null
+  edit_lines?: Array<{ account_id: string; description: string | null; debit_amount: number; credit_amount: number }>
 }
 
 interface PendingPosting {
@@ -145,6 +161,68 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
   // Shown when Security & Access allows finance.journal.post (the server decides the
   // operation); the historical role-level rule applies until it is enforced.
   const canPost = useSaCapability('finance.journal.post', userProfile.roles.role_level <= 20)
+  const canReverse = useSaCapability('finance.payment.approve', userProfile.roles.role_level <= 20)
+
+  // Manual journals and reversal
+  const [journalFormOpen, setJournalFormOpen] = useState(false)
+  const [editingDraft, setEditingDraft] = useState<ManualJournalDraft | null>(null)
+  const [reverseTarget, setReverseTarget] = useState<{ id: string; journal_number: string; journal_date: string } | null>(null)
+  const [actionLoading, setActionLoading] = useState(false)
+
+  const openNewJournal = () => {
+    setEditingDraft(null)
+    setJournalFormOpen(true)
+  }
+
+  const openEditDraft = (detail: JournalDetail) => {
+    setEditingDraft({
+      id: detail.journal.id,
+      journal_date: detail.journal.journal_date?.slice(0, 10),
+      description: detail.journal.description,
+      reference: detail.journal.reference ?? null,
+      lines: detail.edit_lines || [],
+    })
+    setSelectedJournal(null)
+    setJournalFormOpen(true)
+  }
+
+  const postDraft = async (journalId: string) => {
+    try {
+      setActionLoading(true)
+      const res = await fetch(`/api/accounting/journals/${journalId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'post' }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        toast({ title: 'Cannot post', description: data.error || 'Failed to post the journal', variant: 'destructive' })
+        return
+      }
+      toast({ title: 'Journal posted', description: `Journal ${data.journal_number}` })
+      setSelectedJournal(null)
+      loadJournals()
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const deleteDraft = async (journalId: string) => {
+    try {
+      setActionLoading(true)
+      const res = await fetch(`/api/accounting/journals/${journalId}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        toast({ title: 'Cannot delete', description: data.error || 'Failed to delete the draft', variant: 'destructive' })
+        return
+      }
+      toast({ title: 'Draft deleted' })
+      setSelectedJournal(null)
+      loadJournals()
+    } finally {
+      setActionLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (activeTab === 'posted') {
@@ -338,13 +416,21 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
                     General Ledger Journals
                   </CardTitle>
                   <CardDescription>
-                    View all posted journal entries
+                    View journal entries, add manual journals and reverse posted ones
                   </CardDescription>
                 </div>
-                <Button variant="outline" size="sm" onClick={loadJournals}>
-                  <RefreshCw className="w-4 h-4 mr-2" />
-                  Refresh
-                </Button>
+                <div className="flex items-center gap-2">
+                  {canPost && (
+                    <Button size="sm" onClick={openNewJournal}>
+                      <Plus className="w-4 h-4 mr-2" />
+                      New Journal
+                    </Button>
+                  )}
+                  <Button variant="outline" size="sm" onClick={loadJournals}>
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Refresh
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -379,6 +465,7 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
                         <SelectItem value="SUPPLIER_PAYMENT">Supplier Payment</SelectItem>
                         <SelectItem value="SALES_INVOICE">Sales Invoice</SelectItem>
                         <SelectItem value="RECEIPT">Receipt</SelectItem>
+                        <SelectItem value="ADJUSTMENT">Adjustment (Manual)</SelectItem>
                         <SelectItem value="REVERSAL">Reversal</SelectItem>
                       </SelectContent>
                     </Select>
@@ -446,6 +533,9 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
                                 </Badge>
                               </TableCell>
                               <TableCell className="max-w-xs truncate">
+                                {journal.is_manual && (
+                                  <Badge variant="outline" className="mr-2 text-xs">Manual</Badge>
+                                )}
                                 {journal.description}
                               </TableCell>
                               <TableCell className="text-right font-mono">
@@ -688,6 +778,33 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
                 </div>
               )}
 
+              {selectedJournal.journal.reference && (
+                <div className="text-sm">
+                  <Label className="text-gray-500">Reference</Label>
+                  <p className="font-medium">{selectedJournal.journal.reference}</p>
+                </div>
+              )}
+
+              {/* Reversal links */}
+              {selectedJournal.journal.reversal_journal_id && (
+                <div className="p-3 bg-red-50 rounded-lg text-sm">
+                  <Label className="text-red-700">Reversed</Label>
+                  <p>
+                    Reversed by {selectedJournal.journal.reversal_journal_number || 'a reversal journal'}
+                    {selectedJournal.journal.reversal_reason ? ` — ${selectedJournal.journal.reversal_reason}` : ''}
+                  </p>
+                </div>
+              )}
+              {selectedJournal.journal.is_reversal && (
+                <div className="p-3 bg-red-50 rounded-lg text-sm">
+                  <Label className="text-red-700">Reversal Journal</Label>
+                  <p>
+                    Reverses {selectedJournal.journal.reversed_journal_number || 'the original journal'}
+                    {selectedJournal.journal.reversal_reason ? ` — ${selectedJournal.journal.reversal_reason}` : ''}
+                  </p>
+                </div>
+              )}
+
               {/* Journal Lines */}
               <div>
                 <Label className="text-gray-500 mb-2 block">Journal Lines</Label>
@@ -712,6 +829,7 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
                             <span className="text-gray-500 text-sm">{line.account_name}</span>
                           </TableCell>
                           <TableCell className="text-sm">
+                            {line.description && <span className="block">{line.description}</span>}
                             {line.entity_name && (
                               <span className="text-blue-600">[{line.entity_type}: {line.entity_name}]</span>
                             )}
@@ -737,10 +855,63 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
                   </Table>
                 </div>
               </div>
+
+              {/* Actions */}
+              {(() => {
+                const j = selectedJournal.journal
+                const isDraft = j.is_manual && j.status === 'DRAFT'
+                const reversible = canReverse && canReverseJournal(j)
+                if (!(isDraft && canPost) && !reversible) return null
+                return (
+                  <div className="flex justify-end gap-3 border-t pt-4">
+                    {isDraft && canPost && (
+                      <>
+                        <Button variant="outline" onClick={() => deleteDraft(j.id)} disabled={actionLoading}>
+                          <Trash2 className="w-4 h-4 mr-2" />
+                          Delete Draft
+                        </Button>
+                        <Button variant="outline" onClick={() => openEditDraft(selectedJournal)} disabled={actionLoading}>
+                          <Pencil className="w-4 h-4 mr-2" />
+                          Edit
+                        </Button>
+                        <Button onClick={() => postDraft(j.id)} disabled={actionLoading}>
+                          {actionLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                          Post Journal
+                        </Button>
+                      </>
+                    )}
+                    {reversible && (
+                      <Button
+                        variant="destructive"
+                        onClick={() => {
+                          setReverseTarget({ id: j.id, journal_number: j.journal_number, journal_date: j.journal_date })
+                          setSelectedJournal(null)
+                        }}
+                      >
+                        <Undo2 className="w-4 h-4 mr-2" />
+                        Reverse
+                      </Button>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
           )}
         </DialogContent>
       </Dialog>
+
+      <ManualJournalDialog
+        open={journalFormOpen}
+        draft={editingDraft}
+        onClose={() => { setJournalFormOpen(false); setEditingDraft(null) }}
+        onSaved={() => { setJournalFormOpen(false); setEditingDraft(null); setStatusFilter(''); loadJournals() }}
+      />
+
+      <ReverseJournalDialog
+        journal={reverseTarget}
+        onClose={() => setReverseTarget(null)}
+        onReversed={() => { setReverseTarget(null); loadJournals(); loadPendingPostings() }}
+      />
 
       {/* Posting Preview Modal */}
       <Dialog open={!!postingPreview || !!selectedPending} onOpenChange={() => { setPostingPreview(null); setSelectedPending(null); }}>
