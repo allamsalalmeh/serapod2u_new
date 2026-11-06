@@ -711,7 +711,32 @@ export default function StoreAffiliateClient() {
                 <Check className="h-5 w-5 text-[var(--sera-orange)]" />
               ) : null}
             </button>
-            {selectedProduct ? (
+            <button
+              type="button"
+              onClick={() =>
+                setSelectedProduct({
+                  id: "custom",
+                  name: "Custom Product",
+                  path: "/store/custom",
+                  imageUrl: null,
+                  channel: "store",
+                } as LinkProduct)
+              }
+              className={`flex items-center justify-between gap-3 rounded-xl border p-4 text-left ${selectedProduct?.id === "custom" ? "border-[var(--sera-orange)] bg-white" : "border-[var(--sera-line)] bg-white/70"}`}
+            >
+              <div>
+                <p className="font-medium text-[var(--sera-ink)]">
+                  Custom Product
+                </p>
+                <p className="text-xs text-[var(--sera-muted)]">
+                  Your own custom product link
+                </p>
+              </div>
+              {selectedProduct?.id === "custom" ? (
+                <Check className="h-5 w-5 text-[var(--sera-orange)]" />
+              ) : null}
+            </button>
+            {selectedProduct && selectedProduct.id !== "custom" ? (
               <>
                 {products === null ? (
                   <p className="col-span-full py-6 text-sm text-[var(--sera-muted)]">
