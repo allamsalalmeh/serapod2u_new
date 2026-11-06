@@ -23,6 +23,27 @@ export function toAmount(value: unknown): number {
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : NaN
 }
 
+export const MAX_REASON_LENGTH = 300
+
+/** Validates a close ("Mark as complete") or reopen request on a payment document. */
+export function parsePaymentDocumentAction(
+  documentId: unknown,
+  body: Record<string, unknown>,
+): { ok: true; value: { action: 'close' | 'reopen'; reason: string } } | { ok: false; error: string } {
+  if (typeof documentId !== 'string' || !UUID.test(documentId)) {
+    return { ok: false, error: 'A valid document id is required' }
+  }
+  if (body.action !== 'close' && body.action !== 'reopen') {
+    return { ok: false, error: "action must be 'close' or 'reopen'" }
+  }
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : ''
+  if (!reason) return { ok: false, error: 'Enter the reason' }
+  if (reason.length > MAX_REASON_LENGTH) {
+    return { ok: false, error: `The reason must be at most ${MAX_REASON_LENGTH} characters` }
+  }
+  return { ok: true, value: { action: body.action, reason } }
+}
+
 /** Validates the actual-payment fields sent with a supplier payment posting. */
 export function parseSupplierPaymentInput(
   body: Record<string, unknown>,

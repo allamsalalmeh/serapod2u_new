@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isSupplierPaymentType, parseSupplierPaymentInput, toAmount } from './supplierPayment'
+import { isSupplierPaymentType, parsePaymentDocumentAction, parseSupplierPaymentInput, toAmount } from './supplierPayment'
 
 const BANK = '20000000-0000-0000-0000-000000000002'
 
@@ -32,6 +32,19 @@ describe('supplierPayment', () => {
     expect(parseSupplierPaymentInput({ amount: 0 }).ok).toBe(false)
     expect(parseSupplierPaymentInput({ amount: -5 }).ok).toBe(false)
     expect(parseSupplierPaymentInput({}).ok).toBe(false)
+  })
+
+  it('accepts close and reopen with a reason', () => {
+    expect(parsePaymentDocumentAction(BANK, { action: 'close', reason: ' Discount agreed ' }))
+      .toEqual({ ok: true, value: { action: 'close', reason: 'Discount agreed' } })
+    expect(parsePaymentDocumentAction(BANK, { action: 'reopen', reason: 'Closed by mistake' }).ok).toBe(true)
+  })
+
+  it('rejects a close or reopen without a reason, with a bad id or a bad action', () => {
+    expect(parsePaymentDocumentAction(BANK, { action: 'close', reason: '  ' }).ok).toBe(false)
+    expect(parsePaymentDocumentAction('x', { action: 'close', reason: 'r' }).ok).toBe(false)
+    expect(parsePaymentDocumentAction(BANK, { action: 'delete', reason: 'r' }).ok).toBe(false)
+    expect(parsePaymentDocumentAction(BANK, { action: 'close', reason: 'a'.repeat(301) }).ok).toBe(false)
   })
 
   it('rejects a malformed bank id or an overlong reference', () => {

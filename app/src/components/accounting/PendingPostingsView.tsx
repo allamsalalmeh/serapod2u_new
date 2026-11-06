@@ -162,6 +162,9 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
   const [paymentBankId, setPaymentBankId] = useState('')
   const [paymentReference, setPaymentReference] = useState('')
   const [closesDocument, setClosesDocument] = useState(true)
+  const [completeOpen, setCompleteOpen] = useState(false)
+  const [completeReason, setCompleteReason] = useState('')
+  const [completing, setCompleting] = useState(false)
   const isPayment = !!postingPreview?.is_payment
   const paymentAmountValue = toAmount(paymentAmount)
   const paymentMax = Number(postingPreview?.max_amount ?? 0)
@@ -331,6 +334,8 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
           setPaymentAmount(String(Number(data.total_amount || 0).toFixed(2)))
           setPaymentReference('')
           setClosesDocument(true)
+          setCompleteOpen(false)
+          setCompleteReason('')
           setPaymentBankId((bankAccounts.find((b) => b.is_default) || bankAccounts[0])?.id || '')
         }
       } else {
@@ -371,7 +376,12 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
       })
       const data = await response.json()
       if (response.ok && data.success) {
-        toast({ title: 'Posted', description: `Journal ${data.journal_number} created successfully.` })
+        toast({
+          title: 'Posted',
+          description: data.document_closed === false
+            ? `Journal ${data.journal_number} created. The document stays open for the remaining amount.`
+            : `Journal ${data.journal_number} created successfully.`,
+        })
         setPostingPreview(null)
         setSelectedPending(null)
         setSelectedIds((prev) => {
@@ -388,6 +398,33 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
       toast({ title: 'Error', description: 'Failed to post to GL', variant: 'destructive' })
     } finally {
       setPreviewLoading(false)
+    }
+  }
+
+  // ── Mark a payment document complete (no further payment) ─────
+
+  const handleMarkComplete = async () => {
+    if (!selectedPending || !canPost || !completeReason.trim()) return
+    try {
+      setCompleting(true)
+      const response = await fetch(`/api/accounting/payment-documents/${selectedPending.document_id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'close', reason: completeReason }),
+      })
+      const data = await response.json()
+      if (response.ok && data.success) {
+        toast({ title: 'Closed', description: `${selectedPending.display_doc_no || selectedPending.document_no} is complete and left Pending Postings.` })
+        setPostingPreview(null)
+        setSelectedPending(null)
+        loadPendingPostings()
+      } else {
+        toast({ title: 'Cannot close', description: data.error || 'Failed to close the document', variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to close the document', variant: 'destructive' })
+    } finally {
+      setCompleting(false)
     }
   }
 
@@ -881,6 +918,33 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                     <Checkbox checked={closesDocument} onCheckedChange={(v) => setClosesDocument(v === true)} />
                     Last payment on this document (it leaves Pending Postings)
                   </label>
+                  <p className="text-xs text-muted-foreground">
+                    The document also closes by itself once its requested amount, or the whole order, is paid.
+                  </p>
+                  {canPost && (
+                    <div className="border-t pt-2">
+                      {!completeOpen ? (
+                        <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => setCompleteOpen(true)}>
+                          Mark as complete without another payment…
+                        </Button>
+                      ) : (
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <Input
+                            value={completeReason}
+                            maxLength={300}
+                            placeholder="Reason (required), e.g. supplier agreed a discount"
+                            onChange={(e) => setCompleteReason(e.target.value)}
+                            className="h-8 text-sm"
+                          />
+                          <Button size="sm" variant="outline" onClick={handleMarkComplete} disabled={completing || !completeReason.trim()}>
+                            {completing && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
+                            Close document
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setCompleteOpen(false)}>Cancel</Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 

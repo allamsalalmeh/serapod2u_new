@@ -8,9 +8,12 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from '@/components/ui/use-toast'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
+import { useSaCapability } from '@/hooks/useSaCapability'
 import {
   Wallet, RefreshCw, Loader2, Calendar, Filter,
-  ChevronLeft, ChevronRight, CheckCircle2, Clock, Download, FileText,
+  ChevronLeft, ChevronRight, CheckCircle2, Clock, Download, FileText, RotateCcw,
 } from 'lucide-react'
 
 interface APPaymentsViewProps {
@@ -27,10 +30,20 @@ interface Payment {
   payment_type: 'deposit' | 'balance'
   supplier_name: string
   gl_posted: boolean
+  paid_amount: number
+  closed: boolean
+  closure_kind: string | null
+  closure_reason: string | null
+  can_reopen: boolean
 }
 
 function formatCurrency(n: number) {
   return new Intl.NumberFormat('en-MY', { style: 'currency', currency: 'MYR' }).format(n)
+}
+
+function statusLabel(p: Payment) {
+  if (p.closed) return 'Closed'
+  return Number(p.paid_amount) > 0 ? 'Partly paid' : 'Open'
 }
 
 function formatDate(d: string) {
@@ -47,6 +60,10 @@ export default function APPaymentsView({ userProfile }: APPaymentsViewProps) {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const limit = 25
+  const canReopen = useSaCapability('finance.payment.approve', userProfile.roles.role_level <= 20)
+  const [reopenTarget, setReopenTarget] = useState<Payment | null>(null)
+  const [reopenReason, setReopenReason] = useState('')
+  const [reopening, setReopening] = useState(false)
 
   const loadPayments = useCallback(async () => {
     try {
@@ -75,16 +92,41 @@ export default function APPaymentsView({ userProfile }: APPaymentsViewProps) {
 
   useEffect(() => { loadPayments() }, [loadPayments])
 
-  const totalAmount = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0)
+  const totalAmount = payments.reduce((s, p) => s + (Number(p.paid_amount) || 0), 0)
+
+  const handleReopen = async () => {
+    if (!reopenTarget || !reopenReason.trim()) return
+    try {
+      setReopening(true)
+      const res = await fetch(`/api/accounting/payment-documents/${reopenTarget.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reopen', reason: reopenReason }),
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        toast({ title: 'Reopened', description: `${reopenTarget.document_no} is back in Pending Postings.` })
+        setReopenTarget(null)
+        setReopenReason('')
+        loadPayments()
+      } else {
+        toast({ title: 'Cannot reopen', description: data.error || 'Reopen failed', variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Reopen failed', variant: 'destructive' })
+    } finally {
+      setReopening(false)
+    }
+  }
   const depositTotal = payments.filter((p) => p.payment_type === 'deposit').reduce((s, p) => s + (Number(p.amount) || 0), 0)
   const balanceTotal = payments.filter((p) => p.payment_type === 'balance').reduce((s, p) => s + (Number(p.amount) || 0), 0)
   const totalPages = Math.ceil(total / limit)
 
   const handleExportCSV = () => {
-    const headers = ['Document #', 'Order #', 'Supplier', 'Type', 'Date', 'Amount', 'GL Posted']
+    const headers = ['Document #', 'Order #', 'Supplier', 'Type', 'Date', 'Requested', 'Paid', 'Status']
     const rows = payments.map((p) => [
       p.document_no, p.order_no, p.supplier_name, p.payment_type,
-      formatDate(p.date), Number(p.amount).toFixed(2), p.gl_posted ? 'Yes' : 'No',
+      formatDate(p.date), Number(p.amount).toFixed(2), Number(p.paid_amount || 0).toFixed(2), statusLabel(p),
     ])
     const csv = [headers, ...rows].map((r) => r.join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
@@ -200,8 +242,10 @@ export default function APPaymentsView({ userProfile }: APPaymentsViewProps) {
                       <TableHead>Supplier</TableHead>
                       <TableHead>Type</TableHead>
                       <TableHead>Date</TableHead>
-                      <TableHead className="text-right">Amount (MYR)</TableHead>
-                      <TableHead>GL</TableHead>
+                      <TableHead className="text-right">Requested (MYR)</TableHead>
+                      <TableHead className="text-right">Paid (MYR)</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="w-24"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -223,11 +267,21 @@ export default function APPaymentsView({ userProfile }: APPaymentsViewProps) {
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{formatDate(p.date)}</TableCell>
                         <TableCell className="text-right font-mono text-sm">{formatCurrency(Number(p.amount))}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">{formatCurrency(Number(p.paid_amount || 0))}</TableCell>
                         <TableCell>
-                          {p.gl_posted ? (
-                            <Badge className="bg-green-100 text-green-700 border-green-200 text-xs">Posted</Badge>
+                          {p.closed ? (
+                            <Badge className="bg-green-100 text-green-700 border-green-200 text-xs" title={p.closure_reason || undefined}>Closed</Badge>
+                          ) : Number(p.paid_amount) > 0 ? (
+                            <Badge variant="outline" className="text-blue-600 border-blue-200 text-xs">Partly paid</Badge>
                           ) : (
-                            <Badge variant="outline" className="text-orange-600 border-orange-200 text-xs">Pending</Badge>
+                            <Badge variant="outline" className="text-orange-600 border-orange-200 text-xs">Open</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {p.can_reopen && canReopen && (
+                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setReopenTarget(p); setReopenReason('') }}>
+                              <RotateCcw className="h-3.5 w-3.5 mr-1" /> Reopen
+                            </Button>
                           )}
                         </TableCell>
                       </TableRow>
@@ -249,6 +303,34 @@ export default function APPaymentsView({ userProfile }: APPaymentsViewProps) {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={!!reopenTarget} onOpenChange={(open) => { if (!open) setReopenTarget(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reopen {reopenTarget?.document_no}</DialogTitle>
+            <DialogDescription>
+              The document returns to Pending Postings so another payment can be posted on it. Posted journals are not changed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="reopen-reason" className="text-sm">Reason</Label>
+            <Input
+              id="reopen-reason"
+              value={reopenReason}
+              maxLength={300}
+              placeholder="For example: marked as last payment by mistake"
+              onChange={(e) => setReopenReason(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReopenTarget(null)}>Cancel</Button>
+            <Button onClick={handleReopen} disabled={reopening || !reopenReason.trim()}>
+              {reopening ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RotateCcw className="h-4 w-4 mr-2" />}
+              Reopen
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

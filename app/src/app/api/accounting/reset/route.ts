@@ -136,6 +136,14 @@ export async function POST(request: NextRequest) {
       console.error('gl_settings delete error:', e)
     }
 
+    // 1b. Clear actual-payment state (payments, document closures) before journals.
+    try {
+      const { error: paymentsError } = await supabase.rpc('fin_reset_payment_state')
+      if (paymentsError) console.error('Error clearing payment state:', paymentsError)
+    } catch (e) {
+      // Function might not exist yet, ignore
+    }
+
     // 2. Delete gl_document_postings (if table exists)
     try {
       const { data: postings, error: postingsError } = await supabase

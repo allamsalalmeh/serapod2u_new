@@ -41,6 +41,7 @@ export const ROUTE_COVERAGE: Record<string, RouteCoverage> = {
   "accounting/journals": { kind: 'ENTERPRISE', permissions: ["finance.ledger.view"] },
   "accounting/journals/[id]": { kind: 'ENTERPRISE', permissions: ["finance.ledger.view"] },
   "accounting/pending-postings": { kind: 'ENTERPRISE', permissions: ["finance.ledger.view"] },
+  "accounting/payment-documents/[id]": { kind: 'ENTERPRISE', permissions: ["finance.journal.post", "finance.payment.approve"] },
   "accounting/posting": { kind: 'ENTERPRISE', permissions: ["finance.journal.post", "finance.ledger.view"] },
   "accounting/posting-rules": { kind: 'ENTERPRISE', permissions: ["finance.ledger.view", "finance.settings.manage"] },
   "accounting/reports/balance-sheet": { kind: 'ENTERPRISE', permissions: ["finance.report.view_sensitive"] },

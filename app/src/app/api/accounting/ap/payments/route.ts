@@ -1,4 +1,5 @@
 import { financeAllowed } from '@/lib/security-access/finance'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
@@ -125,6 +126,19 @@ export async function GET(request: Request) {
       if (postings) for (const p of postings) postingMap[p.document_id] = p
     }
 
+    // Actual payments and document closures (server-only tables; ids already scoped above)
+    const paidMap: Record<string, number> = {}
+    const closureMap: Record<string, { kind: string; reason: string | null }> = {}
+    if (docIds.length > 0) {
+      const admin = createAdminClient() as any
+      const [{ data: paid }, { data: closures }] = await Promise.all([
+        admin.from('fin_payments').select('document_id, amount').in('document_id', docIds).eq('status', 'POSTED'),
+        admin.from('fin_document_closures').select('document_id, kind, reason').in('document_id', docIds),
+      ])
+      for (const p of paid || []) paidMap[p.document_id] = (paidMap[p.document_id] || 0) + (Number(p.amount) || 0)
+      for (const c of closures || []) closureMap[c.document_id] = { kind: c.kind, reason: c.reason }
+    }
+
     // Supplier names
     const supplierIds = [...new Set(filtered.map((d: any) => (d.orders as any)?.seller_org_id).filter(Boolean))]
     const supplierMap: Record<string, string> = {}
@@ -145,6 +159,12 @@ export async function GET(request: Request) {
       supplier_name: supplierMap[doc.orders?.seller_org_id] || '-',
       gl_posted: !!postingMap[doc.id],
       gl_posting: postingMap[doc.id] || null,
+      // Actual amount paid: new payments, or the single posting made the old way.
+      paid_amount: paidMap[doc.id] ?? (postingMap[doc.id] ? Number(postingMap[doc.id].posted_amount) || 0 : 0),
+      closed: !!closureMap[doc.id] || !!postingMap[doc.id],
+      closure_kind: closureMap[doc.id]?.kind || null,
+      closure_reason: closureMap[doc.id]?.reason || null,
+      can_reopen: !!closureMap[doc.id],
     }))
 
     return NextResponse.json({ payments: result, total: count || 0, limit, offset })
