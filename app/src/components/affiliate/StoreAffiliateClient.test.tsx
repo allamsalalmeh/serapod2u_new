@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 vi.mock('framer-motion', async (importOriginal) => ({
@@ -22,8 +22,8 @@ beforeAll(() => {
   })
 })
 
-const program = { open: true, joinMode: 'approval', commissionPercent: 5, attributionDays: 30, confirmAfterDays: 7, minPayoutAmount: 50, terms: 'Be honest.' }
-const account = { code: 'AMINAH-7K2Q', name: 'Aminah', status: 'approved', statusLabel: 'Active', reviewNote: '', bankName: 'Maybank', bankAccountNo: '1234567890', bankAccountName: 'Aminah' }
+const program = { open: true, joinMode: 'approval', commissionPercent: 5, attributionDays: 30, confirmAfterDays: 7, minPayoutAmount: 50, terms: 'Be honest.', termsVersion: 1 }
+const account = { code: 'AMINAH-7K2Q', name: 'Aminah', status: 'approved', statusLabel: 'Active', reviewNote: '', bankName: 'Maybank', bankAccountNo: '1234567890', bankAccountName: 'Aminah', termsVersionAccepted: 1 }
 
 function mockApi(me: unknown, status = 200, products: unknown[] = []) {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
@@ -34,6 +34,7 @@ function mockApi(me: unknown, status = 200, products: unknown[] = []) {
 }
 
 afterEach(() => {
+  cleanup()
   vi.unstubAllGlobals()
 })
 
@@ -80,5 +81,19 @@ describe('StoreAffiliateClient', () => {
     expect(screen.getByText('Ref REF1 · 2 orders')).toBeTruthy()
     await waitFor(() => expect(screen.getByText('Ellbow Cat Treat')).toBeTruthy())
     expect(screen.getByText(/ref=AMINAH-7K2Q/)).toBeTruthy()
+  })
+
+  it('pauses sharing until an approved affiliate accepts updated terms', async () => {
+    mockApi({
+      signedIn: true,
+      program: { ...program, terms: 'Updated terms.', termsVersion: 2 },
+      affiliate: account,
+      totals: { pending: 0, confirmed: 0, paid: 0, cancelled: 0, orders: 0 },
+      commissions: [],
+      payouts: [],
+    })
+    render(<StoreAffiliateClient />)
+    expect(await screen.findByRole('button', { name: 'Accept updated terms' })).toBeTruthy()
+    expect(screen.queryByText('Your affiliate code')).toBeNull()
   })
 })

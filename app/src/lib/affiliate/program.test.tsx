@@ -33,7 +33,7 @@ describe('affiliate program settings', () => {
     })
     expect(s).toEqual({
       enabled: true, joinMode: 'approval', commissionPercent: 7.5, attributionDays: 14, confirmAfterDays: 10,
-      minPayoutAmount: 50, excludeVape: false, excludedCategoryIds: ['c1'], excludedProductIds: ['p1'], terms: 'T',
+      minPayoutAmount: 50, excludeVape: false, excludedCategoryIds: ['c1'], excludedProductIds: ['p1'], terms: 'T', termsVersion: 1,
     })
   })
 })
@@ -73,10 +73,11 @@ describe('attribution window and stored link', () => {
   })
 
   it('reads the saved link and drops bad or very old ones', () => {
-    expect(storedAffiliateRef({ code: 'aminah-7k2q', sub: 'tiktok', at: now - day }, now)).toEqual({ code: 'AMINAH-7K2Q', sub: 'tiktok', clickedAt: now - day })
-    expect(storedAffiliateRef({ code: 'AB', at: now }, now)).toBeNull()
-    expect(storedAffiliateRef({ code: 'AMINAH', at: now - 400 * day }, now)).toBeNull()
-    expect(storedAffiliateRef({ code: 'AMINAH', sub: 'bad sub!', at: now }, now)?.sub).toBe('')
+    expect(storedAffiliateRef({ code: 'aminah-7k2q', sub: 'tiktok', at: now - day, token: 'signed' }, now)).toEqual({ code: 'AMINAH-7K2Q', sub: 'tiktok', clickedAt: now - day, token: 'signed' })
+    expect(storedAffiliateRef({ code: 'AB', at: now, token: 'signed' }, now)).toBeNull()
+    expect(storedAffiliateRef({ code: 'AMINAH', at: now - 400 * day, token: 'signed' }, now)).toBeNull()
+    expect(storedAffiliateRef({ code: 'AMINAH', sub: 'bad sub!', at: now, token: 'signed' }, now)?.sub).toBe('')
+    expect(storedAffiliateRef({ code: 'AMINAH', at: now }, now)).toBeNull()
   })
 })
 

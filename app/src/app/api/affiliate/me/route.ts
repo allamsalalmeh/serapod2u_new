@@ -21,7 +21,7 @@ import {
   type AffiliateProgramSettings,
   type AffiliateStatus,
 } from '@/lib/affiliate/program'
-import { loadAffiliateProgramSettings, loadEligibilityProducts, syncAffiliateCommissions } from '@/lib/affiliate/server'
+import { loadAffiliateProgramSettings, loadEligibilityProducts } from '@/lib/affiliate/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,6 +38,7 @@ function programView(s: AffiliateProgramSettings) {
     confirmAfterDays: s.confirmAfterDays,
     minPayoutAmount: s.minPayoutAmount,
     terms: s.terms,
+    termsVersion: s.termsVersion,
   }
 }
 
@@ -52,6 +53,7 @@ function accountView(row: any) {
     bankName: row.bank_name || '',
     bankAccountNo: row.bank_account_no || '',
     bankAccountName: row.bank_account_name || '',
+    termsVersionAccepted: Number(row.terms_version_accepted) || null,
     joinedAt: row.applied_at || row.created_at,
   }
 }
@@ -69,13 +71,19 @@ async function currentUser() {
 
 async function ownAffiliate(admin: any, userId: string) {
   const { data, error } = await admin.from('outdoor_affiliates').select('*').eq('user_id', userId).maybeSingle()
-  if (error) return null
+  if (error) throw new Error(`Affiliate account lookup failed: ${error.message}`)
   return data
 }
 
 async function earnings(admin: any, affiliateId: string) {
-  await syncAffiliateCommissions(admin)
-  const [{ data: rows }, { data: payouts }] = await Promise.all([
+  const sync = await admin.rpc('affiliate_sync_commissions')
+  if (sync.error) throw new Error(`Affiliate ledger sync failed: ${sync.error.message}`)
+  const [
+    { data: totalsRows, error: totalsError },
+    { data: rows, error: commissionsError },
+    { data: payouts, error: payoutsError },
+  ] = await Promise.all([
+    admin.rpc('affiliate_commission_totals', { p_affiliate_id: affiliateId }),
     admin
       .from('affiliate_commissions')
       .select('order_ref, sales_channel, sub_id, eligible_amount, commission_percent, commission_amount, status, ordered_at, delivered_at, confirmed_at')
@@ -89,11 +97,16 @@ async function earnings(admin: any, affiliateId: string) {
       .order('paid_at', { ascending: false })
       .limit(100),
   ])
-  const totals = { pending: 0, confirmed: 0, paid: 0, cancelled: 0, orders: 0 }
-  for (const row of rows || []) {
-    const status = String(row.status) as keyof typeof totals
-    if (status in totals && status !== 'orders') totals[status] = roundRm(totals[status] + (Number(row.commission_amount) || 0))
-    if (status !== 'cancelled') totals.orders += 1
+  if (totalsError) throw new Error(`Affiliate totals failed: ${totalsError.message}`)
+  if (commissionsError) throw new Error(`Affiliate commission history failed: ${commissionsError.message}`)
+  if (payoutsError) throw new Error(`Affiliate payout history failed: ${payoutsError.message}`)
+  const total = totalsRows?.[0]
+  const totals = {
+    pending: roundRm(Number(total?.pending) || 0),
+    confirmed: roundRm(Number(total?.confirmed) || 0),
+    paid: roundRm(Number(total?.paid) || 0),
+    cancelled: roundRm(Number(total?.cancelled) || 0),
+    orders: Number(total?.orders) || 0,
   }
   return {
     totals,
@@ -154,7 +167,8 @@ export async function GET(request: NextRequest) {
 
     const row = await ownAffiliate(admin, user.id)
     const affiliate = row ? accountView(row) : null
-    const approved = Boolean(row && row.status === 'approved' && row.is_active !== false)
+    const acceptedCurrentTerms = Boolean(row && (row.source !== 'self' || Number(row.terms_version_accepted) === settings.termsVersion))
+    const approved = Boolean(row && row.status === 'approved' && row.is_active !== false && acceptedCurrentTerms)
     const params = request.nextUrl.searchParams
 
     const productId = params.get('productId')
@@ -196,6 +210,20 @@ export async function POST(request: NextRequest) {
     const now = new Date().toISOString()
     const existing = await ownAffiliate(admin, user.id)
 
+    if (body?.action === 'accept_terms') {
+      if (!existing) return bad('Join the program first.')
+      if (body.agree !== true) return bad('Please accept the program terms.')
+      const settings = await loadAffiliateProgramSettings(admin)
+      if (!programIsLive(settings)) return bad('The affiliate program is not open yet.', 403)
+      const { error } = await admin
+        .from('outdoor_affiliates')
+        .update({ terms_version_accepted: settings.termsVersion, terms_accepted_at: now, updated_at: now })
+        .eq('id', existing.id)
+        .eq('user_id', user.id)
+      if (error) return bad('Could not accept the updated terms.', 500)
+      return NextResponse.json({ ok: true })
+    }
+
     if (body?.action === 'update_bank') {
       if (!existing) return bad('Join the program first.')
       const bank = validBankDetails({ bankName: body.bankName, accountNo: body.bankAccountNo, accountName: body.bankAccountName })
@@ -231,6 +259,8 @@ export async function POST(request: NextRequest) {
         reviewed_at: approved ? now : null,
         reviewed_by: null,
         review_note: null,
+        terms_version_accepted: settings.termsVersion,
+        terms_accepted_at: now,
         updated_at: now,
       }
 
