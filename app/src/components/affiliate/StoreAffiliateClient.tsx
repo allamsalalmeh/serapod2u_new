@@ -736,7 +736,7 @@ export default function StoreAffiliateClient() {
                 <Check className="h-5 w-5 text-[var(--sera-orange)]" />
               ) : null}
             </button>
-            {selectedProduct && selectedProduct.id !== "custom" ? (
+            {selectedProduct ? (
               <>
                 {products === null ? (
                   <p className="col-span-full py-6 text-sm text-[var(--sera-muted)]">
