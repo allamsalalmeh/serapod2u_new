@@ -603,65 +603,75 @@ export default function StoreAffiliateClient() {
       {approved ? (
         <section className={card}>
           <h2 className="text-base font-semibold text-[var(--sera-ink)]">
-            Create your link
+            Create your affiliate link
           </h2>
           <p className="mt-1 text-sm text-[var(--sera-muted)]">
-            Pick a product, or use your store link.
+            Choose what you want to share. Anyone who buys through your link
+            earns you commission.
           </p>
-          <div className="relative mt-4">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--sera-muted)]" />
-            <Input
-              className={`${field} pl-9`}
-              value={productQuery}
-              placeholder="Search products"
-              onChange={(e) => setProductQuery(e.target.value)}
-            />
-          </div>
-          <div className="mt-3 grid max-h-72 grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3">
+          <div className="mt-4 grid gap-3">
             <button
               type="button"
               onClick={() => setSelectedProduct(null)}
-              className={`rounded-xl border p-3 text-left text-sm ${!selectedProduct ? "border-[var(--sera-orange)] bg-white" : "border-[var(--sera-line)] bg-white/70"}`}
+              className={`flex items-center justify-between gap-3 rounded-xl border p-4 text-left ${!selectedProduct ? "border-[var(--sera-orange)] bg-white" : "border-[var(--sera-line)] bg-white/70"}`}
             >
-              Store link
+              <div>
+                <p className="font-medium text-[var(--sera-ink)]">
+                  Whole store link
+                </p>
+                <p className="text-xs text-[var(--sera-muted)]">
+                  Any product in the Serapod store
+                </p>
+              </div>
+              {!selectedProduct ? (
+                <Check className="h-5 w-5 text-[var(--sera-orange)]" />
+              ) : null}
             </button>
             {products === null ? (
               <p className="col-span-full py-6 text-sm text-[var(--sera-muted)]">
                 Loading products…
               </p>
+            ) : shownProducts.length === 0 ? (
+              <p className="col-span-full py-6 text-sm text-[var(--sera-muted)]">
+                No products found.
+              </p>
             ) : (
-              shownProducts.map((product) => {
-                const img = mediaUrl(product.imageUrl);
-                const active = selectedProduct?.id === product.id;
-                return (
-                  <button
-                    key={`${product.channel}-${product.id}`}
-                    type="button"
-                    onClick={() => setSelectedProduct(product)}
-                    className={`rounded-xl border bg-white p-2 text-left ${active ? "border-[var(--sera-orange)]" : "border-[var(--sera-line)]"}`}
-                  >
-                    <span className="flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-[var(--sera-paper)]">
-                      {img ? (
-                        <img
-                          src={img}
-                          alt=""
-                          className="h-full w-full object-contain"
-                        />
-                      ) : null}
-                    </span>
-                    <span className="mt-2 line-clamp-2 block text-xs font-medium text-[var(--sera-ink)]">
-                      {product.name}
-                    </span>
-                  </button>
-                );
-              })
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {shownProducts.map((product) => {
+                  const img = mediaUrl(product.imageUrl);
+                  const active = selectedProduct?.id === product.id;
+                  return (
+                    <button
+                      key={`${product.channel}-${product.id}`}
+                      type="button"
+                      onClick={() => setSelectedProduct(product)}
+                      className={`flex flex-col gap-2 rounded-xl border p-3 text-left ${active ? "border-[var(--sera-orange)] bg-white" : "border-[var(--sera-line)] bg-white/70 hover:border-[var(--sera-line)] hover:bg-white"}`}
+                    >
+                      <span className="flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-[var(--sera-paper)]">
+                        {img ? (
+                          <img
+                            src={img}
+                            alt=""
+                            className="h-full w-full object-contain"
+                          />
+                        ) : null}
+                      </span>
+                      <span className="line-clamp-2 block text-xs font-medium text-[var(--sera-ink)]">
+                        {product.name}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             )}
           </div>
-          <div className="mt-4 space-y-4">
-            <div className="rounded-xl border border-[var(--sera-line)] bg-[var(--sera-paper)] p-3">
-              <p className="text-xs text-[var(--sera-muted)]">Your link</p>
+          <div className="mt-5 space-y-3">
+            <div className="rounded-xl border border-[var(--sera-line)] bg-[var(--sera-paper)] p-4">
+              <p className="text-xs text-[var(--sera-muted)]">
+                Your affiliate link
+              </p>
               <p className="mt-1 break-all text-sm text-[var(--sera-ink)]">
-                {link || "Choose a product to build the link."}
+                {link || "Choose an option above to build the link."}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
