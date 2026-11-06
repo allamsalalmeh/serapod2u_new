@@ -71,6 +71,8 @@ interface CheckoutBody {
   /** Affiliate program: the link's ?sub= and when it was clicked (ms). */
   affiliateSubId?: string
   affiliateClickedAt?: number
+  /** Server-signed referral click. Required for program commission. */
+  affiliateRefToken?: string
 }
 
 const MAX_LINE_QUANTITY = 999
@@ -351,6 +353,7 @@ export async function POST(request: NextRequest) {
       code: body.affiliateCode,
       subId: body.affiliateSubId,
       clickedAt: body.affiliateClickedAt,
+      refToken: body.affiliateRefToken,
       buyer: { email: body.customer.email, phone: body.customer.phone },
       lines: lineItems,
       variants,

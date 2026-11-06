@@ -21,7 +21,8 @@ import {
   type AffiliateProgramSettings,
   type AffiliateStatus,
 } from '@/lib/affiliate/program'
-import { loadAffiliateProgramSettings, loadEligibilityProducts, syncAffiliateCommissions } from '@/lib/affiliate/server'
+import { loadAffiliateProgramSettings, loadEligibilityProducts } from '@/lib/affiliate/server'
+import { ensureUserRow } from '@/server/auth/ensureUserRow'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,11 +39,13 @@ function programView(s: AffiliateProgramSettings) {
     confirmAfterDays: s.confirmAfterDays,
     minPayoutAmount: s.minPayoutAmount,
     terms: s.terms,
+    termsVersion: s.termsVersion,
   }
 }
 
-function accountView(row: any) {
+function accountView(row: any, termsVersion: number) {
   const status = (row.status || 'approved') as AffiliateStatus
+  const termsRecorded = Object.prototype.hasOwnProperty.call(row, 'terms_version_accepted')
   return {
     code: String(row.code),
     name: String(row.name || ''),
@@ -52,8 +55,54 @@ function accountView(row: any) {
     bankName: row.bank_name || '',
     bankAccountNo: row.bank_account_no || '',
     bankAccountName: row.bank_account_name || '',
+    termsVersionAccepted: termsRecorded ? (Number(row.terms_version_accepted) || null) : termsVersion,
     joinedAt: row.applied_at || row.created_at,
   }
+}
+
+/** PostgREST/Postgres names a column that this database has not migrated yet. */
+function missingColumn(error: any): string | null {
+  const message = String(error?.message || '')
+  const unknown =
+    String(error?.code) === '42703' ||
+    String(error?.code) === 'PGRST204' ||
+    /does not exist|schema cache|could not find the '/i.test(message)
+  if (!unknown) return null
+  const postgrest = message.match(/could not find the '([^']+)' column/i)
+  if (postgrest) return postgrest[1]
+  const pg = message.match(/column "([^"]+)"/i)
+  return pg?.[1] || null
+}
+
+const OPTIONAL_AFFILIATE_COLUMNS = new Set(['terms_version_accepted', 'terms_accepted_at'])
+
+async function writeAffiliate(admin: any, existingId: string | null, userId: string, row: Record<string, unknown>) {
+  const payload = { ...row }
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const query = existingId
+      ? admin.from('outdoor_affiliates').update(payload).eq('id', existingId).eq('user_id', userId)
+      : admin.from('outdoor_affiliates').insert(payload)
+    const { error } = await query
+    if (!error) return null
+    const column = missingColumn(error)
+    if (column && OPTIONAL_AFFILIATE_COLUMNS.has(column) && Object.prototype.hasOwnProperty.call(payload, column)) {
+      delete payload[column]
+      continue
+    }
+    return error
+  }
+  return { code: '42703', message: 'Affiliate columns are missing.' }
+}
+
+function joinErrorMessage(error: any) {
+  const text = `${error?.code || ''} ${error?.message || ''}`
+  if (missingColumn(error) || /42703|PGRST204/.test(text)) {
+    return 'The affiliate program is not fully set up on this server yet.'
+  }
+  if (String(error?.code) === '23503' && /users/i.test(text)) {
+    return 'Your store profile is missing. Sign out and sign in again.'
+  }
+  return 'Could not send your application.'
 }
 
 function shortRef(ref: unknown) {
@@ -69,13 +118,19 @@ async function currentUser() {
 
 async function ownAffiliate(admin: any, userId: string) {
   const { data, error } = await admin.from('outdoor_affiliates').select('*').eq('user_id', userId).maybeSingle()
-  if (error) return null
+  if (error) throw new Error(`Affiliate account lookup failed: ${error.message}`)
   return data
 }
 
 async function earnings(admin: any, affiliateId: string) {
-  await syncAffiliateCommissions(admin)
-  const [{ data: rows }, { data: payouts }] = await Promise.all([
+  const sync = await admin.rpc('affiliate_sync_commissions')
+  if (sync.error) throw new Error(`Affiliate ledger sync failed: ${sync.error.message}`)
+  const [
+    { data: totalsRows, error: totalsError },
+    { data: rows, error: commissionsError },
+    { data: payouts, error: payoutsError },
+  ] = await Promise.all([
+    admin.rpc('affiliate_commission_totals', { p_affiliate_id: affiliateId }),
     admin
       .from('affiliate_commissions')
       .select('order_ref, sales_channel, sub_id, eligible_amount, commission_percent, commission_amount, status, ordered_at, delivered_at, confirmed_at')
@@ -89,11 +144,16 @@ async function earnings(admin: any, affiliateId: string) {
       .order('paid_at', { ascending: false })
       .limit(100),
   ])
-  const totals = { pending: 0, confirmed: 0, paid: 0, cancelled: 0, orders: 0 }
-  for (const row of rows || []) {
-    const status = String(row.status) as keyof typeof totals
-    if (status in totals && status !== 'orders') totals[status] = roundRm(totals[status] + (Number(row.commission_amount) || 0))
-    if (status !== 'cancelled') totals.orders += 1
+  if (totalsError) throw new Error(`Affiliate totals failed: ${totalsError.message}`)
+  if (commissionsError) throw new Error(`Affiliate commission history failed: ${commissionsError.message}`)
+  if (payoutsError) throw new Error(`Affiliate payout history failed: ${payoutsError.message}`)
+  const total = totalsRows?.[0]
+  const totals = {
+    pending: roundRm(Number(total?.pending) || 0),
+    confirmed: roundRm(Number(total?.confirmed) || 0),
+    paid: roundRm(Number(total?.paid) || 0),
+    cancelled: roundRm(Number(total?.cancelled) || 0),
+    orders: Number(total?.orders) || 0,
   }
   return {
     totals,
@@ -153,8 +213,10 @@ export async function GET(request: NextRequest) {
     if (!user) return NextResponse.json({ signedIn: false, program, affiliate: null })
 
     const row = await ownAffiliate(admin, user.id)
-    const affiliate = row ? accountView(row) : null
-    const approved = Boolean(row && row.status === 'approved' && row.is_active !== false)
+    const affiliate = row ? accountView(row, settings.termsVersion) : null
+    const termsRecorded = Boolean(row && Object.prototype.hasOwnProperty.call(row, 'terms_version_accepted'))
+    const acceptedCurrentTerms = Boolean(row && (!termsRecorded || row.source !== 'self' || Number(row.terms_version_accepted) === settings.termsVersion))
+    const approved = Boolean(row && row.status === 'approved' && row.is_active !== false && acceptedCurrentTerms)
     const params = request.nextUrl.searchParams
 
     const productId = params.get('productId')
@@ -196,6 +258,20 @@ export async function POST(request: NextRequest) {
     const now = new Date().toISOString()
     const existing = await ownAffiliate(admin, user.id)
 
+    if (body?.action === 'accept_terms') {
+      if (!existing) return bad('Join the program first.')
+      if (body.agree !== true) return bad('Please accept the program terms.')
+      const settings = await loadAffiliateProgramSettings(admin)
+      if (!programIsLive(settings)) return bad('The affiliate program is not open yet.', 403)
+      const { error } = await admin
+        .from('outdoor_affiliates')
+        .update({ terms_version_accepted: settings.termsVersion, terms_accepted_at: now, updated_at: now })
+        .eq('id', existing.id)
+        .eq('user_id', user.id)
+      if (error) return bad('Could not accept the updated terms.', 500)
+      return NextResponse.json({ ok: true })
+    }
+
     if (body?.action === 'update_bank') {
       if (!existing) return bad('Join the program first.')
       const bank = validBankDetails({ bankName: body.bankName, accountNo: body.bankAccountNo, accountName: body.bankAccountName })
@@ -217,8 +293,16 @@ export async function POST(request: NextRequest) {
       const bank = validBankDetails({ bankName: body.bankName, accountNo: body.bankAccountNo, accountName: body.bankAccountName })
       if ('error' in bank) return bad(bank.error!)
 
+      const email = String(user.email || '').trim()
+      if (email) {
+        await ensureUserRow(user.id, email, {
+          fullName: typeof user.user_metadata?.full_name === 'string' ? user.user_metadata.full_name : undefined,
+          provider: typeof user.app_metadata?.provider === 'string' ? user.app_metadata.provider : 'email',
+        })
+      }
       const { data: profile } = await admin.from('users').select('full_name, email, phone').eq('id', user.id).maybeSingle()
-      const name = String(profile?.full_name || bank.accountName || String(user.email || '').split('@')[0] || 'Affiliate').trim().slice(0, 120)
+      if (!profile) return bad('Your store profile is missing. Sign out and sign in again.', 409)
+      const name = String(profile?.full_name || bank.accountName || email.split('@')[0] || 'Affiliate').trim().slice(0, 120)
       const approved = settings.joinMode === 'open'
       const status = approved ? 'approved' : 'pending'
       const program = {
@@ -231,34 +315,40 @@ export async function POST(request: NextRequest) {
         reviewed_at: approved ? now : null,
         reviewed_by: null,
         review_note: null,
+        terms_version_accepted: settings.termsVersion,
+        terms_accepted_at: now,
         updated_at: now,
       }
 
+      const application = {
+        ...program,
+        name,
+        kind: 'affiliate',
+        source: 'self',
+        commission_mode: 'program',
+        commission_percent: 0,
+        user_id: user.id,
+        contact_email: String(profile?.email || email).trim().toLowerCase() || null,
+        contact_phone: profile?.phone || null,
+        notes: null,
+      }
+
       if (existing) {
-        const { error } = await admin.from('outdoor_affiliates').update(program).eq('id', existing.id).eq('user_id', user.id)
-        if (error) return bad('Could not send your application.', 500)
+        const error = await writeAffiliate(admin, String(existing.id), user.id, application)
+        if (error) {
+          console.error('[affiliate/me join]', error)
+          return bad(joinErrorMessage(error), 500)
+        }
         return NextResponse.json({ ok: true, status })
       }
 
       for (let attempt = 0; attempt < 6; attempt += 1) {
         const code = suggestAffiliateCode(name)
-        const { error } = await admin.from('outdoor_affiliates').insert({
-          ...program,
-          code,
-          name,
-          kind: 'affiliate',
-          source: 'self',
-          commission_mode: 'program',
-          commission_percent: 0,
-          user_id: user.id,
-          contact_email: String(profile?.email || user.email || '').trim().toLowerCase() || null,
-          contact_phone: profile?.phone || null,
-          notes: null,
-        })
+        const error = await writeAffiliate(admin, null, user.id, { ...application, code })
         if (!error) return NextResponse.json({ ok: true, status })
         if (String(error.code) !== '23505') {
           console.error('[affiliate/me join]', error)
-          return bad('Could not send your application.', 500)
+          return bad(joinErrorMessage(error), 500)
         }
         if (/user_uidx|user_id/i.test(String(error.message || ''))) return NextResponse.json({ ok: true })
       }

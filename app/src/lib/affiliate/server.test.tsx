@@ -1,14 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getUser = vi.fn()
+const { verifyAffiliateRefToken } = vi.hoisted(() => ({ verifyAffiliateRefToken: vi.fn() }))
 vi.mock('@/lib/supabase/server', () => ({ createClient: async () => ({ auth: { getUser } }) }))
+vi.mock('@/lib/affiliate/ref-token', () => ({ verifyAffiliateRefToken }))
 
 import { resolveCheckoutAffiliate } from './server'
 
 const host = { id: 'h1', code: 'HOSTLIVE-TUAH', kind: 'host', commission_mode: 'custom', commission_percent: 3, is_active: true }
 const affiliate = {
   id: 'a1', code: 'AMINAH-7K2Q', kind: 'affiliate', commission_mode: 'program', commission_percent: 0, is_active: true,
-  user_id: 'u-aff', contact_email: 'aminah@mail.com', contact_phone: '0123456789',
+  user_id: 'u-aff', source: 'self', terms_version_accepted: 1,
+  contact_email: 'aminah@mail.com', contact_phone: '0123456789',
 }
 
 function db({ row, settings }: { row: any; settings: any }) {
@@ -35,6 +38,7 @@ const programOn = { enabled: true, join_mode: 'open', commission_percent: 5, att
 const base = {
   subId: 'tiktok',
   clickedAt: undefined as number | undefined,
+  refToken: 'valid-token',
   buyer: { email: 'buyer@mail.com', phone: '0198765432' },
   lines: [
     { variant_id: 'v-mat', subtotal: 120 },
@@ -49,6 +53,9 @@ const base = {
 describe('resolveCheckoutAffiliate', () => {
   beforeEach(() => {
     getUser.mockResolvedValue({ data: { user: { id: 'u-buyer' } } })
+    verifyAffiliateRefToken.mockImplementation((token: unknown, code: unknown) => token === 'valid-token'
+      ? { code: String(code), sub: 'tiktok', issuedAt: Date.now() - 86_400_000 }
+      : null)
   })
 
   it('keeps a live host on Outdoor exactly as before (no program columns)', async () => {
@@ -103,9 +110,25 @@ describe('resolveCheckoutAffiliate', () => {
     expect(ownAccount.affiliate).toBeNull()
     getUser.mockResolvedValue({ data: { user: { id: 'u-buyer' } } })
     const late = await resolveCheckoutAffiliate(db({ row: affiliate, settings: { ...programOn, attribution_days: 7 } }), {
-      ...base, channel: 'store', outdoorResolved: null, code: 'AMINAH-7K2Q', clickedAt: Date.now() - 8 * 86_400_000,
+      ...base, channel: 'store', outdoorResolved: null, code: 'AMINAH-7K2Q', refToken: 'expired-token',
     })
     expect(late.affiliate).toBeNull()
+  })
+
+  it('fails closed for a program affiliate without a valid signed referral claim', async () => {
+    for (const refToken of [undefined, '', 'tampered']) {
+      const out = await resolveCheckoutAffiliate(db({ row: affiliate, settings: programOn }), {
+        ...base, channel: 'store', outdoorResolved: null, code: 'AMINAH-7K2Q', refToken,
+      })
+      expect(out.affiliate).toBeNull()
+    }
+  })
+
+  it('pauses a self-joined affiliate until the current terms are accepted', async () => {
+    const out = await resolveCheckoutAffiliate(db({ row: affiliate, settings: { ...programOn, terms_version: 2 } }), {
+      ...base, channel: 'store', outdoorResolved: null, code: 'AMINAH-7K2Q',
+    })
+    expect(out.affiliate).toBeNull()
   })
 
   it('uses an own rate for staff-added affiliates', async () => {

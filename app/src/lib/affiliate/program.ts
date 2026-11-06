@@ -20,6 +20,7 @@ export type AffiliateProgramSettings = {
   excludedCategoryIds: string[]
   excludedProductIds: string[]
   terms: string
+  termsVersion: number
 }
 
 export const DEFAULT_AFFILIATE_PROGRAM_SETTINGS: AffiliateProgramSettings = {
@@ -33,6 +34,7 @@ export const DEFAULT_AFFILIATE_PROGRAM_SETTINGS: AffiliateProgramSettings = {
   excludedCategoryIds: [],
   excludedProductIds: [],
   terms: '',
+  termsVersion: 1,
 }
 
 /** Live host links keep the 30-day window they always had. */
@@ -79,6 +81,7 @@ export function programSettingsFromRow(row: any): AffiliateProgramSettings {
     excludedCategoryIds: ids(row.excluded_category_ids),
     excludedProductIds: ids(row.excluded_product_ids),
     terms: typeof row.terms === 'string' ? row.terms : '',
+    termsVersion: Math.max(1, num(row.terms_version) ?? 1),
   }
 }
 
@@ -92,17 +95,18 @@ export function normalizeSubId(raw: unknown): string {
   return /^[A-Za-z0-9_-]{1,40}$/.test(sub) ? sub : ''
 }
 
-export type StoredAffiliateRef = { code: string; sub: string; clickedAt: number }
+export type StoredAffiliateRef = { code: string; sub: string; clickedAt: number; token: string }
 
 /** The ref saved by the link capture, while the browser still keeps it. */
 export function storedAffiliateRef(stored: unknown, now = Date.now()): StoredAffiliateRef | null {
   if (!stored || typeof stored !== 'object') return null
-  const { code, sub, at } = stored as { code?: unknown; sub?: unknown; at?: unknown }
+  const { code, sub, at, token } = stored as { code?: unknown; sub?: unknown; at?: unknown; token?: unknown }
   const clickedAt = Number(at)
   const clean = normalizeAffiliateCode(code)
-  if (!clean || !Number.isFinite(clickedAt) || clickedAt > now + 60_000) return null
+  const signed = typeof token === 'string' ? token.trim() : ''
+  if (!clean || !signed || signed.length > 1024 || !Number.isFinite(clickedAt) || clickedAt > now + 60_000) return null
   if (now - clickedAt > AFFILIATE_REF_KEEP_DAYS * 86_400_000) return null
-  return { code: clean, sub: normalizeSubId(sub), clickedAt }
+  return { code: clean, sub: normalizeSubId(sub), clickedAt, token: signed }
 }
 
 /** A link click is inside the window. Checkouts that do not send the click time are trusted (older pages). */
