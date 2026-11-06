@@ -75,6 +75,7 @@ export default function DefaultAccountsSettings({ userProfile }: DefaultAccounts
             sales_revenue_account_id: settingsData.settings.sales_revenue_account_id,
             cogs_account_id: settingsData.settings.cogs_account_id,
             inventory_account_id: settingsData.settings.inventory_account_id,
+            require_supplier_ack_for_payment_posting: !!settingsData.settings.require_supplier_ack_for_payment_posting,
           })
         }
       }
@@ -165,7 +166,13 @@ export default function DefaultAccountsSettings({ userProfile }: DefaultAccounts
 
   // Get current value for a setting
   const getCurrentValue = (key: keyof GLSettingsUpdate): string => {
-    return formData[key] || 'none'
+    const value = formData[key]
+    return typeof value === 'string' && value ? value : 'none'
+  }
+
+  const handleRequireAckChange = (checked: boolean) => {
+    setFormData(prev => ({ ...prev, require_supplier_ack_for_payment_posting: checked }))
+    setHasChanges(true)
   }
 
   // Count configured required accounts
@@ -334,6 +341,28 @@ export default function DefaultAccountsSettings({ userProfile }: DefaultAccounts
           })}
         </div>
 
+        {/* Supplier payment posting rule */}
+        <div className="border-t pt-6 space-y-2">
+          <div className="flex items-start gap-3">
+            <input
+              id="require_supplier_ack_for_payment_posting"
+              type="checkbox"
+              className="mt-1 h-4 w-4"
+              checked={!!formData.require_supplier_ack_for_payment_posting}
+              onChange={(e) => handleRequireAckChange(e.target.checked)}
+              disabled={!canManage}
+            />
+            <div>
+              <Label htmlFor="require_supplier_ack_for_payment_posting" className="font-medium">
+                Post supplier payments only after the supplier acknowledges them
+              </Label>
+              <p className="text-sm text-gray-500">
+                When on, a supplier payment cannot be posted to the GL until the supplier has acknowledged the payment document. When off, payments can be posted as soon as HQ records them.
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* Usage notes */}
         <div className="border-t pt-6 mt-6">
           <h4 className="font-medium text-gray-900 mb-3">How these accounts will be used</h4>
@@ -345,6 +374,10 @@ export default function DefaultAccountsSettings({ userProfile }: DefaultAccounts
             <div className="flex gap-2">
               <span className="font-medium text-gray-700 w-40">AP Control:</span>
               <span>Credited when receiving manufacturer invoices, debited on payment</span>
+            </div>
+            <div className="flex gap-2">
+              <span className="font-medium text-gray-700 w-40">Inventory:</span>
+              <span>Debited when manufacturer invoices are posted (purchases go to stock)</span>
             </div>
             <div className="flex gap-2">
               <span className="font-medium text-gray-700 w-40">Supplier Deposits:</span>

@@ -152,7 +152,8 @@ export async function PUT(request: NextRequest) {
       'sales_revenue_account_id',
       'cogs_account_id',
       'inventory_account_id',
-      'posting_mode'  // NEW: Allow posting mode to be updated
+      'posting_mode',  // NEW: Allow posting mode to be updated
+      'require_supplier_ack_for_payment_posting'
     ]
 
     const updateData: Record<string, any> = {
@@ -165,6 +166,10 @@ export async function PUT(request: NextRequest) {
         if (field === 'posting_mode') {
           const validModes = ['MANUAL', 'AUTO']
           if (validModes.includes(body[field])) {
+            updateData[field] = body[field]
+          }
+        } else if (field === 'require_supplier_ack_for_payment_posting') {
+          if (typeof body[field] === 'boolean') {
             updateData[field] = body[field]
           }
         } else {

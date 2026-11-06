@@ -24,6 +24,7 @@ export interface GLSettings {
   inventory_account_id: string | null;
   // Posting configuration
   posting_mode: GLPostingMode;
+  require_supplier_ack_for_payment_posting?: boolean;
   // Metadata
   created_at: string;
   updated_at: string;
@@ -40,6 +41,7 @@ export interface GLSettingsUpdate {
   cogs_account_id?: string | null;
   inventory_account_id?: string | null;
   posting_mode?: GLPostingMode;
+  require_supplier_ack_for_payment_posting?: boolean;
 }
 
 // Settings with joined account details for display
