@@ -7,6 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   buildAffiliateLink,
   COMMISSION_STATUS_LABELS,
   maskAccountNo,
@@ -81,10 +88,44 @@ type LinkProduct = {
 };
 
 type BankForm = {
+  bankType: "bank" | "ewallet";
   bankName: string;
   bankAccountNo: string;
   bankAccountName: string;
 };
+
+const MALAYSIAN_BANKS = [
+  { value: "Maybank", label: "Maybank" },
+  { value: "CIMB", label: "CIMB Bank" },
+  { value: "Public Bank", label: "Public Bank" },
+  { value: "RHB Bank", label: "RHB Bank" },
+  { value: "AmBank", label: "AmBank" },
+  { value: "Hong Leong Bank", label: "Hong Leong Bank" },
+  { value: "UOB", label: "UOB Malaysia" },
+  { value: "OCBC", label: "OCBC Bank" },
+  { value: "HSBC", label: "HSBC Malaysia" },
+  { value: "Standard Chartered", label: "Standard Chartered" },
+] as const;
+
+const MALAYSIAN_EWALLETS = [
+  { value: "Touch 'n Go eWallet", label: "Touch 'n Go eWallet" },
+  { value: "GrabPay", label: "GrabPay" },
+  { value: "Boost", label: "Boost" },
+  { value: "ShopeePay", label: "ShopeePay" },
+  { value: "MAE", label: "MAE by Maybank" },
+  { value: "BigPay", label: "BigPay" },
+] as const;
+
+function bankAccountMaxLength(bankType: string, bankName: string): number {
+  if (bankType === "ewallet") return 20;
+  if (bankName === "Touch 'n Go eWallet") return 12;
+  if (bankName === "GrabPay") return 12;
+  if (bankName === "Boost") return 12;
+  if (bankName === "ShopeePay") return 12;
+  if (bankName === "MAE") return 12;
+  if (bankName === "BigPay") return 12;
+  return 16;
+}
 
 const SIGNED_OUT_PROGRAM: Program = {
   open: false,
@@ -160,19 +201,56 @@ function BankFields({
   value: BankForm;
   onChange: (next: BankForm) => void;
 }) {
+  const isEwallet = value.bankType === "ewallet";
+  const allOptions = isEwallet ? MALAYSIAN_EWALLETS : MALAYSIAN_BANKS;
+  const maxLen = bankAccountMaxLength(value.bankType, value.bankName);
   return (
     <div className="space-y-4">
       <div className="space-y-1.5">
         <Label className="text-sm font-medium text-[var(--sera-ink)]/80">
+          Account type
+        </Label>
+        <Select
+          value={value.bankType as string}
+          onValueChange={(next) =>
+            onChange({
+              ...value,
+              bankType: next as "bank" | "ewallet",
+              bankName: "",
+              bankAccountNo: "",
+            })
+          }
+        >
+          <SelectTrigger className={field}>
+            <SelectValue placeholder="Bank or eWallet" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="bank">Bank account</SelectItem>
+            <SelectItem value="ewallet">eWallet</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-1.5">
+        <Label className="text-sm font-medium text-[var(--sera-ink)]/80">
           Bank name
         </Label>
-        <Input
-          className={field}
+        <Select
           value={value.bankName}
-          maxLength={80}
-          placeholder="Maybank, CIMB…"
-          onChange={(e) => onChange({ ...value, bankName: e.target.value })}
-        />
+          onValueChange={(next) =>
+            onChange({ ...value, bankName: next, bankAccountNo: "" })
+          }
+        >
+          <SelectTrigger className={field}>
+            <SelectValue placeholder="Select bank or eWallet" />
+          </SelectTrigger>
+          <SelectContent>
+            {allOptions.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
       <div className="space-y-1.5">
         <Label className="text-sm font-medium text-[var(--sera-ink)]/80">
@@ -182,7 +260,7 @@ function BankFields({
           className={`${field} tabular-nums`}
           value={value.bankAccountNo}
           inputMode="numeric"
-          maxLength={30}
+          maxLength={maxLen}
           placeholder="Digits only"
           onChange={(e) =>
             onChange({ ...value, bankAccountNo: e.target.value })
@@ -263,6 +341,7 @@ export default function StoreAffiliateClient() {
     null,
   );
   const [bank, setBank] = useState<BankForm>({
+    bankType: "bank",
     bankName: "",
     bankAccountNo: "",
     bankAccountName: "",
@@ -290,12 +369,17 @@ export default function StoreAffiliateClient() {
       if (!res.ok || !json) throw new Error(json?.error || "Could not load.");
       setData(json);
       const account: Account | null = json.affiliate;
-      if (account)
+      if (account) {
+        const isEwallet = MALAYSIAN_EWALLETS.some(
+          (e) => e.value === account.bankName,
+        );
         setBank({
+          bankType: isEwallet ? "ewallet" : "bank",
           bankName: account.bankName,
           bankAccountNo: account.bankAccountNo,
           bankAccountName: account.bankAccountName,
         });
+      }
     } catch (err: any) {
       setLoadError(err.message || "Could not load.");
     }
@@ -788,7 +872,11 @@ export default function StoreAffiliateClient() {
                       className="h-11 rounded-xl"
                       onClick={() => {
                         setEditBank(false);
+                        const isEwallet = MALAYSIAN_EWALLETS.some(
+                          (e) => e.value === affiliate.bankName,
+                        );
                         setBank({
+                          bankType: isEwallet ? "ewallet" : "bank",
                           bankName: affiliate.bankName,
                           bankAccountNo: affiliate.bankAccountNo,
                           bankAccountName: affiliate.bankAccountName,
