@@ -711,43 +711,47 @@ export default function StoreAffiliateClient() {
                 <Check className="h-5 w-5 text-[var(--sera-orange)]" />
               ) : null}
             </button>
-            {products === null ? (
-              <p className="col-span-full py-6 text-sm text-[var(--sera-muted)]">
-                Loading products…
-              </p>
-            ) : shownProducts.length === 0 ? (
-              <p className="col-span-full py-6 text-sm text-[var(--sera-muted)]">
-                No products found.
-              </p>
-            ) : (
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {shownProducts.map((product) => {
-                  const img = mediaUrl(product.imageUrl);
-                  const active = selectedProduct?.id === product.id;
-                  return (
-                    <button
-                      key={`${product.channel}-${product.id}`}
-                      type="button"
-                      onClick={() => setSelectedProduct(product)}
-                      className={`flex flex-col gap-2 rounded-xl border p-3 text-left ${active ? "border-[var(--sera-orange)] bg-white" : "border-[var(--sera-line)] bg-white/70 hover:border-[var(--sera-line)] hover:bg-white"}`}
-                    >
-                      <span className="flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-[var(--sera-paper)]">
-                        {img ? (
-                          <img
-                            src={img}
-                            alt=""
-                            className="h-full w-full object-contain"
-                          />
-                        ) : null}
-                      </span>
-                      <span className="line-clamp-2 block text-xs font-medium text-[var(--sera-ink)]">
-                        {product.name}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+            {selectedProduct ? (
+              <>
+                {products === null ? (
+                  <p className="col-span-full py-6 text-sm text-[var(--sera-muted)]">
+                    Loading products…
+                  </p>
+                ) : shownProducts.length === 0 ? (
+                  <p className="col-span-full py-6 text-sm text-[var(--sera-muted)]">
+                    No products found.
+                  </p>
+                ) : (
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {shownProducts.map((product) => {
+                      const img = mediaUrl(product.imageUrl);
+                      const active = selectedProduct?.id === product.id;
+                      return (
+                        <button
+                          key={`${product.channel}-${product.id}`}
+                          type="button"
+                          onClick={() => setSelectedProduct(product)}
+                          className={`flex flex-col gap-2 rounded-xl border p-3 text-left ${active ? "border-[var(--sera-orange)] bg-white" : "border-[var(--sera-line)] bg-white/70 hover:border-[var(--sera-line)] hover:bg-white"}`}
+                        >
+                          <span className="flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-[var(--sera-paper)]">
+                            {img ? (
+                              <img
+                                src={img}
+                                alt=""
+                                className="h-full w-full object-contain"
+                              />
+                            ) : null}
+                          </span>
+                          <span className="line-clamp-2 block text-xs font-medium text-[var(--sera-ink)]">
+                            {product.name}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            ) : null}
           </div>
           <div className="mt-5 space-y-3">
             <div className="rounded-xl border border-[var(--sera-line)] bg-[var(--sera-paper)] p-4">
