@@ -23,6 +23,7 @@ type Affiliate = {
   commissionPercent: number
   email: string
   phone: string
+  hasBankAccount: boolean
   bankName: string
   bankAccountNo: string
   bankAccountName: string
@@ -57,6 +58,8 @@ type Payout = {
   paidAt: string
 }
 type Data = {
+  canManageProgram: boolean
+  canRecordPayout: boolean
   settings: AffiliateProgramSettings
   affiliates: Affiliate[]
   commissions: Commission[]
@@ -268,8 +271,8 @@ export default function AffiliateProgramView() {
 
       {settings && !settings.enabled ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          The program is off: shoppers cannot join and links earn no commission. Turn it on in{' '}
-          <button onClick={() => setSection('settings')} className="font-medium underline">Settings</button>.
+          The program is off: shoppers cannot join and links earn no commission.
+          {data?.canManageProgram ? <>{' '}Turn it on in{' '}<button onClick={() => setSection('settings')} className="font-medium underline">Settings</button>.</> : null}
         </div>
       ) : null}
 
@@ -279,7 +282,7 @@ export default function AffiliateProgramView() {
           ['commissions', 'Commissions'],
           ['payouts', `Payouts${toPay.length ? ` (${toPay.length} to pay)` : ''}`],
           ['settings', 'Settings'],
-        ] as const).map(([value, text]) => (
+        ] as const).filter(([value]) => value !== 'settings' || data?.canManageProgram !== false).map(([value, text]) => (
           <button
             key={value}
             role="tab"
@@ -322,7 +325,7 @@ export default function AffiliateProgramView() {
                   <div className="font-medium text-[var(--sera-ink)]">{a.name}</div>
                   <div className="text-xs text-[var(--sera-muted)]">{a.code} · joined {day(a.appliedAt)}{a.source === 'staff' ? ' · added by staff' : ''}</div>
                   {a.notes ? <div className="text-xs text-[var(--sera-muted)]">{a.notes}</div> : null}
-                  {editing?.id === a.id ? (
+                  {data.canManageProgram && editing?.id === a.id ? (
                     <div className="mt-2 space-y-2 rounded-lg border border-[var(--sera-line)] bg-[var(--sera-mist)]/40 p-3">
                       <div className="flex flex-wrap gap-3 text-xs">
                         <label className="flex items-center gap-1.5">
@@ -359,7 +362,7 @@ export default function AffiliateProgramView() {
                 rm(a.balance.pending),
                 rm(a.balance.confirmed),
                 rm(a.balance.paid),
-                <div key="a" className="flex flex-wrap justify-end gap-1.5">
+                data.canManageProgram ? <div key="a" className="flex flex-wrap justify-end gap-1.5">
                   {a.status === 'pending' ? (
                     <>
                       <button className={primaryClass} disabled={busy} onClick={() => post({ action: 'review', id: a.id, decision: 'approve' }, `${a.name} approved.`)}>Approve</button>
@@ -381,7 +384,7 @@ export default function AffiliateProgramView() {
                     <button className={buttonClass} disabled={busy} onClick={() => post({ action: 'review', id: a.id, decision: 'reactivate' }, `${a.name} is active again.`)}>Make active</button>
                   ) : null}
                   <button className={buttonClass} onClick={() => setEditing({ id: a.id, mode: a.commissionMode, percent: String(a.commissionPercent), notes: a.notes })}>Edit</button>
-                </div>,
+                </div> : null,
               ])}
           />
         </div>
@@ -429,7 +432,9 @@ export default function AffiliateProgramView() {
       {data && section === 'payouts' && (
         <div className="space-y-5">
           <Panel title="To pay" hint={`Confirmed commission, paid by bank transfer.${settings && settings.minPayoutAmount > 0 ? ` Minimum ${rm(settings.minPayoutAmount)}.` : ''} Record the transfer after you send it.`}>
-            {toPay.length === 0 ? (
+            {!data.canRecordPayout ? (
+              <p className="text-sm text-[var(--sera-muted)]">A Finance Payment Approver must view bank details and record affiliate transfers.</p>
+            ) : toPay.length === 0 ? (
               <p className="text-sm text-[var(--sera-muted)]">Nothing confirmed to pay.</p>
             ) : (
               <div className="divide-y divide-[var(--sera-line)]">
@@ -440,17 +445,25 @@ export default function AffiliateProgramView() {
                       <div className="text-sm">
                         <div className="font-medium text-[var(--sera-ink)]">{a.name} <span className="text-xs text-[var(--sera-muted)]">{a.code}</span></div>
                         <div className="text-xs text-[var(--sera-muted)]">
-                          {a.bankName ? `${a.bankName} · ${a.bankAccountNo} · ${a.bankAccountName}` : 'No bank account saved'}
+                          {a.hasBankAccount ? `${a.bankName} · ${a.bankAccountNo} · ${a.bankAccountName}` : 'No bank account saved'}
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-semibold tabular-nums">{rm(a.balance.confirmed)}</span>
                         <input className={`${inputClass} w-44`} placeholder="Transfer reference" maxLength={120}
                           value={payRef[a.id] || ''} onChange={(e) => setPayRef({ ...payRef, [a.id]: e.target.value })} />
-                        <button className={primaryClass} disabled={busy || belowMin || !a.bankAccountNo || !(payRef[a.id] || '').trim()}
+                        <button className={primaryClass} disabled={busy || belowMin || !a.hasBankAccount || !(payRef[a.id] || '').trim()}
                           onClick={async () => {
                             if (!window.confirm(`Record a transfer of ${rm(a.balance.confirmed)} to ${a.name}?`)) return
-                            if (await post({ action: 'record_payout', affiliateId: a.id, reference: payRef[a.id] }, `Transfer to ${a.name} recorded.`)) {
+                            if (await post({
+                              action: 'record_payout',
+                              affiliateId: a.id,
+                              reference: payRef[a.id],
+                              expectedAmount: a.balance.confirmed,
+                              expectedBankName: a.bankName,
+                              expectedBankAccountNo: a.bankAccountNo,
+                              expectedBankAccountName: a.bankAccountName,
+                            }, `Transfer to ${a.name} recorded.`)) {
                               setPayRef({ ...payRef, [a.id]: '' })
                             }
                           }}>Record transfer</button>
@@ -462,7 +475,7 @@ export default function AffiliateProgramView() {
               </div>
             )}
           </Panel>
-          <Table
+          {data.canRecordPayout ? <Table
             head={[{ label: 'Paid' }, { label: 'Affiliate' }, { label: 'Bank' }, { label: 'Reference' }, { label: 'Orders', right: true }, { label: 'Amount', right: true }]}
             empty="No transfers recorded yet."
             rows={data.payouts.map((p) => [
@@ -473,11 +486,11 @@ export default function AffiliateProgramView() {
               String(p.count),
               rm(p.amount),
             ])}
-          />
+          /> : null}
         </div>
       )}
 
-      {data && form && section === 'settings' && (
+      {data && data.canManageProgram && form && section === 'settings' && (
         <div className="space-y-5">
           <Panel title="Program">
             <label className="flex items-center gap-2 text-sm">
@@ -505,7 +518,7 @@ export default function AffiliateProgramView() {
                   onChange={(e) => setForm({ ...form, attributionDays: e.target.value })} />
               </Field>
               <Field label="Confirm after delivery (days)" hint="Return window before commission can be paid.">
-                <input className={`${inputClass} w-full`} inputMode="numeric" value={form.confirmAfterDays}
+                <input className={`${inputClass} w-full`} inputMode="numeric" min={7} max={180} value={form.confirmAfterDays}
                   onChange={(e) => setForm({ ...form, confirmAfterDays: e.target.value })} />
               </Field>
               <Field label="Minimum payout (RM)">

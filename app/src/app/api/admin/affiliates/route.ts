@@ -9,8 +9,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { userAllowed } from '@/lib/security-access/operation'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { programSettingsFromRow, roundRm } from '@/lib/affiliate/program'
-import { isMissingAffiliateTable, syncAffiliateCommissions } from '@/lib/affiliate/server'
+import { maskAccountNo, programSettingsFromRow } from '@/lib/affiliate/program'
+import { isMissingAffiliateTable } from '@/lib/affiliate/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,7 +20,14 @@ function bad(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status })
 }
 
-async function requireAdmin() {
+type AdminActor = {
+  userId: string
+  organizationId: string | null
+  orgType: string | null
+  roleLevel: number | null
+}
+
+async function requireAdmin(): Promise<AdminActor | null> {
   const supabase = await createClient()
   const { data: { user }, error } = await supabase.auth.getUser()
   if (error || !user) return null
@@ -31,11 +38,21 @@ async function requireAdmin() {
     .eq('id', user.id)
     .single()
   if (!profile) return null
-  const orgType = (profile.organizations as any)?.org_type_code
-  const roleLevel = (profile.roles as any)?.role_level
-  // S&A decides for the admin's organization; the HQ level<=30 rule is the legacy evaluator.
-  if (!(await userAllowed(user.id, 'ecommerce.order.manage', () => orgType === 'HQ' && roleLevel != null && roleLevel <= 30 && !!profile.organization_id, { organizationId: profile.organization_id }))) return null
-  return { userId: user.id }
+  return {
+    userId: user.id,
+    organizationId: profile.organization_id || null,
+    orgType: (profile.organizations as any)?.org_type_code || null,
+    roleLevel: (profile.roles as any)?.role_level ?? null,
+  }
+}
+
+async function actorAllowed(actor: AdminActor, permission: string, legacyMaxRoleLevel: number) {
+  return userAllowed(
+    actor.userId,
+    permission,
+    () => actor.orgType === 'HQ' && actor.roleLevel != null && actor.roleLevel <= legacyMaxRoleLevel && !!actor.organizationId,
+    { organizationId: actor.organizationId },
+  )
 }
 
 function wholeNumber(raw: unknown, min: number, max: number): number | undefined {
@@ -59,11 +76,15 @@ function text(raw: unknown, max: number) {
   return typeof raw === 'string' ? raw.trim().slice(0, max) : ''
 }
 
-async function loadAll(admin: any) {
-  await syncAffiliateCommissions(admin)
-  const [settingsRes, affiliatesRes, commissionsRes, payoutsRes, categoriesRes, productsRes] = await Promise.all([
+async function loadAll(admin: any, canManageProgram: boolean, canRecordPayout: boolean) {
+  const syncRes = await admin.rpc('affiliate_sync_commissions')
+  if (syncRes.error && isMissingAffiliateTable(syncRes.error)) return { missing: true }
+  if (syncRes.error) throw new Error(`Affiliate ledger sync failed: ${syncRes.error.message}`)
+
+  const [settingsRes, affiliatesRes, totalsRes, commissionsRes, payoutsRes, categoriesRes, productsRes] = await Promise.all([
     admin.from('affiliate_program_settings').select('*').eq('id', 1).maybeSingle(),
     admin.from('outdoor_affiliates').select('*').eq('kind', 'affiliate').order('created_at', { ascending: false }),
+    admin.rpc('affiliate_commission_totals', { p_affiliate_id: null }),
     admin
       .from('affiliate_commissions')
       .select('id, affiliate_id, order_ref, sales_channel, sub_id, eligible_amount, commission_percent, commission_amount, status, ordered_at, delivered_at, confirmed_at, payout_id')
@@ -73,17 +94,19 @@ async function loadAll(admin: any) {
     admin.from('product_categories').select('id, category_name').order('category_name'),
     admin.from('products').select('id, product_name, is_vape, category_id, is_active').eq('is_active', true).order('product_name'),
   ])
-  if (settingsRes.error && isMissingAffiliateTable(settingsRes.error)) return { missing: true }
+  const affiliateResults = [settingsRes, affiliatesRes, totalsRes, commissionsRes, payoutsRes]
+  if (affiliateResults.some((result) => result.error && isMissingAffiliateTable(result.error))) return { missing: true }
+  const failed = [...affiliateResults, categoriesRes, productsRes].find((result) => result.error)
+  if (failed?.error) throw new Error(failed.error.message)
 
   const balances = new Map<string, { pending: number; confirmed: number; paid: number; orders: number }>()
-  for (const c of commissionsRes.data || []) {
-    const b = balances.get(c.affiliate_id) || { pending: 0, confirmed: 0, paid: 0, orders: 0 }
-    const amount = Number(c.commission_amount) || 0
-    if (c.status === 'pending') b.pending = roundRm(b.pending + amount)
-    if (c.status === 'confirmed') b.confirmed = roundRm(b.confirmed + amount)
-    if (c.status === 'paid') b.paid = roundRm(b.paid + amount)
-    if (c.status !== 'cancelled') b.orders += 1
-    balances.set(c.affiliate_id, b)
+  for (const total of totalsRes.data || []) {
+    balances.set(String(total.affiliate_id), {
+      pending: Number(total.pending) || 0,
+      confirmed: Number(total.confirmed) || 0,
+      paid: Number(total.paid) || 0,
+      orders: Number(total.orders) || 0,
+    })
   }
   const affiliates = (affiliatesRes.data || []).map((a: any) => ({
     id: String(a.id),
@@ -96,15 +119,22 @@ async function loadAll(admin: any) {
     commissionPercent: Number(a.commission_percent) || 0,
     email: a.contact_email || '',
     phone: a.contact_phone || '',
-    bankName: a.bank_name || '',
-    bankAccountNo: a.bank_account_no || '',
-    bankAccountName: a.bank_account_name || '',
+    hasBankAccount: Boolean(
+      String(a.bank_name || '').trim()
+      && String(a.bank_account_no || '').trim()
+      && String(a.bank_account_name || '').trim(),
+    ),
+    bankName: canRecordPayout ? a.bank_name || '' : '',
+    bankAccountNo: canRecordPayout ? a.bank_account_no || '' : maskAccountNo(a.bank_account_no),
+    bankAccountName: canRecordPayout ? a.bank_account_name || '' : '',
     notes: a.notes || '',
     reviewNote: a.review_note || '',
     appliedAt: a.applied_at || a.created_at,
     balance: balances.get(String(a.id)) || { pending: 0, confirmed: 0, paid: 0, orders: 0 },
   }))
   return {
+    canManageProgram,
+    canRecordPayout,
     settings: programSettingsFromRow(settingsRes.data),
     affiliates,
     commissions: (commissionsRes.data || []).map((c: any) => ({
@@ -120,7 +150,7 @@ async function loadAll(admin: any) {
       orderedAt: c.ordered_at,
       deliveredAt: c.delivered_at,
     })),
-    payouts: (payoutsRes.data || []).map((p: any) => ({
+    payouts: (canRecordPayout ? payoutsRes.data || [] : []).map((p: any) => ({
       id: String(p.id),
       affiliateId: String(p.affiliate_id),
       amount: Number(p.amount) || 0,
@@ -146,7 +176,12 @@ export async function GET() {
   try {
     const staff = await requireAdmin()
     if (!staff) return bad('Unauthorized', 401)
-    const data = await loadAll(createAdminClient())
+    const [canManageProgram, canRecordPayout] = await Promise.all([
+      actorAllowed(staff, 'ecommerce.store.manage', 20),
+      actorAllowed(staff, 'finance.payment.approve', 20),
+    ])
+    if (!canManageProgram && !canRecordPayout) return bad('Forbidden', 403)
+    const data = await loadAll(createAdminClient(), canManageProgram, canRecordPayout)
     if ((data as any).missing) return bad('The affiliate program is not set up on this database yet.', 503)
     return NextResponse.json(data)
   } catch (err) {
@@ -159,21 +194,29 @@ export async function POST(request: NextRequest) {
   try {
     const staff = await requireAdmin()
     if (!staff) return bad('Unauthorized', 401)
-    const admin: any = createAdminClient()
     const body = await request.json().catch(() => ({}))
+    const action = String(body?.action || '')
+    const requiredPermission = action === 'record_payout' ? 'finance.payment.approve' : 'ecommerce.store.manage'
+    if (!(await actorAllowed(staff, requiredPermission, 20))) {
+      return action === 'record_payout'
+        ? bad('A finance payment approver must record affiliate transfers.', 403)
+        : bad('Forbidden', 403)
+    }
+    const admin: any = createAdminClient()
     const now = new Date().toISOString()
 
     if (body?.action === 'save_settings') {
       const commission = decimal(body.commissionPercent, 0, 100, { allowNull: true })
       const attribution = wholeNumber(body.attributionDays, 1, 365)
-      const confirm = wholeNumber(body.confirmAfterDays, 0, 180)
+      const confirm = wholeNumber(body.confirmAfterDays, 7, 180)
       const minPayout = decimal(body.minPayoutAmount, 0, 100000)
       if (commission === undefined) return bad('Commission must be 0 to 100%.')
       if (attribution === undefined) return bad('Link window must be 1 to 365 days.')
-      if (confirm === undefined) return bad('Days after delivery must be 0 to 180.')
+      if (confirm === undefined) return bad('Days after delivery must be 7 to 180 (after the refund window).')
       if (minPayout === undefined || minPayout === null) return bad('Minimum payout must be RM 0 or more.')
       const enabled = body.enabled === true
       if (enabled && commission === null) return bad('Set the commission % before switching the program on.')
+      const nextTerms = text(body.terms, 4000)
       const { error } = await admin.from('affiliate_program_settings').upsert({
         id: 1,
         enabled,
@@ -185,7 +228,7 @@ export async function POST(request: NextRequest) {
         exclude_vape: body.excludeVape !== false,
         excluded_category_ids: uuidList(body.excludedCategoryIds),
         excluded_product_ids: uuidList(body.excludedProductIds),
-        terms: text(body.terms, 4000) || null,
+        terms: nextTerms || null,
         updated_at: now,
         updated_by: staff.userId,
       })
@@ -195,7 +238,8 @@ export async function POST(request: NextRequest) {
 
     const id = text(body?.id ?? body?.affiliateId, 64)
     if (!UUID.test(id)) return bad('Choose an affiliate.')
-    const { data: row } = await admin.from('outdoor_affiliates').select('*').eq('id', id).maybeSingle()
+    const { data: row, error: rowError } = await admin.from('outdoor_affiliates').select('*').eq('id', id).maybeSingle()
+    if (rowError) return bad('Could not load the affiliate.', 500)
     if (!row || row.kind !== 'affiliate') return bad('Affiliate not found.', 404)
 
     if (body.action === 'review') {
@@ -237,27 +281,24 @@ export async function POST(request: NextRequest) {
     if (body.action === 'record_payout') {
       const reference = text(body.reference, 120)
       if (!reference) return bad('Enter the bank transfer reference.')
-      const { data: settingsRow } = await admin.from('affiliate_program_settings').select('*').eq('id', 1).maybeSingle()
-      const settings = programSettingsFromRow(settingsRow)
-      await syncAffiliateCommissions(admin)
-      const { data: due } = await admin
-        .from('affiliate_commissions')
-        .select('commission_amount')
-        .eq('affiliate_id', id)
-        .eq('status', 'confirmed')
-        .is('payout_id', null)
-      const amount = roundRm((due || []).reduce((sum: number, c: any) => sum + (Number(c.commission_amount) || 0), 0))
-      if (amount <= 0) return bad('Nothing confirmed to pay yet.')
-      if (amount < settings.minPayoutAmount) return bad(`Confirmed balance is below the minimum payout (RM ${settings.minPayoutAmount.toFixed(2)}).`)
-      if (!row.bank_account_no) return bad('This affiliate has no bank account saved.')
+      const expectedAmount = decimal(body.expectedAmount, 0.01, 100000000)
+      if (expectedAmount === undefined || expectedAmount === null) return bad('Refresh the payout list before recording this transfer.', 409)
       const { data, error } = await admin.rpc('affiliate_record_payout', {
         p_affiliate_id: id,
         p_reference: reference,
         p_notes: text(body.notes, 500),
         p_actor: staff.userId,
+        p_expected_amount: expectedAmount,
+        p_expected_bank_name: text(body.expectedBankName, 80),
+        p_expected_bank_account_no: text(body.expectedBankAccountNo, 20),
+        p_expected_bank_account_name: text(body.expectedBankAccountName, 120),
       })
       if (error) {
         if (/nothing_to_pay/.test(String(error.message))) return bad('Nothing confirmed to pay yet.')
+        if (/snapshot_changed/.test(String(error.message))) return bad('The amount or bank details changed. Refresh before recording the transfer.', 409)
+        if (/below_minimum/.test(String(error.message))) return bad('The confirmed balance is below the minimum payout.', 409)
+        if (/bank_required/.test(String(error.message))) return bad('This affiliate has no complete bank account saved.', 409)
+        if (/affiliate_sync|ledger sync/i.test(String(error.message))) return bad('Could not reconcile the commission ledger. No transfer was recorded.', 503)
         return bad(error.message, 500)
       }
       return NextResponse.json({ ok: true, payout: data })

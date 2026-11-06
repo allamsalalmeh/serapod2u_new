@@ -179,8 +179,9 @@ export const CUSTOMER_GROWTH_DESTINATIONS: Record<string, NavRequirement> = {
   'ecommerce/payment-gateway': { org: PAYMENT_GATEWAY },
   // Same screen under Settings: same privileged permission (not the general Settings entry).
   'settings/payment-gateway': { org: PAYMENT_GATEWAY },
-  // Settings, approvals and payouts: its API (admin/affiliates) decides with ecommerce.order.manage only.
-  'ecommerce/affiliates': { org: ['ecommerce.order.manage'] },
+  // Program administration and payout approval are separate duties. Either role can open the shared read-only view;
+  // the API authorizes every mutation with its own permission and only exposes bank details to Finance approvers.
+  'ecommerce/affiliates': { org: ['ecommerce.store.manage', 'finance.payment.approve'] },
 }
 
 /**

@@ -39,6 +39,7 @@ type Program = {
   confirmAfterDays: number
   minPayoutAmount: number
   terms: string
+  termsVersion: number
 }
 
 type Account = {
@@ -50,6 +51,7 @@ type Account = {
   bankName: string
   bankAccountNo: string
   bankAccountName: string
+  termsVersionAccepted: number | null
 }
 
 type Commission = {
@@ -85,6 +87,7 @@ const SIGNED_OUT_PROGRAM: Program = {
   confirmAfterDays: 7,
   minPayoutAmount: 0,
   terms: '',
+  termsVersion: 1,
 }
 
 const panel = 'rounded-3xl border border-[var(--sera-line)] bg-white shadow-[0_18px_40px_-30px_rgba(20,18,16,0.35)]'
@@ -423,7 +426,9 @@ export default function StoreAffiliateClient() {
     void load()
   }, [load])
 
-  const approved = data?.affiliate?.status === 'approved' && data.program.open
+  const approved = data?.affiliate?.status === 'approved'
+    && data.program.open
+    && data.affiliate.termsVersionAccepted === data.program.termsVersion
 
   useEffect(() => {
     if (!approved || products) return
@@ -484,6 +489,7 @@ export default function StoreAffiliateClient() {
 
   const { program, affiliate } = data
   const rate = percentText(program.commissionPercent)
+  const needsTermsAcceptance = Boolean(affiliate && affiliate.status !== 'rejected' && affiliate.termsVersionAccepted !== program.termsVersion)
 
   if (!data.signedIn) {
     return (
@@ -514,6 +520,21 @@ export default function StoreAffiliateClient() {
         <Notice tone={message.ok ? 'ok' : 'error'} icon={message.ok ? <BadgeCheck className="h-5 w-5" /> : <ShieldAlert className="h-5 w-5" />}>
           {message.text}
         </Notice>
+      ) : null}
+
+      {needsTermsAcceptance && program.open ? (
+        <section className={`${panel} p-6 sm:p-8`}>
+          <SectionTitle eyebrow="Updated terms" title="Accept the current affiliate terms" hint="Your links pause until you accept the latest program terms." />
+          {program.terms ? <div className="mt-4 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-2xl border border-[var(--sera-line)] bg-[var(--sera-surface)] p-4 text-sm text-[var(--sera-muted)]">{program.terms}</div> : null}
+          <label className="mt-4 flex items-start gap-2 text-sm text-[var(--sera-ink)]">
+            <input type="checkbox" className="mt-0.5 h-4 w-4" checked={agree} onChange={(event) => setAgree(event.target.checked)} />
+            <span>I agree to the current affiliate program terms.</span>
+          </label>
+          <button className={`${primary} mt-4`} disabled={busy || !agree}
+            onClick={() => post({ action: 'accept_terms', agree }, 'Updated terms accepted. Your links are active again.')}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Accept updated terms
+          </button>
+        </section>
       ) : null}
 
       {showJoin && program.open ? (
@@ -712,7 +733,9 @@ export default function StoreAffiliateClient() {
                   <CopyButton text={link} label="Copy link" className={`${primary} h-11`} />
                   <button type="button" className={secondary} disabled={!link}
                     onClick={() => {
-                      if (typeof navigator !== 'undefined' && 'share' in navigator) navigator.share({ url: link }).catch(() => undefined)
+                      if (typeof navigator === 'undefined') return
+                      const share = navigator.share
+                      if (typeof share === 'function') share.call(navigator, { url: link }).catch(() => undefined)
                       else navigator.clipboard?.writeText(link).catch(() => undefined)
                     }}>
                     <Share2 className="h-4 w-4" /> Share

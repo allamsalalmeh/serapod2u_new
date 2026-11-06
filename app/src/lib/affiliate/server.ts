@@ -1,11 +1,11 @@
 import { createClient } from '@/lib/supabase/server'
 import { normalizeAffiliateCode } from '@/lib/outdoor/sales-tools'
+import { verifyAffiliateRefToken } from '@/lib/affiliate/ref-token'
 import {
   DEFAULT_AFFILIATE_PROGRAM_SETTINGS,
   eligibleGoodsAmount,
   HOST_REF_DAYS,
   isSelfReferral,
-  normalizeSubId,
   programIsLive,
   programSettingsFromRow,
   withinAttribution,
@@ -55,6 +55,7 @@ type CheckoutAffiliateInput = {
   code: unknown
   subId: unknown
   clickedAt: unknown
+  refToken: unknown
   buyer: { email?: string | null; phone?: string | null }
   lines: Array<{ variant_id: string; subtotal: number }>
   variants: Array<{ id: string; product_id?: string | null }>
@@ -105,7 +106,9 @@ export async function resolveCheckoutAffiliate(supabase: any, input: CheckoutAff
     if (!settings.enabled) {
       return input.channel === 'outdoor' && row.commission_mode !== 'program' ? fallback : none
     }
-    if (!withinAttribution(input.clickedAt, settings.attributionDays)) return none
+    if (row.source === 'self' && Number(row.terms_version_accepted) !== settings.termsVersion) return none
+    const referral = verifyAffiliateRefToken(input.refToken, code, settings.attributionDays)
+    if (!referral) return none
     const buyer = { ...input.buyer, userId: await signedInUserId() }
     if (isSelfReferral(row, buyer)) return none
 
@@ -122,7 +125,7 @@ export async function resolveCheckoutAffiliate(supabase: any, input: CheckoutAff
     return {
       affiliate: { id: String(row.id), code: String(row.code) },
       columns: {
-        affiliate_sub_id: normalizeSubId(input.subId) || null,
+        affiliate_sub_id: referral.sub || null,
         affiliate_commission_percent: percent,
         affiliate_eligible_amount: eligible,
       },
