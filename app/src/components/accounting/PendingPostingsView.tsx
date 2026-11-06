@@ -36,6 +36,7 @@ import {
 import { POSTING_TYPE_COLORS, getPostingType } from '@/modules/finance/postingMap'
 import { useSaCapability } from '@/hooks/useSaCapability'
 import { defaultPostingDate, financeToday, isValidPostingDate } from '@/modules/finance/postingDate'
+import { MAX_REFERENCE_LENGTH, toAmount } from '@/modules/finance/supplierPayment'
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -63,6 +64,7 @@ interface PendingPosting {
   amount: number
   supplier_name: string
   buyer_name: string
+  paid_amount?: number
 }
 
 interface PostingPreview {
@@ -71,6 +73,13 @@ interface PostingPreview {
   document_type: string
   total_amount: number
   description: string
+  // Supplier payments only: the actual amount is entered at posting.
+  is_payment?: boolean
+  stage?: 'ADVANCE' | 'SETTLEMENT'
+  requested_amount?: number
+  paid_on_document?: number
+  remaining_requested?: number
+  max_amount?: number
   lines: {
     account_code: string
     account_name: string
@@ -98,6 +107,15 @@ const POSTING_ICONS: Record<string, React.ElementType> = {
   SUPPLIER_DEPOSIT_PAYMENT: ArrowUpFromLine,
   SUPPLIER_INVOICE_RECOGNITION: FileText,
   SUPPLIER_BALANCE_PAYMENT: Wallet,
+}
+
+interface BankAccountOption {
+  id: string
+  account_name: string
+  bank_name: string
+  is_active: boolean
+  is_default: boolean
+  gl_account: { code: string; name: string } | null
 }
 
 function formatCurrency(amount: number) {
@@ -138,6 +156,37 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
   const today = financeToday()
   const postingDateValid = isValidPostingDate(postingDate) && postingDate <= today
 
+  // Actual payment (supplier deposit / balance documents)
+  const [bankAccounts, setBankAccounts] = useState<BankAccountOption[]>([])
+  const [paymentAmount, setPaymentAmount] = useState('')
+  const [paymentBankId, setPaymentBankId] = useState('')
+  const [paymentReference, setPaymentReference] = useState('')
+  const [closesDocument, setClosesDocument] = useState(true)
+  const isPayment = !!postingPreview?.is_payment
+  const paymentAmountValue = toAmount(paymentAmount)
+  const paymentMax = Number(postingPreview?.max_amount ?? 0)
+  const paymentAmountValid =
+    !isPayment || (Number.isFinite(paymentAmountValue) && paymentAmountValue > 0 && paymentAmountValue <= paymentMax)
+  const selectedBank = bankAccounts.find((b) => b.id === paymentBankId) || null
+
+  // For a payment, the preview shows the amount typed and the bank chosen.
+  const previewLines = useMemo(() => {
+    const lines = postingPreview?.lines || []
+    if (!isPayment) return lines
+    const amount = Number.isFinite(paymentAmountValue) ? paymentAmountValue : 0
+    return lines.map((line) =>
+      line.debit > 0
+        ? { ...line, debit: amount }
+        : {
+            ...line,
+            credit: amount,
+            ...(selectedBank?.gl_account
+              ? { account_code: selectedBank.gl_account.code, account_name: selectedBank.gl_account.name }
+              : {}),
+          }
+    )
+  }, [postingPreview, isPayment, paymentAmountValue, selectedBank])
+
   // Batch posting
   const [batchPosting, setBatchPosting] = useState(false)
   const [batchConfirmOpen, setBatchConfirmOpen] = useState(false)
@@ -175,6 +224,19 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
   useEffect(() => {
     loadPendingPostings()
   }, [loadPendingPostings])
+
+  // Bank accounts for the actual-payment form. Without access the default bank is used.
+  useEffect(() => {
+    if (!canPost) return
+    let cancelled = false
+    fetch('/api/accounting/cash/bank-accounts')
+      .then((r) => (r.ok ? r.json() : { accounts: [] }))
+      .then((data) => {
+        if (!cancelled) setBankAccounts((data.accounts || []).filter((a: BankAccountOption) => a.is_active))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [canPost])
 
   // ── Client-side Filtering ─────────────────────────────────────
 
@@ -264,6 +326,13 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
       if (response.ok) {
         const data = await response.json()
         setPostingPreview(data)
+        if (data?.is_payment) {
+          // Default: what remains requested on this document, to the default bank.
+          setPaymentAmount(String(Number(data.total_amount || 0).toFixed(2)))
+          setPaymentReference('')
+          setClosesDocument(true)
+          setPaymentBankId((bankAccounts.find((b) => b.is_default) || bankAccounts[0])?.id || '')
+        }
       } else {
         const data = await response.json()
         toast({ title: 'Error', description: data.error || 'Failed to load preview', variant: 'destructive' })
@@ -280,7 +349,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
   // ── Single Post ───────────────────────────────────────────────
 
   const handlePostSingle = async () => {
-    if (!selectedPending || !canPost || !postingDateValid) return
+    if (!selectedPending || !canPost || !postingDateValid || !paymentAmountValid) return
     try {
       setPreviewLoading(true)
       const response = await fetch('/api/accounting/posting', {
@@ -290,6 +359,14 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
           documentType: selectedPending.gl_doc_type,
           documentId: selectedPending.document_id,
           postingDate,
+          ...(isPayment
+            ? {
+                amount: paymentAmountValue,
+                bankAccountId: paymentBankId || null,
+                reference: paymentReference,
+                closesDocument,
+              }
+            : {}),
         }),
       })
       const data = await response.json()
@@ -586,6 +663,11 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                           </TableCell>
                           <TableCell className="text-right font-mono text-sm">
                             {pending.amount ? formatCurrency(Number(pending.amount)) : '-'}
+                            {Number(pending.paid_amount) > 0 && (
+                              <span className="block text-xs text-muted-foreground font-sans">
+                                paid {formatCurrency(Number(pending.paid_amount))}
+                              </span>
+                            )}
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center justify-center gap-1">
@@ -688,8 +770,10 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                   </p>
                 </div>
                 <div>
-                  <Label className="text-xs text-muted-foreground">Total Amount</Label>
-                  <p className="font-mono text-sm font-medium">{formatCurrency(postingPreview.total_amount)}</p>
+                  <Label className="text-xs text-muted-foreground">{isPayment ? 'Amount Paid' : 'Total Amount'}</Label>
+                  <p className="font-mono text-sm font-medium">
+                    {formatCurrency(isPayment ? (Number.isFinite(paymentAmountValue) ? paymentAmountValue : 0) : postingPreview.total_amount)}
+                  </p>
                 </div>
               </div>
 
@@ -699,7 +783,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                   <p className="text-sm">{postingPreview.description}</p>
                 </div>
                 <div>
-                  <Label htmlFor="posting-date" className="text-xs text-muted-foreground">Posting Date</Label>
+                  <Label htmlFor="posting-date" className="text-xs text-muted-foreground">{isPayment ? 'Payment Date' : 'Posting Date'}</Label>
                   <Input
                     id="posting-date"
                     type="date"
@@ -716,6 +800,90 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                 </div>
               </div>
 
+              {/* Actual payment (supplier deposit / balance) */}
+              {isPayment && (
+                <div className="rounded-lg border p-3 space-y-3 bg-muted/20">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    <div>
+                      <p className="text-muted-foreground">Requested (terms)</p>
+                      <p className="font-mono">{formatCurrency(Number(postingPreview.requested_amount || 0))}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Paid on this document</p>
+                      <p className="font-mono">{formatCurrency(Number(postingPreview.paid_on_document || 0))}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Remaining requested</p>
+                      <p className="font-mono">{formatCurrency(Number(postingPreview.remaining_requested || 0))}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Unpaid on order</p>
+                      <p className="font-mono">{formatCurrency(paymentMax)}</p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {postingPreview.stage === 'ADVANCE'
+                      ? 'The supplier invoice is not posted yet, so this payment is an advance (Supplier Deposits).'
+                      : 'The supplier invoice is posted, so this payment settles Accounts Payable.'}
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <Label htmlFor="payment-amount" className="text-xs text-muted-foreground">Amount Actually Paid (MYR)</Label>
+                      <Input
+                        id="payment-amount"
+                        type="number"
+                        inputMode="decimal"
+                        min="0.01"
+                        step="0.01"
+                        max={paymentMax}
+                        value={paymentAmount}
+                        onChange={(e) => setPaymentAmount(e.target.value)}
+                        className="h-8 text-sm mt-1 font-mono"
+                      />
+                      {!paymentAmountValid && (
+                        <p className="text-xs mt-1 text-red-600">
+                          Enter an amount above zero and at most {formatCurrency(paymentMax)}.
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <Label htmlFor="payment-bank" className="text-xs text-muted-foreground">Paid From</Label>
+                      {bankAccounts.length > 0 ? (
+                        <Select value={paymentBankId} onValueChange={setPaymentBankId}>
+                          <SelectTrigger id="payment-bank" className="h-8 text-sm mt-1">
+                            <SelectValue placeholder="Default bank account" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {bankAccounts.map((b) => (
+                              <SelectItem key={b.id} value={b.id}>
+                                {b.account_name}{b.gl_account ? ` (${b.gl_account.code})` : ''}{b.is_default ? ' – default' : ''}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <p className="text-sm mt-2 text-muted-foreground">Default bank account</p>
+                      )}
+                    </div>
+                    <div>
+                      <Label htmlFor="payment-reference" className="text-xs text-muted-foreground">Reference</Label>
+                      <Input
+                        id="payment-reference"
+                        value={paymentReference}
+                        maxLength={MAX_REFERENCE_LENGTH}
+                        placeholder="Bank / transfer reference"
+                        onChange={(e) => setPaymentReference(e.target.value)}
+                        className="h-8 text-sm mt-1"
+                      />
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox checked={closesDocument} onCheckedChange={(v) => setClosesDocument(v === true)} />
+                    Last payment on this document (it leaves Pending Postings)
+                  </label>
+                </div>
+              )}
+
               <Separator />
 
               {/* Journal lines preview */}
@@ -731,7 +899,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {postingPreview.lines?.map((line: PostingPreview['lines'][0], idx: number) => (
+                      {previewLines.map((line: PostingPreview['lines'][0], idx: number) => (
                         <TableRow key={idx}>
                           <TableCell>
                             <span className="font-mono text-sm">{line.account_code}</span>
@@ -761,7 +929,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                   Cancel
                 </Button>
                 {canPost && (
-                  <Button onClick={handlePostSingle} disabled={previewLoading || !postingDateValid} className="bg-emerald-600 hover:bg-emerald-700">
+                  <Button onClick={handlePostSingle} disabled={previewLoading || !postingDateValid || !paymentAmountValid} className="bg-emerald-600 hover:bg-emerald-700">
                     {previewLoading ? (
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     ) : (
@@ -800,6 +968,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                     <li>Create {selectedIds.size} GL journal entries</li>
                     <li>Each posting is idempotent (safe to retry)</li>
                     <li>Post each document on its own document date</li>
+                    <li>Post supplier payments at the remaining requested amount, from the default bank (open a payment to enter a different amount)</li>
                     <li>Fail for any document dated in a closed period</li>
                   </ul>
                 </div>

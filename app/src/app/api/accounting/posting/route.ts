@@ -2,6 +2,7 @@ import { financeAllowed } from '@/lib/security-access/finance'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { financeToday, isValidPostingDate } from '@/modules/finance/postingDate'
+import { isSupplierPaymentType, parseSupplierPaymentInput, type SupplierPaymentInput } from '@/modules/finance/supplierPayment'
 
 /**
  * GET /api/accounting/posting/preview
@@ -102,13 +103,34 @@ export async function POST(request: Request) {
       }
     }
 
-    // Call the post_document_to_gl RPC function
-    // Using 'any' since RPC not in generated types yet
-    const { data, error } = await (supabase as any).rpc('post_document_to_gl', {
-      p_document_type: documentType,
-      p_document_id: documentId,
-      p_posting_date: postingDate || today
-    })
+    // A supplier payment sent with an amount is posted at the amount actually paid
+    // (partial payments allowed). Without one (batch posting), post_document_to_gl
+    // posts the remaining requested amount to the default bank.
+    const isActualPayment = isSupplierPaymentType(documentType) && body.amount !== undefined
+    let payment: SupplierPaymentInput | null = null
+    if (isActualPayment) {
+      const parsed = parseSupplierPaymentInput(body)
+      if (!parsed.ok) {
+        return NextResponse.json({ error: parsed.error }, { status: 400 })
+      }
+      payment = parsed.value
+    }
+
+    // Using 'any' since the RPCs are not in generated types yet
+    const { data, error } = payment
+      ? await (supabase as any).rpc('fin_post_supplier_payment', {
+          p_document_id: documentId,
+          p_amount: payment.amount,
+          p_payment_date: postingDate || today,
+          p_bank_account_id: payment.bankAccountId,
+          p_reference: payment.reference,
+          p_closes_document: payment.closesDocument
+        })
+      : await (supabase as any).rpc('post_document_to_gl', {
+          p_document_type: documentType,
+          p_document_id: documentId,
+          p_posting_date: postingDate || today
+        })
 
     if (error) {
       console.error('Error posting to GL:', error)
