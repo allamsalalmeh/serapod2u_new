@@ -381,7 +381,7 @@ export default function DefaultAccountsSettings({ userProfile }: DefaultAccounts
             </div>
             <div className="flex gap-2">
               <span className="font-medium text-gray-700 w-40">Supplier Deposits:</span>
-              <span>Debited for 30/70 or 50/50 deposit payments, cleared on final payment</span>
+              <span>Debited for advances actually paid before the supplier invoice, applied when the invoice is posted</span>
             </div>
             <div className="flex gap-2">
               <span className="font-medium text-gray-700 w-40">Cash/Bank:</span>

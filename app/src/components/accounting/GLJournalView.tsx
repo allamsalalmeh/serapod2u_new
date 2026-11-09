@@ -70,6 +70,9 @@ interface Journal {
   reversal_journal_number?: string | null
   reversed_journal_id?: string | null
   reversed_journal_number?: string | null
+  created_by_id?: string | null
+  posted_by_id?: string | null
+  last_edited_by_id?: string | null
 }
 
 interface JournalLine {
@@ -139,7 +142,8 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
   const [pendingTotal, setPendingTotal] = useState(0)
 
   // Filters
-  const [statusFilter, setStatusFilter] = useState<string>('POSTED')
+  // All statuses by default, so manual journal drafts stay visible.
+  const [statusFilter, setStatusFilter] = useState<string>('')
   const [typeFilter, setTypeFilter] = useState<string>('')
   const [fromDate, setFromDate] = useState<string>('')
   const [toDate, setToDate] = useState<string>('')
@@ -168,6 +172,8 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
   const [editingDraft, setEditingDraft] = useState<ManualJournalDraft | null>(null)
   const [reverseTarget, setReverseTarget] = useState<{ id: string; journal_number: string; journal_date: string } | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+  useEffect(() => { setActionError(null) }, [selectedJournal])
 
   const openNewJournal = () => {
     setEditingDraft(null)
@@ -196,7 +202,7 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
       })
       const data = await res.json()
       if (!res.ok || !data.success) {
-        toast({ title: 'Cannot post', description: data.error || 'Failed to post the journal', variant: 'destructive' })
+        setActionError(data.error || 'Failed to post the journal')
         return
       }
       toast({ title: 'Journal posted', description: `Journal ${data.journal_number}` })
@@ -213,7 +219,7 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
       const res = await fetch(`/api/accounting/journals/${journalId}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok || !data.success) {
-        toast({ title: 'Cannot delete', description: data.error || 'Failed to delete the draft', variant: 'destructive' })
+        setActionError(data.error || 'Failed to delete the draft')
         return
       }
       toast({ title: 'Draft deleted' })
@@ -860,9 +866,15 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
               {(() => {
                 const j = selectedJournal.journal
                 const isDraft = j.is_manual && j.status === 'DRAFT'
+                // Segregation of duties: whoever created, edited or posted a journal cannot post or reverse it.
+                const ownJournal = [j.created_by_id, j.posted_by_id, j.last_edited_by_id].includes(userProfile.id)
                 const reversible = canReverse && canReverseJournal(j)
                 if (!(isDraft && canPost) && !reversible) return null
                 return (
+                  <>
+                  {actionError && (
+                    <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{actionError}</div>
+                  )}
                   <div className="flex justify-end gap-3 border-t pt-4">
                     {isDraft && canPost && (
                       <>
@@ -874,15 +886,26 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
                           <Pencil className="w-4 h-4 mr-2" />
                           Edit
                         </Button>
-                        <Button onClick={() => postDraft(j.id)} disabled={actionLoading}>
+                        {ownJournal && (
+                          <span className="self-center text-sm text-gray-500">
+                            You created or edited this draft, so another user must post it.
+                          </span>
+                        )}
+                        <Button onClick={() => postDraft(j.id)} disabled={actionLoading || ownJournal}>
                           {actionLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
                           Post Journal
                         </Button>
                       </>
                     )}
+                    {reversible && ownJournal && (
+                      <span className="self-center text-sm text-gray-500">
+                        You created, edited or posted this journal, so another user must reverse it.
+                      </span>
+                    )}
                     {reversible && (
                       <Button
                         variant="destructive"
+                        disabled={ownJournal}
                         onClick={() => {
                           setReverseTarget({ id: j.id, journal_number: j.journal_number, journal_date: j.journal_date })
                           setSelectedJournal(null)
@@ -893,6 +916,7 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
                       </Button>
                     )}
                   </div>
+                  </>
                 )
               })()}
             </div>

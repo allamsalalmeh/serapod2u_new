@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from '@/components/ui/use-toast'
-import { Loader2, Plus, Trash2, Save, CheckCircle2 } from 'lucide-react'
+import { Loader2, Plus, Trash2, Save } from 'lucide-react'
 import { financeToday } from '@/modules/finance/postingDate'
 import { journalTotals } from '@/modules/finance/manualJournal'
 
@@ -51,9 +51,11 @@ export default function ManualJournalDialog({ open, draft, onClose, onSaved }: M
   const [reference, setReference] = useState('')
   const [lines, setLines] = useState<LineDraft[]>([emptyLine(), emptyLine()])
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!open) return
+    setError(null)
     if (draft) {
       setJournalDate(draft.journal_date)
       setDescription(draft.description)
@@ -82,6 +84,8 @@ export default function ManualJournalDialog({ open, draft, onClose, onSaved }: M
   }, [open, accounts.length])
 
   const totals = useMemo(() => journalTotals(lines), [lines])
+  const missingDescription = description.trim() === ''
+  const canSave = totals.balanced && !missingDescription && !!journalDate
 
   const updateLine = (key: number, patch: Partial<LineDraft>) => {
     setLines(prev => prev.map(l => {
@@ -97,6 +101,7 @@ export default function ManualJournalDialog({ open, draft, onClose, onSaved }: M
   const save = async (andPost: boolean) => {
     try {
       setSaving(true)
+      setError(null)
       const body = {
         journalDate,
         description,
@@ -112,7 +117,7 @@ export default function ManualJournalDialog({ open, draft, onClose, onSaved }: M
       })
       const data = await res.json()
       if (!res.ok || !data.success) {
-        toast({ title: 'Cannot save', description: data.error || 'Failed to save the journal', variant: 'destructive' })
+        setError(data.error || 'Failed to save the journal')
         return
       }
 
@@ -124,12 +129,8 @@ export default function ManualJournalDialog({ open, draft, onClose, onSaved }: M
         })
         const posted = await postRes.json()
         if (!postRes.ok || !posted.success) {
-          toast({
-            title: 'Saved as draft, not posted',
-            description: posted.error || 'Failed to post the journal',
-            variant: 'destructive',
-          })
-          onSaved()
+          // Saved as a draft but not posted: keep the dialog open on the draft so the user sees why.
+          setError(`Saved as a draft but not posted: ${posted.error || 'Failed to post the journal'}`)
           return
         }
         toast({ title: 'Journal posted', description: `Journal ${posted.journal_number}` })
@@ -137,9 +138,9 @@ export default function ManualJournalDialog({ open, draft, onClose, onSaved }: M
         toast({ title: 'Draft saved', description: 'The journal is saved as a draft' })
       }
       onSaved()
-    } catch (error) {
-      console.error('Error saving manual journal:', error)
-      toast({ title: 'Error', description: 'Failed to save the journal', variant: 'destructive' })
+    } catch (err) {
+      console.error('Error saving manual journal:', err)
+      setError('Failed to save the journal. Check your connection and try again.')
     } finally {
       setSaving(false)
     }
@@ -153,7 +154,8 @@ export default function ManualJournalDialog({ open, draft, onClose, onSaved }: M
         <DialogHeader>
           <DialogTitle>{draft ? 'Edit Manual Journal (Draft)' : 'New Manual Journal'}</DialogTitle>
           <DialogDescription>
-            Debits must equal credits. Save as a draft to finish later, or post it now. A posted journal cannot be edited, only reversed.
+            Debits must equal credits. The journal is saved as a draft; another user with posting permission reviews and posts it.
+            A posted journal cannot be edited, only reversed.
           </DialogDescription>
         </DialogHeader>
 
@@ -243,15 +245,19 @@ export default function ManualJournalDialog({ open, draft, onClose, onSaved }: M
           )}
         </div>
 
+        {missingDescription && (
+          <p className="text-sm text-amber-600 text-right">Enter a description for the journal to save it.</p>
+        )}
+        {error && (
+          <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>
+        )}
+
         <div className="flex justify-end gap-3 pt-2">
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button variant="secondary" onClick={() => save(false)} disabled={saving || !totals.balanced}>
+          {/* Maker/checker: the author only saves; another user posts. */}
+          <Button onClick={() => save(false)} disabled={saving || !canSave}>
             {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
             Save Draft
-          </Button>
-          <Button onClick={() => save(true)} disabled={saving || !totals.balanced}>
-            {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
-            Save &amp; Post
           </Button>
         </div>
       </DialogContent>

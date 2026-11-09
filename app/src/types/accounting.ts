@@ -258,7 +258,7 @@ export const CONTROL_ACCOUNT_CONFIGS: ControlAccountConfig[] = [
   {
     key: 'supplier_deposit_account_id',
     label: 'Supplier Deposit Account',
-    description: 'Prepayments/deposits to suppliers (30/70, 50/50 terms)',
+    description: 'Advances paid to suppliers before their invoice is posted',
     requiredForPosting: true,
     accountTypes: ['ASSET']
   },
@@ -272,15 +272,15 @@ export const CONTROL_ACCOUNT_CONFIGS: ControlAccountConfig[] = [
   {
     key: 'cogs_account_id',
     label: 'Cost of Goods Sold',
-    description: 'COGS account for inventory costing (future use)',
+    description: 'Cost of goods sold (used when sales costing is posted)',
     requiredForPosting: false,
     accountTypes: ['EXPENSE']
   },
   {
     key: 'inventory_account_id',
     label: 'Inventory Account',
-    description: 'Inventory asset account (future use)',
-    requiredForPosting: false,
+    description: 'Debited when supplier invoices are posted (purchases go to stock)',
+    requiredForPosting: true,
     accountTypes: ['ASSET']
   }
 ];

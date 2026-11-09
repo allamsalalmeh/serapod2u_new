@@ -20,9 +20,11 @@ export default function ReverseJournalDialog({ journal, onClose, onReversed }: R
   const [reason, setReason] = useState('')
   const [reversalDate, setReversalDate] = useState(financeToday())
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (journal) {
+      setError(null)
       setReason('')
       setReversalDate(financeToday())
     }
@@ -32,6 +34,7 @@ export default function ReverseJournalDialog({ journal, onClose, onReversed }: R
     if (!journal) return
     try {
       setSaving(true)
+      setError(null)
       const res = await fetch(`/api/accounting/journals/${journal.id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -39,7 +42,7 @@ export default function ReverseJournalDialog({ journal, onClose, onReversed }: R
       })
       const data = await res.json()
       if (!res.ok || !data.success) {
-        toast({ title: 'Cannot reverse', description: data.error || 'Failed to reverse the journal', variant: 'destructive' })
+        setError(data.error || 'Failed to reverse the journal')
         return
       }
       toast({
@@ -47,9 +50,9 @@ export default function ReverseJournalDialog({ journal, onClose, onReversed }: R
         description: `Reversal ${data.reversal_number}${data.document_reopened ? '. The source document is back in Pending Postings.' : ''}`,
       })
       onReversed()
-    } catch (error) {
-      console.error('Error reversing journal:', error)
-      toast({ title: 'Error', description: 'Failed to reverse the journal', variant: 'destructive' })
+    } catch (err) {
+      console.error('Error reversing journal:', err)
+      setError('Failed to reverse the journal. Check your connection and try again.')
     } finally {
       setSaving(false)
     }
@@ -78,6 +81,10 @@ export default function ReverseJournalDialog({ journal, onClose, onReversed }: R
               placeholder="Why is this journal being reversed?" />
           </div>
         </div>
+
+        {error && (
+          <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>
+        )}
 
         <div className="flex justify-end gap-3 pt-2">
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>

@@ -88,7 +88,7 @@ export async function GET(
     // Manual / reversal details (columns newer than the view)
     const { data: extra } = await (supabase as any)
       .from('gl_journals')
-      .select('is_manual, reference, is_reversal, reversal_reason, reversal_journal_id, reversed_journal_id')
+      .select('is_manual, reference, is_reversal, reversal_reason, reversal_journal_id, reversed_journal_id, created_by, posted_by, last_edited_by')
       .eq('id', id)
       .maybeSingle()
 
@@ -122,6 +122,9 @@ export async function GET(
         reversal_journal_number: extra?.reversal_journal_id ? linkedNumbers[extra.reversal_journal_id] ?? null : null,
         reversed_journal_id: extra?.reversed_journal_id ?? null,
         reversed_journal_number: extra?.reversed_journal_id ? linkedNumbers[extra.reversed_journal_id] ?? null : null,
+        created_by_id: extra?.created_by ?? null,
+        posted_by_id: extra?.posted_by ?? null,
+        last_edited_by_id: extra?.last_edited_by ?? null,
       },
       lines: lines || [],
       posting: posting || null,
