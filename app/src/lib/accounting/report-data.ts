@@ -24,6 +24,13 @@ export interface FiscalYearInfo {
 
 const PAGE = 1000
 
+/**
+ * Journal statuses that make up the ledger. A reversed journal stays in the ledger:
+ * its reversal journal (POSTED) cancels it out. Counting POSTED alone would drop the
+ * original and keep the reversal, so the amount would be taken out twice.
+ */
+export const LEDGER_JOURNAL_STATUSES = ['POSTED', 'REVERSED'] as const
+
 export function isoDate(d: Date) {
   return d.toISOString().split('T')[0]
 }
@@ -41,7 +48,8 @@ export function shiftYear(date: string, years: number) {
 }
 
 /**
- * All POSTED journal lines for a company, optionally filtered by account / date range.
+ * All ledger journal lines (posted, and reversed with their reversal) for a company,
+ * optionally filtered by account / date range.
  * Ordered by date, journal and line so paging is stable.
  */
 export async function fetchPostedLines(
@@ -63,7 +71,7 @@ export async function fetchPostedLines(
       .from('v_gl_journal_lines')
       .select(columns)
       .eq('company_id', opts.companyId)
-      .eq('journal_status', 'POSTED')
+      .in('journal_status', [...LEDGER_JOURNAL_STATUSES])
 
     if (opts.accountId) q = q.eq('account_id', opts.accountId)
     if (opts.fromDate) q = q.gte('journal_date', opts.fromDate)

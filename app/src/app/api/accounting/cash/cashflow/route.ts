@@ -1,6 +1,7 @@
 import { financeAllowed } from '@/lib/security-access/finance'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { LEDGER_JOURNAL_STATUSES } from '@/lib/accounting/report-data'
 
 /**
  * GET /api/accounting/cash/cashflow — Cash flow analysis
@@ -79,7 +80,7 @@ export async function GET(request: Request) {
       .in('account_id', cashGLAccountIds)
       .gte('journal_date', fromDate)
       .lte('journal_date', toDate)
-      .eq('journal_status', 'posted')
+      .in('journal_status', [...LEDGER_JOURNAL_STATUSES])
 
     if (jlErr) {
       console.error('Error fetching journal lines:', jlErr)
@@ -99,8 +100,8 @@ export async function GET(request: Request) {
     // For ASSET accounts (cash/bank), debit = inflow, credit = outflow
     const movements: any[] = []
     for (const line of (journalLines || [])) {
-      const debit = parseFloat(line.debit_amount) || 0
-      const credit = parseFloat(line.credit_amount) || 0
+      const debit = Number(line.debit_amount) || 0
+      const credit = Number(line.credit_amount) || 0
       const inflow = debit
       const outflow = credit
 
@@ -150,11 +151,11 @@ export async function GET(request: Request) {
       .eq('company_id', orgId)
       .in('account_id', cashGLAccountIds)
       .lt('journal_date', fromDate)
-      .eq('journal_status', 'posted')
+      .in('journal_status', [...LEDGER_JOURNAL_STATUSES])
 
     let prePeriodNet = 0
     for (const l of (prePeriodLines || [])) {
-      prePeriodNet += (parseFloat(l.debit_amount) || 0) - (parseFloat(l.credit_amount) || 0)
+      prePeriodNet += (Number(l.debit_amount) || 0) - (Number(l.credit_amount) || 0)
     }
 
     const openingBalance = totalOpeningBalance + prePeriodNet

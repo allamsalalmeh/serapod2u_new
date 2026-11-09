@@ -1,6 +1,7 @@
 import { financeAllowed } from '@/lib/security-access/finance'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { LEDGER_JOURNAL_STATUSES } from '@/lib/accounting/report-data'
 
 /**
  * GET /api/accounting/reports/profit-loss
@@ -157,7 +158,7 @@ export async function GET(request: Request) {
         .from('v_gl_journal_lines')
         .select('account_id, debit_amount, credit_amount, journal_date')
         .eq('company_id', orgId)
-        .eq('journal_status', 'POSTED')
+        .in('journal_status', [...LEDGER_JOURNAL_STATUSES])
         .lte('journal_date', toDate)
         // Stable order so pages neither overlap nor skip rows
         .order('journal_date', { ascending: true })
