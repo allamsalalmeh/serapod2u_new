@@ -147,15 +147,23 @@ export async function GET(request: Request) {
     // Get pre-period activity
     const { data: prePeriodLines } = await supabase
       .from('v_gl_journal_lines')
-      .select('debit_amount, credit_amount')
+      .select('account_id, debit_amount, credit_amount')
       .eq('company_id', orgId)
       .in('account_id', cashGLAccountIds)
       .lt('journal_date', fromDate)
       .in('journal_status', [...LEDGER_JOURNAL_STATUSES])
 
     let prePeriodNet = 0
+    // Net ledger movement per GL account up to the end of the period (for bank balances)
+    const glNetToDate: Record<string, number> = {}
     for (const l of (prePeriodLines || [])) {
-      prePeriodNet += (Number(l.debit_amount) || 0) - (Number(l.credit_amount) || 0)
+      const net = (Number(l.debit_amount) || 0) - (Number(l.credit_amount) || 0)
+      prePeriodNet += net
+      if (l.account_id) glNetToDate[l.account_id] = (glNetToDate[l.account_id] || 0) + net
+    }
+    for (const l of (journalLines || [])) {
+      const net = (Number(l.debit_amount) || 0) - (Number(l.credit_amount) || 0)
+      if (l.account_id) glNetToDate[l.account_id] = (glNetToDate[l.account_id] || 0) + net
     }
 
     const openingBalance = totalOpeningBalance + prePeriodNet
@@ -189,11 +197,13 @@ export async function GET(request: Request) {
       },
       by_account: byAccount,
       by_category: { operating, investing, financing },
+      // Balance at the end of the period from the ledger: opening balance + its GL postings.
+      // (bank_accounts.current_balance is not maintained by journal postings.)
       bank_accounts: (bankAccounts || []).map((b: any) => ({
         id: b.id,
         account_name: b.account_name,
         bank_name: b.bank_name,
-        current_balance: b.current_balance,
+        current_balance: (Number(b.opening_balance) || 0) + (b.gl_account_id ? glNetToDate[b.gl_account_id] || 0 : 0),
       })),
       period: { from: fromDate, to: toDate },
       movement_count: movements.length,
