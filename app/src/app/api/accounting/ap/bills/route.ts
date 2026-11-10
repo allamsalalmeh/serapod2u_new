@@ -1,4 +1,6 @@
 import { financeAllowed } from '@/lib/security-access/finance'
+import { loadSubledger } from '@/lib/accounting/subledger-data'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
@@ -104,6 +106,10 @@ export async function GET(request: Request) {
       if (orgs) for (const o of orgs) supplierMap[o.id] = o.org_name
     }
 
+    // Money actually paid on each order (supplier payments posted in Finance).
+    const { invoices: ledger } = await loadSubledger(createAdminClient() as any, { companyId: orgId, side: 'AP' })
+    const ledgerByDoc = new Map(ledger.map((l) => [l.documentId, l]))
+
     const result = (bills || []).map((doc: any) => ({
       id: doc.id,
       document_no: doc.display_doc_no || doc.doc_no,
@@ -115,6 +121,11 @@ export async function GET(request: Request) {
       supplier_name: supplierMap[doc.orders?.seller_org_id] || '-',
       gl_posted: !!postingMap[doc.id],
       gl_posting: postingMap[doc.id] || null,
+      journal_number: ledgerByDoc.get(doc.id)?.journalNumber || null,
+      paid: ledgerByDoc.get(doc.id)?.balance.settled ?? 0,
+      outstanding: ledgerByDoc.get(doc.id)?.balance.outstanding ?? 0,
+      advance_paid: ledgerByDoc.get(doc.id)?.balance.unappliedAdvance ?? 0,
+      payment_status: ledgerByDoc.get(doc.id)?.balance.status ?? 'UNPAID',
     }))
 
     return NextResponse.json({ bills: result, total: count || 0, limit, offset })

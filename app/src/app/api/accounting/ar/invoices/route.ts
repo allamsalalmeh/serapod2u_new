@@ -1,5 +1,7 @@
 import { financeAllowed } from '@/lib/security-access/finance'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
+import { loadSubledger } from '@/lib/accounting/subledger-data'
 import { NextResponse } from 'next/server'
 
 /**
@@ -70,7 +72,9 @@ export async function GET(request: Request) {
       .eq('doc_type', 'INVOICE')
       .eq('orders.order_type', 'D2H')
       .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1)
+
+    // Filtering by GL status happens after loading, so page only when it is not used.
+    if (!glStatus) query = query.range(offset, offset + limit - 1)
 
     if (fromDate) query = query.gte('created_at', fromDate)
     if (toDate) query = query.lte('created_at', toDate + 'T23:59:59')
@@ -115,6 +119,11 @@ export async function GET(request: Request) {
       if (orgs) for (const o of orgs) buyerMap[o.id] = o.org_name
     }
 
+    // Money actually received on each order (receipts posted in Finance) and the
+    // posting status, including sales orders posted the old way by order id.
+    const { invoices: ledger } = await loadSubledger(createAdminClient() as any, { companyId: orgId, side: 'AR' })
+    const ledgerByDoc = new Map(ledger.map((l) => [l.documentId, l]))
+
     const result = (invoices || []).map((doc: any) => ({
       id: doc.id,
       doc_type: doc.doc_type,
@@ -126,15 +135,21 @@ export async function GET(request: Request) {
       date: doc.created_at,
       acknowledged_at: doc.acknowledged_at,
       customer_name: buyerMap[doc.orders?.buyer_org_id] || '-',
-      gl_posted: !!postingMap[doc.id],
+      gl_posted: ledgerByDoc.get(doc.id)?.posted ?? !!postingMap[doc.id],
       gl_posting: postingMap[doc.id] || null,
+      journal_number: ledgerByDoc.get(doc.id)?.journalNumber || null,
+      received: ledgerByDoc.get(doc.id)?.balance.settled ?? 0,
+      outstanding: ledgerByDoc.get(doc.id)?.balance.outstanding ?? 0,
+      advance_held: ledgerByDoc.get(doc.id)?.balance.unappliedAdvance ?? 0,
+      payment_status: ledgerByDoc.get(doc.id)?.balance.status ?? 'UNPAID',
     }))
 
-    let filtered = result
-    if (glStatus === 'posted') filtered = result.filter((r: any) => r.gl_posted)
-    if (glStatus === 'unposted') filtered = result.filter((r: any) => !r.gl_posted)
+    if (glStatus) {
+      const filtered = result.filter((r: any) => (glStatus === 'posted' ? r.gl_posted : !r.gl_posted))
+      return NextResponse.json({ invoices: filtered.slice(offset, offset + limit), total: filtered.length, limit, offset })
+    }
 
-    return NextResponse.json({ invoices: filtered, total: count || 0, limit, offset })
+    return NextResponse.json({ invoices: result, total: count || 0, limit, offset })
   } catch (error) {
     console.error('Error in AR invoices API:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

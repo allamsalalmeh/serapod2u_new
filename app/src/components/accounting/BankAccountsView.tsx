@@ -406,7 +406,7 @@ export default function BankAccountsView({ userProfile }: BankAccountsViewProps)
                     <TableHead>Account #</TableHead>
                     <TableHead>GL Account</TableHead>
                     <TableHead className="text-right">Opening</TableHead>
-                    <TableHead className="text-right">Current Balance</TableHead>
+                    <TableHead className="text-right" title="Opening balance plus every posted journal on the linked GL account">Book Balance</TableHead>
                     <TableHead className="text-right">Bank Balance</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Actions</TableHead>

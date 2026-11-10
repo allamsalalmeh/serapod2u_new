@@ -1,4 +1,5 @@
 import { financeAllowed } from '@/lib/security-access/finance'
+import { fetchPostedLines } from '@/lib/accounting/report-data'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
@@ -89,8 +90,24 @@ export async function GET(request: Request) {
       }
     }
 
+    // Book balance from the ledger: opening balance + every posted (and reversed,
+    // with its reversal) journal line on the linked GL account. The stored
+    // current_balance is not kept up to date by postings, so it is not shown.
+    const glNet: Record<string, number> = {}
+    for (const glId of [...new Set(glAccountIds as string[])]) {
+      const { lines, error: linesError } = await fetchPostedLines(supabase, {
+        companyId: orgId,
+        accountId: glId,
+        columns: 'account_id, debit_amount, credit_amount, journal_date',
+      })
+      if (linesError) console.error('Error reading ledger for bank account balance:', linesError)
+      glNet[glId] = lines.reduce((s, l) => s + (Number(l.debit_amount) || 0) - (Number(l.credit_amount) || 0), 0)
+    }
+
     const result = (accounts || []).map((a: any) => ({
       ...a,
+      stored_current_balance: a.current_balance,
+      current_balance: Math.round(((Number(a.opening_balance) || 0) + (a.gl_account_id ? glNet[a.gl_account_id] || 0 : 0)) * 100) / 100,
       gl_account: glMap[a.gl_account_id] || null,
       statement_balance: statementMap[a.id]?.balance ?? null,
       statement_balance_date: statementMap[a.id]?.date ?? null,

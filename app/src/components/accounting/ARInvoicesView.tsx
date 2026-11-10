@@ -29,6 +29,17 @@ interface Invoice {
   customer_name: string
   gl_posted: boolean
   gl_posting: any
+  journal_number: string | null
+  received: number
+  outstanding: number
+  advance_held: number
+  payment_status: 'UNPAID' | 'PARTIAL' | 'PAID'
+}
+
+const PAYMENT_BADGE: Record<Invoice['payment_status'], { label: string; className: string }> = {
+  PAID: { label: 'Paid', className: 'bg-green-100 text-green-700 border-green-200' },
+  PARTIAL: { label: 'Partly paid', className: 'bg-amber-50 text-amber-700 border-amber-200' },
+  UNPAID: { label: 'Unpaid', className: 'bg-gray-50 text-gray-600 border-gray-200' },
 }
 
 function formatCurrency(amount: number) {
@@ -79,13 +90,16 @@ export default function ARInvoicesView({ userProfile }: ARInvoicesViewProps) {
 
   const totalAmount = invoices.reduce((s, i) => s + (Number(i.amount) || 0), 0)
   const postedCount = invoices.filter((i) => i.gl_posted).length
+  const totalReceived = invoices.reduce((s, i) => s + (Number(i.received) || 0), 0)
+  const totalOutstanding = invoices.reduce((s, i) => s + (Number(i.outstanding) || 0), 0)
   const totalPages = Math.ceil(total / limit)
 
   const handleExportCSV = () => {
-    const headers = ['Document #', 'Order #', 'Customer', 'Date', 'Amount', 'Status', 'GL Posted']
+    const headers = ['Document #', 'Order #', 'Customer', 'Date', 'Amount', 'Received', 'Outstanding', 'Payment', 'Status', 'GL Posted', 'Journal']
     const rows = invoices.map((i) => [
-      i.document_no, i.order_no, i.customer_name, formatDate(i.date),
-      Number(i.amount).toFixed(2), i.status, i.gl_posted ? 'Yes' : 'No',
+      i.document_no, i.order_no, `"${String(i.customer_name).replace(/"/g, '""')}"`, formatDate(i.date),
+      Number(i.amount).toFixed(2), Number(i.received || 0).toFixed(2), Number(i.outstanding || 0).toFixed(2),
+      PAYMENT_BADGE[i.payment_status]?.label || '', i.status, i.gl_posted ? 'Yes' : 'No', i.journal_number || '',
     ])
     const csv = [headers, ...rows].map((r) => r.join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
@@ -123,18 +137,19 @@ export default function ARInvoicesView({ userProfile }: ARInvoicesViewProps) {
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-1">
               <CheckCircle2 className="h-4 w-4 text-green-600" />
-              <span className="text-xs font-medium text-muted-foreground">GL Posted</span>
+              <span className="text-xs font-medium text-muted-foreground">Received</span>
             </div>
-            <p className="text-2xl font-bold text-green-700">{postedCount}</p>
+            <p className="text-2xl font-bold text-green-700">{formatCurrency(totalReceived)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-1">
               <Clock className="h-4 w-4 text-orange-600" />
-              <span className="text-xs font-medium text-muted-foreground">Unposted</span>
+              <span className="text-xs font-medium text-muted-foreground">Outstanding (posted invoices)</span>
             </div>
-            <p className="text-2xl font-bold text-orange-700">{invoices.length - postedCount}</p>
+            <p className="text-2xl font-bold text-orange-700">{formatCurrency(totalOutstanding)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{postedCount} of {invoices.length} posted to GL</p>
           </CardContent>
         </Card>
       </div>
@@ -149,7 +164,8 @@ export default function ARInvoicesView({ userProfile }: ARInvoicesViewProps) {
                 Customer Invoices
               </CardTitle>
               <CardDescription>
-                Sales invoices from D2H (Direct-to-Hub) orders. Auto-generated from S* document flow.
+                Sales invoices to distributors (D2H) with the money actually received. An invoice counts in
+                Accounts Receivable once it is posted; money received before that is held as an advance.
               </CardDescription>
             </div>
             <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -200,7 +216,7 @@ export default function ARInvoicesView({ userProfile }: ARInvoicesViewProps) {
           ) : (
             <>
               <div className="rounded-lg border overflow-x-auto">
-                <Table className="min-w-[640px]">
+                <Table className="min-w-[960px]">
                   <TableHeader>
                     <TableRow className="bg-muted/30">
                       <TableHead>Document #</TableHead>
@@ -208,6 +224,9 @@ export default function ARInvoicesView({ userProfile }: ARInvoicesViewProps) {
                       <TableHead>Customer</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead className="text-right">Amount (MYR)</TableHead>
+                      <TableHead className="text-right">Received</TableHead>
+                      <TableHead className="text-right">Outstanding</TableHead>
+                      <TableHead>Payment</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>GL</TableHead>
                     </TableRow>
@@ -220,6 +239,19 @@ export default function ARInvoicesView({ userProfile }: ARInvoicesViewProps) {
                         <TableCell className="text-sm max-w-[160px] truncate">{inv.customer_name}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">{formatDate(inv.date)}</TableCell>
                         <TableCell className="text-right font-mono text-sm">{formatCurrency(Number(inv.amount))}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">{formatCurrency(Number(inv.received || 0))}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">
+                          {inv.gl_posted ? formatCurrency(Number(inv.outstanding || 0)) : (
+                            <span className="text-xs text-muted-foreground" title="Not in Accounts Receivable until the invoice is posted">
+                              {inv.advance_held > 0 ? `advance ${formatCurrency(Number(inv.advance_held))}` : '—'}
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={`text-xs ${PAYMENT_BADGE[inv.payment_status]?.className || ''}`}>
+                            {PAYMENT_BADGE[inv.payment_status]?.label || '-'}
+                          </Badge>
+                        </TableCell>
                         <TableCell>
                           <Badge variant={inv.status === 'completed' ? 'default' : 'secondary'} className="text-xs">
                             {inv.status}
@@ -227,7 +259,7 @@ export default function ARInvoicesView({ userProfile }: ARInvoicesViewProps) {
                         </TableCell>
                         <TableCell>
                           {inv.gl_posted ? (
-                            <Badge className="bg-green-100 text-green-700 border-green-200 text-xs">Posted</Badge>
+                            <Badge className="bg-green-100 text-green-700 border-green-200 text-xs" title={inv.journal_number || undefined}>Posted</Badge>
                           ) : (
                             <Badge variant="outline" className="text-orange-600 border-orange-200 text-xs">Pending</Badge>
                           )}

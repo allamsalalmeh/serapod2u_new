@@ -25,6 +25,17 @@ interface Bill {
   date: string
   supplier_name: string
   gl_posted: boolean
+  journal_number: string | null
+  paid: number
+  outstanding: number
+  advance_paid: number
+  payment_status: 'UNPAID' | 'PARTIAL' | 'PAID'
+}
+
+const PAYMENT_BADGE: Record<Bill['payment_status'], { label: string; className: string }> = {
+  PAID: { label: 'Paid', className: 'bg-green-100 text-green-700 border-green-200' },
+  PARTIAL: { label: 'Partly paid', className: 'bg-amber-50 text-amber-700 border-amber-200' },
+  UNPAID: { label: 'Unpaid', className: 'bg-gray-50 text-gray-600 border-gray-200' },
 }
 
 function formatCurrency(n: number) {
@@ -75,13 +86,16 @@ export default function APBillsView({ userProfile }: APBillsViewProps) {
 
   const totalAmount = bills.reduce((s, b) => s + (Number(b.amount) || 0), 0)
   const postedCount = bills.filter((b) => b.gl_posted).length
+  const totalPaid = bills.reduce((s, b) => s + (Number(b.paid) || 0), 0)
+  const totalOutstanding = bills.reduce((s, b) => s + (Number(b.outstanding) || 0), 0)
   const totalPages = Math.ceil(total / limit)
 
   const handleExportCSV = () => {
-    const headers = ['Document #', 'Order #', 'Supplier', 'Date', 'Amount', 'Status', 'GL Posted']
+    const headers = ['Document #', 'Order #', 'Supplier', 'Date', 'Amount', 'Paid', 'Outstanding', 'Payment', 'Status', 'GL Posted', 'Journal']
     const rows = bills.map((b) => [
-      b.document_no, b.order_no, b.supplier_name, formatDate(b.date),
-      Number(b.amount).toFixed(2), b.status, b.gl_posted ? 'Yes' : 'No',
+      b.document_no, b.order_no, `"${String(b.supplier_name).replace(/"/g, '""')}"`, formatDate(b.date),
+      Number(b.amount).toFixed(2), Number(b.paid || 0).toFixed(2), Number(b.outstanding || 0).toFixed(2),
+      PAYMENT_BADGE[b.payment_status]?.label || '', b.status, b.gl_posted ? 'Yes' : 'No', b.journal_number || '',
     ])
     const csv = [headers, ...rows].map((r) => r.join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
@@ -118,18 +132,19 @@ export default function APBillsView({ userProfile }: APBillsViewProps) {
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-1">
               <CheckCircle2 className="h-4 w-4 text-green-600" />
-              <span className="text-xs font-medium text-muted-foreground">GL Posted</span>
+              <span className="text-xs font-medium text-muted-foreground">Paid</span>
             </div>
-            <p className="text-2xl font-bold text-green-700">{postedCount}</p>
+            <p className="text-2xl font-bold text-green-700">{formatCurrency(totalPaid)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-1">
               <Clock className="h-4 w-4 text-orange-600" />
-              <span className="text-xs font-medium text-muted-foreground">Unposted</span>
+              <span className="text-xs font-medium text-muted-foreground">Outstanding (posted bills)</span>
             </div>
-            <p className="text-2xl font-bold text-orange-700">{bills.length - postedCount}</p>
+            <p className="text-2xl font-bold text-orange-700">{formatCurrency(totalOutstanding)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{postedCount} of {bills.length} posted to GL</p>
           </CardContent>
         </Card>
       </div>
@@ -188,8 +203,8 @@ export default function APBillsView({ userProfile }: APBillsViewProps) {
             </div>
           ) : (
             <>
-              <div className="rounded-lg border overflow-hidden">
-                <Table>
+              <div className="rounded-lg border overflow-x-auto">
+                <Table className="min-w-[960px]">
                   <TableHeader>
                     <TableRow className="bg-muted/30">
                       <TableHead>Document #</TableHead>
@@ -197,6 +212,9 @@ export default function APBillsView({ userProfile }: APBillsViewProps) {
                       <TableHead>Supplier</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead className="text-right">Amount (MYR)</TableHead>
+                      <TableHead className="text-right">Paid</TableHead>
+                      <TableHead className="text-right">Outstanding</TableHead>
+                      <TableHead>Payment</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>GL</TableHead>
                     </TableRow>
@@ -209,6 +227,19 @@ export default function APBillsView({ userProfile }: APBillsViewProps) {
                         <TableCell className="text-sm max-w-[160px] truncate">{b.supplier_name}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">{formatDate(b.date)}</TableCell>
                         <TableCell className="text-right font-mono text-sm">{formatCurrency(Number(b.amount))}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">{formatCurrency(Number(b.paid || 0))}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">
+                          {b.gl_posted ? formatCurrency(Number(b.outstanding || 0)) : (
+                            <span className="text-xs text-muted-foreground" title="Not in Accounts Payable until the bill is posted">
+                              {b.advance_paid > 0 ? `advance ${formatCurrency(Number(b.advance_paid))}` : '—'}
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={`text-xs ${PAYMENT_BADGE[b.payment_status]?.className || ''}`}>
+                            {PAYMENT_BADGE[b.payment_status]?.label || '-'}
+                          </Badge>
+                        </TableCell>
                         <TableCell>
                           <Badge variant={b.status === 'completed' ? 'default' : 'secondary'} className="text-xs">{b.status}</Badge>
                         </TableCell>
