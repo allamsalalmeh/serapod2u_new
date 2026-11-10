@@ -66,7 +66,8 @@ export async function GET(request: Request) {
         )
       `, { count: 'exact' })
       .eq('company_id', orgId)
-      .in('doc_type', ['INVOICE', 'SO'])
+      // The sales invoice only: the SO of the same order is not a second invoice.
+      .eq('doc_type', 'INVOICE')
       .eq('orders.order_type', 'D2H')
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1)

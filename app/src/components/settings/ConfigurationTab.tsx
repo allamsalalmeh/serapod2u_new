@@ -182,7 +182,8 @@ function PostingModeConfig({
             id="posting-mode"
             checked={isAutoMode}
             onCheckedChange={handleToggle}
-            disabled={saving || !canManage}
+            // Automatic posting is retired: documents are posted from Pending Postings.
+            disabled
           />
         </div>
       </div>

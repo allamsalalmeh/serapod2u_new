@@ -53,7 +53,7 @@ export async function GET(request: Request) {
         order_id,
         payment_percentage,
         payload,
-        orders (
+        orders!inner (
           id,
           order_no,
           display_doc_no,
@@ -64,6 +64,9 @@ export async function GET(request: Request) {
       `, { count: 'exact' })
       .eq('company_id', orgId)
       .eq('doc_type', 'PAYMENT')
+      // Supplier payments only: a D2H PAYMENT is the distributor's payment proof
+      // (money in, posted as a customer receipt), not a payment to a supplier.
+      .neq('orders.order_type', 'D2H')
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1)
 

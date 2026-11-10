@@ -166,10 +166,11 @@ export async function PUT(request: NextRequest) {
       if (field in body) {
         // Special handling for posting_mode
         if (field === 'posting_mode') {
-          const validModes = ['MANUAL', 'AUTO']
-          if (validModes.includes(body[field])) {
-            updateData[field] = body[field]
+          // Posting is manual only (legacy automatic posting retired).
+          if (body[field] !== 'MANUAL') {
+            return NextResponse.json({ error: 'Automatic posting is not available. Documents are posted from Pending Postings, where the amount actually paid or received is entered.' }, { status: 400 })
           }
+          updateData[field] = 'MANUAL'
         } else if (field === 'require_supplier_ack_for_payment_posting') {
           if (typeof body[field] === 'boolean') {
             updateData[field] = body[field]

@@ -205,8 +205,9 @@ export async function PUT(request: NextRequest) {
     const body = await request.json()
     const { posting_mode } = body
 
-    if (!posting_mode || !['MANUAL', 'AUTO'].includes(posting_mode)) {
-      return NextResponse.json({ error: 'posting_mode must be MANUAL or AUTO' }, { status: 400 })
+    // Posting is manual only (legacy automatic posting retired).
+    if (posting_mode !== 'MANUAL') {
+      return NextResponse.json({ error: 'Automatic posting is not available. Documents are posted from Pending Postings, where the amount actually paid or received is entered.' }, { status: 400 })
     }
 
     const { data, error } = await supabase

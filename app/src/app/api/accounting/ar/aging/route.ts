@@ -39,7 +39,8 @@ export async function GET(request: Request) {
         orders!inner ( id, order_no, display_doc_no, order_type, buyer_org_id )
       `)
       .eq('company_id', orgId)
-      .in('doc_type', ['INVOICE', 'SO'])
+      // The sales invoice only: counting the SO too doubled every order.
+      .eq('doc_type', 'INVOICE')
       .eq('orders.order_type', 'D2H')
       .lte('created_at', asAtDate + 'T23:59:59')
 

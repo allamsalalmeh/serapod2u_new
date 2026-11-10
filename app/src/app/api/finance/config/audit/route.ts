@@ -79,7 +79,7 @@ export async function GET() {
             supabase.from('fiscal_years').select('id, fiscal_year_name, status, start_date, end_date').eq('company_id', companyId).order('start_date', { ascending: false }),
             supabase.from('fiscal_periods').select('id, status, period_type').eq('company_id', companyId),
             supabase.from('gl_accounts').select('id, account_type, is_active', { count: 'exact' }).eq('company_id', companyId).eq('is_active', true),
-            supabase.from('gl_settings').select('*, cash_account_id, ar_control_account_id, ap_control_account_id, supplier_deposit_account_id, sales_revenue_account_id, cogs_account_id, inventory_account_id, posting_mode').eq('company_id', companyId).maybeSingle(),
+            supabase.from('gl_settings').select('*, cash_account_id, ar_control_account_id, ap_control_account_id, supplier_deposit_account_id, sales_revenue_account_id, cogs_account_id, inventory_account_id, customer_deposit_account_id, posting_mode').eq('company_id', companyId).maybeSingle(),
             supabase.from('gl_posting_rules').select('id, document_type, is_active').eq('company_id', companyId),
             supabase.from('bank_accounts').select('id, is_active, is_default, gl_account_id').eq('company_id', companyId),
             supabase.from('tax_codes').select('id, tax_type, is_active').eq('company_id', companyId),
@@ -119,6 +119,7 @@ export async function GET() {
             { key: 'sales_revenue_account_id', label: 'Sales Revenue' },
             { key: 'cogs_account_id', label: 'COGS' },
             { key: 'inventory_account_id', label: 'Inventory' },
+            { key: 'customer_deposit_account_id', label: 'Customer Deposits' },
         ]
         const configuredControls = controlAcctFields.filter(f => glSettings?.[f.key])
         const missingControls = controlAcctFields.filter(f => !glSettings?.[f.key])
@@ -223,24 +224,19 @@ export async function GET() {
                     {
                         key: 'posting_mode',
                         label: 'Posting Mode',
-                        status: glSettings?.posting_mode ? 'configured' : 'partial',
-                        detail: glSettings?.posting_mode
-                            ? `Mode: ${glSettings.posting_mode}`
-                            : 'Default: MANUAL (auto-posting not configured)',
+                        status: 'configured',
+                        detail: 'Manual: documents are posted from Pending Postings',
                         link: 'finance/settings/posting-rules',
                         linkLabel: 'Posting Rules',
                     },
                     {
                         key: 'posting_rules',
                         label: 'Document Posting Rules',
-                        status: activePostingRules.length > 0 ? 'configured' : 'partial',
-                        detail: activePostingRules.length > 0
-                            ? `${activePostingRules.length} active rule(s)`
-                            : 'No active posting rules — using manual posting',
+                        status: 'configured',
+                        detail: 'Not used: postings follow the Default Accounts',
                         count: activePostingRules.length,
-                        link: 'finance/settings/posting-rules',
-                        linkLabel: 'Posting Rules',
-                        autoSetupKey: 'default_posting_rules',
+                        link: 'finance/settings/default-accounts',
+                        linkLabel: 'Default Accounts',
                     },
                 ],
             },

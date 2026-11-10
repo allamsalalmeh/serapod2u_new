@@ -336,9 +336,15 @@ export default function PostingRulesSettings({ userProfile }: PostingRulesSettin
                 id="posting-mode"
                 checked={postingMode === 'AUTO'}
                 onCheckedChange={handleModeToggle}
-                disabled={!canManage || modeChanging}
+                disabled
               />
             </div>
+          </div>
+
+          <div className="p-3 rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-800">
+            Automatic posting is retired. Every document is posted from <strong>Pending Postings</strong>, where the
+            accountant enters the amount actually paid or received; accounts come from <strong>Default Accounts</strong>.
+            The rules below are not used for posting.
           </div>
 
           {/* Mode explanation cards */}
