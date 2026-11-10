@@ -28,6 +28,7 @@ interface Payment {
   amount: number
   date: string
   payment_type: 'deposit' | 'balance'
+  term_pct?: number
   supplier_name: string
   gl_posted: boolean
   paid_amount: number
@@ -154,7 +155,7 @@ export default function APPaymentsView({ userProfile }: APPaymentsViewProps) {
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-1">
               <Wallet className="h-4 w-4 text-purple-600" />
-              <span className="text-xs font-medium text-muted-foreground">Deposits (30%)</span>
+              <span className="text-xs font-medium text-muted-foreground">Deposits</span>
             </div>
             <p className="text-xl font-bold text-purple-700 dark:text-purple-300">{formatCurrency(depositTotal)}</p>
           </CardContent>
@@ -163,7 +164,7 @@ export default function APPaymentsView({ userProfile }: APPaymentsViewProps) {
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-1">
               <Wallet className="h-4 w-4 text-orange-600" />
-              <span className="text-xs font-medium text-muted-foreground">Balance (70%)</span>
+              <span className="text-xs font-medium text-muted-foreground">Balances</span>
             </div>
             <p className="text-xl font-bold text-orange-700 dark:text-orange-300">{formatCurrency(balanceTotal)}</p>
           </CardContent>
@@ -188,7 +189,7 @@ export default function APPaymentsView({ userProfile }: APPaymentsViewProps) {
                 Payment Vouchers
               </CardTitle>
               <CardDescription>
-                Supplier deposit (30%) and balance (70%) payments from ORD* purchase flow.
+                Supplier deposit and balance payments from ORD* purchase flow; the share of each order follows its payment terms.
               </CardDescription>
             </div>
             <div className="flex items-center gap-2">
@@ -211,8 +212,8 @@ export default function APPaymentsView({ userProfile }: APPaymentsViewProps) {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Types</SelectItem>
-                  <SelectItem value="deposit">Deposit (30%)</SelectItem>
-                  <SelectItem value="balance">Balance (70%)</SelectItem>
+                  <SelectItem value="deposit">Deposit</SelectItem>
+                  <SelectItem value="balance">Balance</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -262,7 +263,7 @@ export default function APPaymentsView({ userProfile }: APPaymentsViewProps) {
                               : 'bg-orange-50 text-orange-700 border-orange-200 text-xs'
                             }
                           >
-                            {p.payment_type === 'deposit' ? 'Deposit (30%)' : 'Balance (70%)'}
+                            {p.payment_type === 'deposit' ? 'Deposit' : 'Balance'}{p.term_pct ? ` (${p.term_pct}%)` : ''}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{formatDate(p.date)}</TableCell>

@@ -158,7 +158,7 @@ export default function APBillsView({ userProfile }: APBillsViewProps) {
                 Supplier Bills
               </CardTitle>
               <CardDescription>
-                Supplier invoices (PAYMENT_REQUEST). Posting creates Dr COGS, Cr Deposit + Cr AP.
+                Supplier invoices with the money actually paid. Posting creates Dr Inventory (1300), Cr Supplier Deposits for advances paid and Cr Accounts Payable for the rest.
               </CardDescription>
             </div>
             <div className="flex items-center gap-2">

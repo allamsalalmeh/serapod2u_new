@@ -101,16 +101,13 @@ export async function GET(request: Request) {
       const orderTotal = orderAmounts[doc.order_id] || 0
       const paymentTerms = doc.orders?.payment_terms || {}
 
-      let amount: number
-      if (isBalance) {
-        const balancePct = Number(paymentTerms.balance_pct) || 0.7
-        amount = Math.round(orderTotal * balancePct * 100) / 100
-      } else {
-        const depositPct = Number(paymentTerms.deposit_pct) || 0.3
-        amount = Math.round(orderTotal * depositPct * 100) / 100
-      }
+      // Share of the order requested by this document, from the order's payment terms.
+      const pct = isBalance
+        ? Number(paymentTerms.balance_pct) || 0.7
+        : Number(paymentTerms.deposit_pct) || 0.3
+      const amount = Math.round(orderTotal * pct * 100) / 100
 
-      return { ...doc, payment_type: isBalance ? 'balance' : 'deposit', amount }
+      return { ...doc, payment_type: isBalance ? 'balance' : 'deposit', amount, term_pct: Math.round(pct * 100) }
     })
 
     // Filter by payment type
@@ -159,6 +156,7 @@ export async function GET(request: Request) {
       amount: doc.amount,
       date: doc.created_at,
       payment_type: doc.payment_type,
+      term_pct: doc.term_pct,
       supplier_name: supplierMap[doc.orders?.seller_org_id] || '-',
       gl_posted: !!postingMap[doc.id],
       gl_posting: postingMap[doc.id] || null,

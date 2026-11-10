@@ -202,7 +202,10 @@ export default function BankAccountsView({ userProfile }: BankAccountsViewProps)
     }
   }
 
-  const totalBalance = accounts.reduce((s, a) => s + (parseFloat(String(a.current_balance)) || 0), 0)
+  // Active accounts only: an inactive (closed or test) account is not part of the cash position.
+  const totalBalance = accounts
+    .filter((a) => a.is_active)
+    .reduce((s, a) => s + (parseFloat(String(a.current_balance)) || 0), 0)
   const activeCount = accounts.filter(a => a.is_active).length
   const linkedCount = accounts.filter(a => a.gl_account_id).length
   const defaultAccount = accounts.find(a => a.is_default)
