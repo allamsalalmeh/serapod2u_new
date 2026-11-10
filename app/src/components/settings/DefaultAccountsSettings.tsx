@@ -72,6 +72,7 @@ export default function DefaultAccountsSettings({ userProfile }: DefaultAccounts
             ar_control_account_id: settingsData.settings.ar_control_account_id,
             ap_control_account_id: settingsData.settings.ap_control_account_id,
             supplier_deposit_account_id: settingsData.settings.supplier_deposit_account_id,
+            customer_deposit_account_id: settingsData.settings.customer_deposit_account_id ?? null,
             sales_revenue_account_id: settingsData.settings.sales_revenue_account_id,
             cogs_account_id: settingsData.settings.cogs_account_id,
             inventory_account_id: settingsData.settings.inventory_account_id,
@@ -369,7 +370,7 @@ export default function DefaultAccountsSettings({ userProfile }: DefaultAccounts
           <div className="grid gap-4 text-sm text-gray-600">
             <div className="flex gap-2">
               <span className="font-medium text-gray-700 w-40">AR Control:</span>
-              <span>Debited when invoicing distributors, credited when receiving payments</span>
+              <span>Debited when sales invoices are posted, credited by receipts after the invoice and by advances applied</span>
             </div>
             <div className="flex gap-2">
               <span className="font-medium text-gray-700 w-40">AP Control:</span>
@@ -377,7 +378,11 @@ export default function DefaultAccountsSettings({ userProfile }: DefaultAccounts
             </div>
             <div className="flex gap-2">
               <span className="font-medium text-gray-700 w-40">Inventory:</span>
-              <span>Debited when manufacturer invoices are posted (purchases go to stock)</span>
+              <span>Debited when manufacturer invoices are posted; credited at product cost when sales invoices are posted (Dr Cost of Goods Sold)</span>
+            </div>
+            <div className="flex gap-2">
+              <span className="font-medium text-gray-700 w-40">Customer Deposits:</span>
+              <span>Credited for money received from distributors before the sales invoice, applied to AR when the invoice is posted</span>
             </div>
             <div className="flex gap-2">
               <span className="font-medium text-gray-700 w-40">Supplier Deposits:</span>

@@ -57,6 +57,7 @@ export async function GET(request: NextRequest) {
         ar_control_account:gl_accounts!ar_control_account_id(id, code, name, account_type),
         ap_control_account:gl_accounts!ap_control_account_id(id, code, name, account_type),
         supplier_deposit_account:gl_accounts!supplier_deposit_account_id(id, code, name, account_type),
+        customer_deposit_account:gl_accounts!customer_deposit_account_id(id, code, name, account_type),
         sales_revenue_account:gl_accounts!sales_revenue_account_id(id, code, name, account_type),
         cogs_account:gl_accounts!cogs_account_id(id, code, name, account_type),
         inventory_account:gl_accounts!inventory_account_id(id, code, name, account_type)
@@ -149,6 +150,7 @@ export async function PUT(request: NextRequest) {
       'ar_control_account_id',
       'ap_control_account_id',
       'supplier_deposit_account_id',
+      'customer_deposit_account_id',
       'sales_revenue_account_id',
       'cogs_account_id',
       'inventory_account_id',
@@ -232,6 +234,7 @@ export async function PUT(request: NextRequest) {
         ar_control_account:gl_accounts!ar_control_account_id(id, code, name, account_type),
         ap_control_account:gl_accounts!ap_control_account_id(id, code, name, account_type),
         supplier_deposit_account:gl_accounts!supplier_deposit_account_id(id, code, name, account_type),
+        customer_deposit_account:gl_accounts!customer_deposit_account_id(id, code, name, account_type),
         sales_revenue_account:gl_accounts!sales_revenue_account_id(id, code, name, account_type),
         cogs_account:gl_accounts!cogs_account_id(id, code, name, account_type),
         inventory_account:gl_accounts!inventory_account_id(id, code, name, account_type)

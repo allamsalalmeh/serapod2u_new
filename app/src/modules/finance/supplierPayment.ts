@@ -7,6 +7,18 @@ export function isSupplierPaymentType(type: unknown): boolean {
   return typeof type === 'string' && (SUPPLIER_PAYMENT_TYPES as readonly string[]).includes(type)
 }
 
+/** D2H customer receipt: Finance posts the amount actually received (one or more receipts, up to the order total). */
+export const CUSTOMER_RECEIPT_TYPE = 'RECEIPT'
+
+export function isCustomerReceiptType(type: unknown): boolean {
+  return type === CUSTOMER_RECEIPT_TYPE
+}
+
+/** Document types posted at the actual amount entered by Finance (supplier payments and customer receipts). */
+export function isActualPaymentType(type: unknown): boolean {
+  return isSupplierPaymentType(type) || isCustomerReceiptType(type)
+}
+
 export interface SupplierPaymentInput {
   amount: number
   bankAccountId: string | null
@@ -47,10 +59,11 @@ export function parsePaymentDocumentAction(
 /** Validates the actual-payment fields sent with a supplier payment posting. */
 export function parseSupplierPaymentInput(
   body: Record<string, unknown>,
+  options: { closesByDefault?: boolean } = {},
 ): { ok: true; value: SupplierPaymentInput } | { ok: false; error: string } {
   const amount = toAmount(body.amount)
   if (!Number.isFinite(amount) || amount <= 0) {
-    return { ok: false, error: 'amount must be the amount actually paid (more than zero)' }
+    return { ok: false, error: 'amount must be the amount actually paid or received (more than zero)' }
   }
 
   let bankAccountId: string | null = null
@@ -71,7 +84,10 @@ export function parseSupplierPaymentInput(
     reference = trimmed || null
   }
 
-  const closesDocument = body.closesDocument === undefined ? true : body.closesDocument === true
+  // Supplier payments close their document by default; a customer receipt stays open
+  // (more receipts may follow) and closes by itself when the order is fully received.
+  const closesByDefault = options.closesByDefault ?? true
+  const closesDocument = body.closesDocument === undefined ? closesByDefault : body.closesDocument === true
 
   return { ok: true, value: { amount, bankAccountId, reference, closesDocument } }
 }

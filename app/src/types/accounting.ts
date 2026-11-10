@@ -19,6 +19,7 @@ export interface GLSettings {
   ar_control_account_id: string | null;
   ap_control_account_id: string | null;
   supplier_deposit_account_id: string | null;
+  customer_deposit_account_id?: string | null;
   sales_revenue_account_id: string | null;
   cogs_account_id: string | null;
   inventory_account_id: string | null;
@@ -37,6 +38,7 @@ export interface GLSettingsUpdate {
   ar_control_account_id?: string | null;
   ap_control_account_id?: string | null;
   supplier_deposit_account_id?: string | null;
+  customer_deposit_account_id?: string | null;
   sales_revenue_account_id?: string | null;
   cogs_account_id?: string | null;
   inventory_account_id?: string | null;
@@ -50,6 +52,7 @@ export interface GLSettingsWithAccounts extends GLSettings {
   ar_control_account?: GLAccount | null;
   ap_control_account?: GLAccount | null;
   supplier_deposit_account?: GLAccount | null;
+  customer_deposit_account?: GLAccount | null;
   sales_revenue_account?: GLAccount | null;
   cogs_account?: GLAccount | null;
   inventory_account?: GLAccount | null;
@@ -263,6 +266,13 @@ export const CONTROL_ACCOUNT_CONFIGS: ControlAccountConfig[] = [
     accountTypes: ['ASSET']
   },
   {
+    key: 'customer_deposit_account_id',
+    label: 'Customer Deposits Account',
+    description: 'Money received from customers before their sales invoice is posted',
+    requiredForPosting: true,
+    accountTypes: ['LIABILITY']
+  },
+  {
     key: 'sales_revenue_account_id',
     label: 'Sales Revenue Account',
     description: 'Default revenue account for customer invoices',
@@ -272,14 +282,14 @@ export const CONTROL_ACCOUNT_CONFIGS: ControlAccountConfig[] = [
   {
     key: 'cogs_account_id',
     label: 'Cost of Goods Sold',
-    description: 'Cost of goods sold (used when sales costing is posted)',
-    requiredForPosting: false,
+    description: 'Debited at the product cost when sales invoices are posted',
+    requiredForPosting: true,
     accountTypes: ['EXPENSE']
   },
   {
     key: 'inventory_account_id',
     label: 'Inventory Account',
-    description: 'Debited when supplier invoices are posted (purchases go to stock)',
+    description: 'Debited when supplier invoices are posted, credited at cost when sales invoices are posted',
     requiredForPosting: true,
     accountTypes: ['ASSET']
   }

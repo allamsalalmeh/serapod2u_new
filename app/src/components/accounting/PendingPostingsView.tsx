@@ -73,9 +73,17 @@ interface PostingPreview {
   document_type: string
   total_amount: number
   description: string
-  // Supplier payments only: the actual amount is entered at posting.
+  // Supplier payments (OUT) and customer receipts (IN): the actual amount is entered at posting.
   is_payment?: boolean
+  direction?: 'IN' | 'OUT'
   stage?: 'ADVANCE' | 'SETTLEMENT'
+  order_total?: number
+  order_paid_total?: number
+  // Sales invoices
+  revenue?: number
+  cost_of_sales?: number
+  gross_profit?: number
+  advances_applied?: number
   requested_amount?: number
   paid_on_document?: number
   remaining_requested?: number
@@ -166,6 +174,8 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
   const [completeReason, setCompleteReason] = useState('')
   const [completing, setCompleting] = useState(false)
   const isPayment = !!postingPreview?.is_payment
+  // Customer receipt (money in): the bank is the debit line; supplier payment: the credit line.
+  const isReceipt = isPayment && postingPreview?.direction === 'IN'
   const paymentAmountValue = toAmount(paymentAmount)
   const paymentMax = Number(postingPreview?.max_amount ?? 0)
   const paymentAmountValid =
@@ -177,18 +187,15 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
     const lines = postingPreview?.lines || []
     if (!isPayment) return lines
     const amount = Number.isFinite(paymentAmountValue) ? paymentAmountValue : 0
+    const bank = selectedBank?.gl_account
+      ? { account_code: selectedBank.gl_account.code, account_name: selectedBank.gl_account.name }
+      : {}
     return lines.map((line) =>
       line.debit > 0
-        ? { ...line, debit: amount }
-        : {
-            ...line,
-            credit: amount,
-            ...(selectedBank?.gl_account
-              ? { account_code: selectedBank.gl_account.code, account_name: selectedBank.gl_account.name }
-              : {}),
-          }
+        ? { ...line, debit: amount, ...(isReceipt ? bank : {}) }
+        : { ...line, credit: amount, ...(isReceipt ? {} : bank) }
     )
-  }, [postingPreview, isPayment, paymentAmountValue, selectedBank])
+  }, [postingPreview, isPayment, isReceipt, paymentAmountValue, selectedBank])
 
   // Batch posting
   const [batchPosting, setBatchPosting] = useState(false)
@@ -333,7 +340,8 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
           // Default: what remains requested on this document, to the default bank.
           setPaymentAmount(String(Number(data.total_amount || 0).toFixed(2)))
           setPaymentReference('')
-          setClosesDocument(true)
+          // A customer receipt stays open for more receipts; it closes by itself when the order is fully received.
+          setClosesDocument(data.direction !== 'IN')
           setCompleteOpen(false)
           setCompleteReason('')
           setPaymentBankId((bankAccounts.find((b) => b.is_default) || bankAccounts[0])?.id || '')
@@ -807,7 +815,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                   </p>
                 </div>
                 <div>
-                  <Label className="text-xs text-muted-foreground">{isPayment ? 'Amount Paid' : 'Total Amount'}</Label>
+                  <Label className="text-xs text-muted-foreground">{isReceipt ? 'Amount Received' : isPayment ? 'Amount Paid' : 'Total Amount'}</Label>
                   <p className="font-mono text-sm font-medium">
                     {formatCurrency(isPayment ? (Number.isFinite(paymentAmountValue) ? paymentAmountValue : 0) : postingPreview.total_amount)}
                   </p>
@@ -820,7 +828,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                   <p className="text-sm">{postingPreview.description}</p>
                 </div>
                 <div>
-                  <Label htmlFor="posting-date" className="text-xs text-muted-foreground">{isPayment ? 'Payment Date' : 'Posting Date'}</Label>
+                  <Label htmlFor="posting-date" className="text-xs text-muted-foreground">{isReceipt ? 'Receipt Date' : isPayment ? 'Payment Date' : 'Posting Date'}</Label>
                   <Input
                     id="posting-date"
                     type="date"
@@ -837,9 +845,56 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                 </div>
               </div>
 
-              {/* Actual payment (supplier deposit / balance) */}
+              {/* Sales invoice: revenue, cost of goods sold and advances applied */}
+              {postingPreview.document_type === 'SALES_INVOICE' && postingPreview.revenue !== undefined && (
+                <div className="rounded-lg border p-3 bg-muted/20">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    <div>
+                      <p className="text-muted-foreground">Revenue</p>
+                      <p className="font-mono">{formatCurrency(Number(postingPreview.revenue || 0))}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Cost of goods sold</p>
+                      <p className="font-mono">{formatCurrency(Number(postingPreview.cost_of_sales || 0))}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Gross profit</p>
+                      <p className="font-mono">{formatCurrency(Number(postingPreview.gross_profit || 0))}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Advances applied</p>
+                      <p className="font-mono">{formatCurrency(Number(postingPreview.advances_applied || 0))}</p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Cost of goods sold uses each product&apos;s fixed cost. Money received from the customer before this invoice moves from Customer Deposits to Accounts Receivable.
+                  </p>
+                </div>
+              )}
+
+              {/* Actual payment (supplier deposit / balance) or customer receipt */}
               {isPayment && (
                 <div className="rounded-lg border p-3 space-y-3 bg-muted/20">
+                  {isReceipt ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div>
+                        <p className="text-muted-foreground">Order total</p>
+                        <p className="font-mono">{formatCurrency(Number(postingPreview.order_total || 0))}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Requested on this receipt</p>
+                        <p className="font-mono">{formatCurrency(Number(postingPreview.requested_amount || 0))}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Received on order</p>
+                        <p className="font-mono">{formatCurrency(Number(postingPreview.order_paid_total || 0))}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Unpaid on order</p>
+                        <p className="font-mono">{formatCurrency(paymentMax)}</p>
+                      </div>
+                    </div>
+                  ) : (
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                     <div>
                       <p className="text-muted-foreground">Requested (terms)</p>
@@ -858,14 +913,19 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                       <p className="font-mono">{formatCurrency(paymentMax)}</p>
                     </div>
                   </div>
+                  )}
                   <p className="text-xs text-muted-foreground">
-                    {postingPreview.stage === 'ADVANCE'
-                      ? 'The supplier invoice is not posted yet, so this payment is an advance (Supplier Deposits).'
-                      : 'The supplier invoice is posted, so this payment settles Accounts Payable.'}
+                    {isReceipt
+                      ? postingPreview.stage === 'ADVANCE'
+                        ? 'The sales invoice is not posted yet, so this receipt is an advance (Customer Deposits). It is applied when the invoice is posted.'
+                        : 'The sales invoice is posted, so this receipt settles Accounts Receivable.'
+                      : postingPreview.stage === 'ADVANCE'
+                        ? 'The supplier invoice is not posted yet, so this payment is an advance (Supplier Deposits).'
+                        : 'The supplier invoice is posted, so this payment settles Accounts Payable.'}
                   </p>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                      <Label htmlFor="payment-amount" className="text-xs text-muted-foreground">Amount Actually Paid (MYR)</Label>
+                      <Label htmlFor="payment-amount" className="text-xs text-muted-foreground">{isReceipt ? 'Amount Actually Received (MYR)' : 'Amount Actually Paid (MYR)'}</Label>
                       <Input
                         id="payment-amount"
                         type="number"
@@ -884,7 +944,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                       )}
                     </div>
                     <div>
-                      <Label htmlFor="payment-bank" className="text-xs text-muted-foreground">Paid From</Label>
+                      <Label htmlFor="payment-bank" className="text-xs text-muted-foreground">{isReceipt ? 'Received Into' : 'Paid From'}</Label>
                       {bankAccounts.length > 0 ? (
                         <Select value={paymentBankId} onValueChange={setPaymentBankId}>
                           <SelectTrigger id="payment-bank" className="h-8 text-sm mt-1">
@@ -916,23 +976,27 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                   </div>
                   <label className="flex items-center gap-2 text-sm">
                     <Checkbox checked={closesDocument} onCheckedChange={(v) => setClosesDocument(v === true)} />
-                    Last payment on this document (it leaves Pending Postings)
+                    {isReceipt
+                      ? 'Last receipt for this order (it leaves Pending Postings)'
+                      : 'Last payment on this document (it leaves Pending Postings)'}
                   </label>
                   <p className="text-xs text-muted-foreground">
-                    The document also closes by itself once its requested amount, or the whole order, is paid.
+                    {isReceipt
+                      ? 'The receipt also closes by itself once the whole order is received. Leave this unticked if more money is expected.'
+                      : 'The document also closes by itself once its requested amount, or the whole order, is paid.'}
                   </p>
                   {canPost && (
                     <div className="border-t pt-2">
                       {!completeOpen ? (
                         <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => setCompleteOpen(true)}>
-                          Mark as complete without another payment…
+                          {isReceipt ? 'Mark as complete without another receipt…' : 'Mark as complete without another payment…'}
                         </Button>
                       ) : (
                         <div className="flex flex-col sm:flex-row gap-2">
                           <Input
                             value={completeReason}
                             maxLength={300}
-                            placeholder="Reason (required), e.g. supplier agreed a discount"
+                            placeholder={isReceipt ? 'Reason (required), e.g. customer given a discount' : 'Reason (required), e.g. supplier agreed a discount'}
                             onChange={(e) => setCompleteReason(e.target.value)}
                             className="h-8 text-sm"
                           />
@@ -1032,7 +1096,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                     <li>Create {selectedIds.size} GL journal entries</li>
                     <li>Each posting is idempotent (safe to retry)</li>
                     <li>Post each document on its own document date</li>
-                    <li>Post supplier payments at the remaining requested amount, from the default bank (open a payment to enter a different amount)</li>
+                    <li>Post supplier payments and customer receipts at the suggested amount, to or from the default bank (open one to enter a different amount)</li>
                     <li>Fail for any document dated in a closed period</li>
                   </ul>
                 </div>

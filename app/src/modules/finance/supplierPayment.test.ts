@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isSupplierPaymentType, parsePaymentDocumentAction, parseSupplierPaymentInput, toAmount } from './supplierPayment'
+import { isActualPaymentType, isCustomerReceiptType, isSupplierPaymentType, parsePaymentDocumentAction, parseSupplierPaymentInput, toAmount } from './supplierPayment'
 
 const BANK = '20000000-0000-0000-0000-000000000002'
 
@@ -9,6 +9,22 @@ describe('supplierPayment', () => {
     expect(isSupplierPaymentType('SUPPLIER_BALANCE_PAYMENT')).toBe(true)
     expect(isSupplierPaymentType('SUPPLIER_INVOICE_RECOGNITION')).toBe(false)
     expect(isSupplierPaymentType(undefined)).toBe(false)
+  })
+
+  it('treats customer receipts as actual-amount postings', () => {
+    expect(isCustomerReceiptType('RECEIPT')).toBe(true)
+    expect(isSupplierPaymentType('RECEIPT')).toBe(false)
+    expect(isActualPaymentType('RECEIPT')).toBe(true)
+    expect(isActualPaymentType('SUPPLIER_DEPOSIT_PAYMENT')).toBe(true)
+    expect(isActualPaymentType('SALES_INVOICE')).toBe(false)
+  })
+
+  it('keeps a customer receipt open by default', () => {
+    expect(parseSupplierPaymentInput({ amount: 3000 }, { closesByDefault: false })).toEqual({
+      ok: true, value: { amount: 3000, bankAccountId: null, reference: null, closesDocument: false },
+    })
+    expect(parseSupplierPaymentInput({ amount: 3000, closesDocument: true }, { closesByDefault: false }))
+      .toMatchObject({ ok: true, value: { closesDocument: true } })
   })
 
   it('rounds amounts to cents and rejects non-numbers', () => {
