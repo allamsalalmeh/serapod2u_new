@@ -271,7 +271,7 @@ export default function DefaultAccountsSettings({ userProfile }: DefaultAccounts
           </div>
           {configuredRequiredCount < totalRequiredCount && (
             <p className="text-xs text-gray-500 mt-2">
-              Configure all required accounts before GL posting can be enabled (Phase 2)
+              Configure all required accounts: posting is refused while one of them is missing
             </p>
           )}
         </div>
@@ -281,7 +281,7 @@ export default function DefaultAccountsSettings({ userProfile }: DefaultAccounts
           <div className="flex items-start gap-2">
             <Info className="w-4 h-4 text-blue-500 mt-0.5" />
             <p className="text-sm text-blue-700">
-              These settings are configuration only (Phase 1). Actual GL posting will be available in Phase 2.
+              Every posting from Pending Postings uses these accounts. Changing one affects new postings only; journals already posted keep their accounts.
             </p>
           </div>
         </div>

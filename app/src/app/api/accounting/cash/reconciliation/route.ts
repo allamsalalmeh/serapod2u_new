@@ -1,284 +1,199 @@
 import { financeAllowed } from '@/lib/security-access/finance'
 import { createClient } from '@/lib/supabase/server'
+import { adjustmentJournalLines, parseReconRequest, parseReconStart } from '@/modules/finance/reconciliation'
 import { NextResponse } from 'next/server'
 
 /**
- * GET  /api/accounting/cash/reconciliation — List reconciliations
- * POST /api/accounting/cash/reconciliation — Create a new reconciliation session
+ * Bank reconciliation against approved bank statements.
+ *
+ * GET   /api/accounting/cash/reconciliation            list reconciliations
+ * GET   /api/accounting/cash/reconciliation?id=…       one reconciliation: figures, bank and book lines
+ * POST  /api/accounting/cash/reconciliation            start { bank_account_id, period_end, start_date? }
+ * PATCH /api/accounting/cash/reconciliation            { id, action, … }:
+ *   auto_match | match {statementIds, journalLineIds} | unmatch {matchGroup} | submit | approve
+ *   | return {reason} | void {reason} | adjust {statementLineId, accountId, description}
+ *
+ * The rules (matching, balances, submit only when complete, a second person
+ * approves) are enforced by the fin_recon_* database functions.
  */
+
+type Actor = { supabase: any; userId: string; orgId: string }
+
+async function actor(permission: string): Promise<Actor | NextResponse> {
+  const supabase = await createClient()
+  const { data: { user }, error: authError } = await supabase.auth.getUser()
+  if (authError || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const { data: userData } = await supabase
+    .from('users')
+    .select('organization_id')
+    .eq('id', user.id)
+    .single()
+  if (!userData?.organization_id) {
+    return NextResponse.json({ error: 'User has no organization' }, { status: 400 })
+  }
+  if (!(await financeAllowed(user.id, permission, () => true, userData.organization_id))) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+  return { supabase: supabase as any, userId: user.id, orgId: userData.organization_id }
+}
+
+/** Database functions answer { success, error }; turn that into a response. */
+function rpcResult(data: any, error: any) {
+  if (error) {
+    console.error('Reconciliation RPC error:', error)
+    return NextResponse.json({ error: error.message || 'Database error' }, { status: 500 })
+  }
+  if (!data?.success) {
+    return NextResponse.json({ error: data?.error || 'The action was refused' }, { status: 400 })
+  }
+  return NextResponse.json(data)
+}
+
 export async function GET(request: Request) {
   try {
-    const supabase = await createClient()
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const { data: userData } = await supabase
-      .from('users')
-      .select('organization_id')
-      .eq('id', user.id)
-      .single()
-
-    if (!userData?.organization_id) {
-      return NextResponse.json({ error: 'User has no organization' }, { status: 400 })
-    }
-    if (!(await financeAllowed(user.id, 'finance.cash.view', () => true, userData.organization_id))) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    const orgId = userData.organization_id
+    const a = await actor('finance.cash.view')
+    if (a instanceof NextResponse) return a
     const { searchParams } = new URL(request.url)
-    const bankAccountId = searchParams.get('bank_account_id')
-    const status = searchParams.get('status') // draft | in_progress | completed | void
 
-    let query = supabase
+    const id = searchParams.get('id')
+    if (id) {
+      const { data, error } = await a.supabase.rpc('fin_recon_data', { p_recon_id: id })
+      return rpcResult(data, error)
+    }
+
+    let query = a.supabase
       .from('bank_reconciliations')
       .select(`
-        id, bank_account_id, period_start, period_end,
-        statement_balance, book_balance, difference,
-        status, reconciled_at, reconciled_by, notes,
-        created_at, updated_at
+        id, bank_account_id, period_start, period_end, start_date,
+        statement_balance, book_balance, status, summary,
+        created_by, created_at, submitted_by, submitted_at, reconciled_at, reconciled_by, notes
       `)
-      .eq('company_id', orgId)
+      .eq('company_id', a.orgId)
       .order('period_end', { ascending: false })
-
+      .order('created_at', { ascending: false })
+    const bankAccountId = searchParams.get('bank_account_id')
+    const status = searchParams.get('status')
     if (bankAccountId) query = query.eq('bank_account_id', bankAccountId)
     if (status) query = query.eq('status', status)
 
-    const { data: reconciliations, error } = await query
-
+    const { data: recs, error } = await query
     if (error) {
       console.error('Error fetching reconciliations:', error)
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    // Attach bank account names
-    const bankIds = [...new Set((reconciliations || []).map((r: any) => r.bank_account_id))]
-    const bankMap: Record<string, string> = {}
-    if (bankIds.length > 0) {
-      const { data: banks } = await supabase
-        .from('bank_accounts')
-        .select('id, account_name, bank_name')
-        .in('id', bankIds)
-      if (banks) {
-        for (const b of banks) bankMap[b.id] = `${b.bank_name} - ${b.account_name}`
-      }
-    }
+    const userIds = [...new Set((recs || []).flatMap((r: any) => [r.created_by, r.submitted_by, r.reconciled_by]).filter(Boolean))]
+    const { data: users } = userIds.length
+      ? await a.supabase.from('users').select('id, full_name, email').in('id', userIds)
+      : { data: [] }
+    const userName = new Map<string, string>((users || []).map((u: any) => [u.id, u.full_name || u.email]))
 
-    const result = (reconciliations || []).map((r: any) => ({
+    const { data: accounts } = await a.supabase
+      .from('bank_accounts')
+      .select('id, account_name, bank_name, gl_account_id, is_active')
+      .eq('company_id', a.orgId)
+      .order('account_name')
+    const accountById = new Map<string, any>((accounts || []).map((b: any) => [b.id, b]))
+
+    const reconciliations = (recs || []).map((r: any) => ({
       ...r,
-      bank_account_label: bankMap[r.bank_account_id] || 'Unknown',
+      bank_account: accountById.get(r.bank_account_id) || null,
+      created_by_name: userName.get(r.created_by) || null,
+      submitted_by_name: userName.get(r.submitted_by) || null,
+      approved_by_name: userName.get(r.reconciled_by) || null,
+      is_mine: r.created_by === a.userId || r.submitted_by === a.userId,
     }))
 
-    return NextResponse.json({ reconciliations: result, total: result.length })
+    return NextResponse.json({ reconciliations, bankAccounts: accounts || [], currentUserId: a.userId })
   } catch (error) {
-    console.error('Error in reconciliation list API:', error)
+    console.error('Error in reconciliation API:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient()
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const a = await actor('finance.reconciliation.perform')
+    if (a instanceof NextResponse) return a
+    const parsed = parseReconStart(await request.json().catch(() => ({})))
+    if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 })
 
-    const { data: userData } = await supabase
-      .from('users')
-      .select('organization_id')
-      .eq('id', user.id)
-      .single()
-
-    if (!userData?.organization_id) {
-      return NextResponse.json({ error: 'User has no organization' }, { status: 400 })
-    }
-    if (!(await financeAllowed(user.id, 'finance.reconciliation.perform', () => true, userData.organization_id))) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    const body = await request.json()
-    const { bank_account_id, period_start, period_end, statement_balance, notes } = body
-
-    if (!bank_account_id || !period_start || !period_end) {
-      return NextResponse.json({ error: 'Bank account, period start, and period end are required' }, { status: 400 })
-    }
-
-    if (statement_balance === undefined || statement_balance === null) {
-      return NextResponse.json({ error: 'Statement balance is required' }, { status: 400 })
-    }
-
-    // Get the book balance from the bank_accounts table current_balance
-    const { data: bankAccount } = await supabase
-      .from('bank_accounts')
-      .select('current_balance')
-      .eq('id', bank_account_id)
-      .eq('company_id', userData.organization_id)
-      .single()
-
-    const bookBalance = bankAccount?.current_balance || 0
-
-    const { data: recon, error } = await supabase
-      .from('bank_reconciliations')
-      .insert({
-        company_id: userData.organization_id,
-        bank_account_id,
-        period_start,
-        period_end,
-        statement_balance: parseFloat(statement_balance),
-        book_balance: bookBalance,
-        status: 'draft',
-        notes: notes || null,
-        created_by: user.id,
-      })
-      .select()
-      .single()
-
-    if (error) {
-      console.error('Error creating reconciliation:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
-
-    return NextResponse.json({ reconciliation: recon }, { status: 201 })
+    const { data, error } = await a.supabase.rpc('fin_recon_start', {
+      p_bank_account_id: parsed.value.bankAccountId,
+      p_period_end: parsed.value.periodEnd,
+      p_start_date: parsed.value.startDate,
+    })
+    return rpcResult(data, error)
   } catch (error) {
-    console.error('Error in reconciliation create API:', error)
+    console.error('Error starting reconciliation:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
 export async function PATCH(request: Request) {
   try {
-    const supabase = await createClient()
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const a = await actor('finance.reconciliation.perform')
+    if (a instanceof NextResponse) return a
+    const parsed = parseReconRequest(await request.json().catch(() => ({})))
+    if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 })
+    const req = parsed.value
 
-    const { data: userData } = await supabase
-      .from('users')
-      .select('organization_id')
-      .eq('id', user.id)
-      .single()
-
-    if (!userData?.organization_id) {
-      return NextResponse.json({ error: 'User has no organization' }, { status: 400 })
-    }
-    if (!(await financeAllowed(user.id, 'finance.reconciliation.perform', () => true, userData.organization_id))) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    const body = await request.json()
-    const { id, action, lines } = body
-
-    if (!id) {
-      return NextResponse.json({ error: 'Reconciliation id is required' }, { status: 400 })
-    }
-
-    // If action is 'complete', set status to completed
-    if (action === 'complete') {
-      const { data: updated, error } = await supabase
-        .from('bank_reconciliations')
-        .update({
-          status: 'completed',
-          reconciled_at: new Date().toISOString(),
-          reconciled_by: user.id,
-        })
-        .eq('id', id)
-        .eq('company_id', userData.organization_id)
-        .select()
-        .single()
-
-      if (error) {
-        console.error('Error completing reconciliation:', error)
-        return NextResponse.json({ error: error.message }, { status: 500 })
+    switch (req.action) {
+      case 'auto_match': {
+        const { data, error } = await a.supabase.rpc('fin_recon_auto_match', { p_recon_id: req.id })
+        return rpcResult(data, error)
       }
-      return NextResponse.json({ reconciliation: updated })
-    }
-
-    // If action is 'void', void it
-    if (action === 'void') {
-      const { data: updated, error } = await supabase
-        .from('bank_reconciliations')
-        .update({ status: 'void' })
-        .eq('id', id)
-        .eq('company_id', userData.organization_id)
-        .select()
-        .single()
-
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-      return NextResponse.json({ reconciliation: updated })
-    }
-
-    // If action is 'add_lines', add reconciliation lines
-    if (action === 'add_lines' && Array.isArray(lines)) {
-      const insertLines = lines.map((l: any) => ({
-        reconciliation_id: id,
-        transaction_date: l.transaction_date,
-        description: l.description || '',
-        reference: l.reference || null,
-        debit_amount: l.debit_amount || 0,
-        credit_amount: l.credit_amount || 0,
-        source: l.source || 'statement', // statement | book
-        matched: l.matched || false,
-        matched_journal_id: l.matched_journal_id || null,
-      }))
-
-      const { data: inserted, error } = await supabase
-        .from('bank_reconciliation_lines')
-        .insert(insertLines)
-        .select()
-
-      if (error) {
-        console.error('Error adding reconciliation lines:', error)
-        return NextResponse.json({ error: error.message }, { status: 500 })
-      }
-
-      return NextResponse.json({ lines: inserted })
-    }
-
-    // If action is 'match_line', mark a line as matched
-    if (action === 'match_line' && body.line_id) {
-      const { data: updated, error } = await supabase
-        .from('bank_reconciliation_lines')
-        .update({
-          matched: true,
-          matched_journal_id: body.journal_id || null,
+      case 'match': {
+        const { data, error } = await a.supabase.rpc('fin_recon_match', {
+          p_recon_id: req.id, p_statement_ids: req.statementIds, p_journal_line_ids: req.journalLineIds,
         })
-        .eq('id', body.line_id)
-        .eq('reconciliation_id', id)
-        .select()
-        .single()
+        return rpcResult(data, error)
+      }
+      case 'unmatch': {
+        const { data, error } = await a.supabase.rpc('fin_recon_unmatch', { p_recon_id: req.id, p_match_group: req.matchGroup })
+        return rpcResult(data, error)
+      }
+      case 'submit': {
+        const { data, error } = await a.supabase.rpc('fin_recon_submit', { p_recon_id: req.id })
+        return rpcResult(data, error)
+      }
+      case 'approve': {
+        const { data, error } = await a.supabase.rpc('fin_recon_approve', { p_recon_id: req.id })
+        return rpcResult(data, error)
+      }
+      case 'return': {
+        const { data, error } = await a.supabase.rpc('fin_recon_return', { p_recon_id: req.id, p_reason: req.reason })
+        return rpcResult(data, error)
+      }
+      case 'void': {
+        const { data, error } = await a.supabase.rpc('fin_recon_void', { p_recon_id: req.id, p_reason: req.reason })
+        return rpcResult(data, error)
+      }
+      case 'adjust': {
+        // A bank-only movement (charge, interest) becomes a draft manual journal on the
+        // bank's GL account; another user posts it from GL Journals, then it is matched.
+        const { data: recon, error: reconError } = await a.supabase.rpc('fin_recon_data', { p_recon_id: req.id })
+        if (reconError || !recon?.success) return rpcResult(recon, reconError)
+        const line = (recon.lines || []).find((l: any) => l.side === 'BANK' && l.id === req.statementLineId)
+        if (!line) return NextResponse.json({ error: 'Bank line not found in this reconciliation' }, { status: 400 })
+        if (line.match_group) return NextResponse.json({ error: 'This bank line is already matched' }, { status: 400 })
+        const bankGl = recon.reconciliation?.gl_account_id
+        if (!bankGl) return NextResponse.json({ error: 'The bank account is not linked to a GL account' }, { status: 400 })
 
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-      return NextResponse.json({ line: updated })
+        const { data, error } = await a.supabase.rpc('fin_save_manual_journal', {
+          p_journal_id: null,
+          p_journal_date: line.date,
+          p_description: req.description,
+          p_reference: `Bank reconciliation ${recon.reconciliation.period_start} to ${recon.reconciliation.period_end}`,
+          p_lines: adjustmentJournalLines(line, bankGl, req.accountId, req.description),
+        })
+        return rpcResult(data, error)
+      }
     }
-
-    // Default: update reconciliation fields
-    const { statement_balance, book_balance, notes, status } = body
-    const updateFields: any = {}
-    if (statement_balance !== undefined) updateFields.statement_balance = statement_balance
-    if (book_balance !== undefined) updateFields.book_balance = book_balance
-    if (notes !== undefined) updateFields.notes = notes
-    if (status) updateFields.status = status
-
-    const { data: updated, error } = await supabase
-      .from('bank_reconciliations')
-      .update(updateFields)
-      .eq('id', id)
-      .eq('company_id', userData.organization_id)
-      .select()
-      .single()
-
-    if (error) {
-      console.error('Error updating reconciliation:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
-
-    return NextResponse.json({ reconciliation: updated })
+    return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
   } catch (error) {
-    console.error('Error in reconciliation update API:', error)
+    console.error('Error updating reconciliation:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
