@@ -1,7 +1,8 @@
 'use client'
 
-import { Package, PlusCircle, BarChart3, FileText, ShoppingCart, MessageCircle, ExternalLink } from 'lucide-react'
+import { Package, PlusCircle, BarChart3, FileText, ShoppingCart, MessageCircle, ExternalLink, Landmark } from 'lucide-react'
 import ModuleLightHeader from '@/components/layout/ModuleLightHeader'
+import { useNavAccess } from '@/hooks/useNavAccess'
 import { canAccessSupplyChainView } from '@/modules/supply-chain/supplyChainNav'
 import DashboardStatistics from './DashboardStatistics'
 import ActionRequired from './ActionRequired'
@@ -32,6 +33,7 @@ interface DashboardOverviewProps {
 }
 
 export default function DashboardOverview({ userProfile, onViewChange }: DashboardOverviewProps) {
+  const navAccess = useNavAccess()
   const handleViewDocument = (orderId: string, documentId: string, docType: 'PO' | 'INVOICE' | 'PAYMENT' | 'RECEIPT' | 'PAYMENT_REQUEST', docNo?: string) => {
     sessionStorage.setItem('trackingOrderId', orderId)
     sessionStorage.setItem('selectedDocumentId', documentId)
@@ -69,6 +71,8 @@ export default function DashboardOverview({ userProfile, onViewChange }: Dashboa
   )
   const orgType = (userProfile.organizations?.org_type_code || '').toUpperCase()
   const canOpenSerapp = orgType === 'HQ' || orgType === 'DIST'
+  // Finance follows the sidebar entry and the /finance page guard (Security & Access 'finance').
+  const canOpenFinance = navAccess.allows('finance')
 
   const quickLinks = [
     { label: 'Orders', icon: Package, view: 'orders' },
@@ -76,6 +80,7 @@ export default function DashboardOverview({ userProfile, onViewChange }: Dashboa
     ...(canOrderD2H ? [{ label: 'D2H Order', icon: ShoppingCart, view: 'distributor-order' }] : []),
     { label: 'Reporting', icon: BarChart3, view: 'reporting' },
     { label: 'Documents', icon: FileText, view: 'track-order' },
+    ...(canOpenFinance ? [{ label: 'Finance', icon: Landmark, view: 'finance' }] : []),
   ]
 
   return (

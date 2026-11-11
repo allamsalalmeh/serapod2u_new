@@ -108,6 +108,7 @@ export default function BankReconciliationView({ userProfile: _userProfile }: Ba
   const [accounts, setAccounts] = useState<BankAccount[]>([])
   const [loading, setLoading] = useState(true)
   const [openId, setOpenId] = useState<string | null>(null)
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
 
   const [newAccount, setNewAccount] = useState('')
   const [newEnd, setNewEnd] = useState(today())
@@ -120,6 +121,7 @@ export default function BankReconciliationView({ userProfile: _userProfile }: Ba
       setLoading(true)
       const data = await call('GET')
       setList(data.reconciliations || [])
+      setCurrentUserId(data.currentUserId || null)
       setAccounts((data.bankAccounts || []).filter((b: BankAccount) => b.is_active && b.gl_account_id))
     } catch (e: any) {
       toast({ title: 'Error', description: e.message, variant: 'destructive' })
@@ -150,7 +152,7 @@ export default function BankReconciliationView({ userProfile: _userProfile }: Ba
   }
 
   if (openId) {
-    return <ReconciliationDetail id={openId} onBack={() => { setOpenId(null); loadList() }} />
+    return <ReconciliationDetail id={openId} currentUserId={currentUserId} onBack={() => { setOpenId(null); loadList() }} />
   }
 
   return (
@@ -264,7 +266,7 @@ export default function BankReconciliationView({ userProfile: _userProfile }: Ba
   )
 }
 
-function ReconciliationDetail({ id, onBack }: { id: string; onBack: () => void }) {
+function ReconciliationDetail({ id, currentUserId, onBack }: { id: string; currentUserId: string | null; onBack: () => void }) {
   const [detail, setDetail] = useState<Detail | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -339,6 +341,8 @@ function ReconciliationDetail({ id, onBack }: { id: string; onBack: () => void }
   const r = detail.reconciliation
   const s = detail.summary
   const editable = r.status === 'draft' || r.status === 'in_progress'
+  // The database refuses approval by the preparer or submitter; the button says so up front.
+  const preparedByMe = !!currentUserId && (r.created_by === currentUserId || r.submitted_by === currentUserId)
   const visible = detail.lines.filter((l) => showAll || !l.match_group)
   const bank = visible.filter((l) => l.side === 'BANK')
   const book = visible.filter((l) => l.side === 'BOOK')
@@ -364,14 +368,13 @@ function ReconciliationDetail({ id, onBack }: { id: string; onBack: () => void }
             <TableHead className="w-8" />
             <TableHead>Date</TableHead>
             <TableHead>{side === 'BANK' ? 'Description' : 'Journal'}</TableHead>
-            <TableHead className="text-right">In</TableHead>
-            <TableHead className="text-right">Out</TableHead>
+            <TableHead className="text-right">Amount</TableHead>
             <TableHead />
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.length === 0 ? (
-            <TableRow><TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-6">Nothing to show</TableCell></TableRow>
+            <TableRow><TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-6">Nothing to show</TableCell></TableRow>
           ) : rows.map((l) => (
             <TableRow key={l.id} className={l.match_group ? 'bg-green-50/40' : selected.has(l.id) ? 'bg-sky-50' : ''}>
               <TableCell className="py-1.5">
@@ -380,7 +383,8 @@ function ReconciliationDetail({ id, onBack }: { id: string; onBack: () => void }
                 )}
               </TableCell>
               <TableCell className="py-1.5 text-xs whitespace-nowrap">{fmtDate(l.date)}</TableCell>
-              <TableCell className="py-1.5 text-xs max-w-[260px]">
+              <TableCell className="py-1.5 text-xs">
+                <div className="max-w-[200px]">
                 {side === 'BOOK' && (
                   <div className="font-mono">
                     {l.journal_number}
@@ -389,9 +393,11 @@ function ReconciliationDetail({ id, onBack }: { id: string; onBack: () => void }
                 )}
                 <div className="truncate text-muted-foreground" title={l.description || ''}>{l.description || '-'}</div>
                 {l.reference && <div className="truncate text-[11px] text-muted-foreground">Ref: {l.reference}</div>}
+                </div>
               </TableCell>
-              <TableCell className="py-1.5 text-right font-mono text-xs text-green-700">{Number(l.money_in) > 0 ? money(l.money_in) : ''}</TableCell>
-              <TableCell className="py-1.5 text-right font-mono text-xs text-red-700">{Number(l.money_out) > 0 ? money(l.money_out) : ''}</TableCell>
+              <TableCell className={`py-1.5 text-right font-mono text-xs whitespace-nowrap ${Number(l.money_in) > 0 ? 'text-green-700' : 'text-red-700'}`}>
+                {Number(l.money_in) > 0 ? `+ ${money(l.money_in)}` : Number(l.money_out) > 0 ? `− ${money(l.money_out)}` : ''}
+              </TableCell>
               <TableCell className="py-1.5 text-right whitespace-nowrap">
                 {l.match_group ? (
                   <div className="flex items-center justify-end gap-1">
@@ -404,9 +410,9 @@ function ReconciliationDetail({ id, onBack }: { id: string; onBack: () => void }
                     )}
                   </div>
                 ) : side === 'BANK' && editable ? (
-                  <Button variant="ghost" size="sm" className="h-6 px-1.5 text-xs" title="Record this bank movement with a journal"
-                    onClick={() => openAdjust(l)}>
-                    <FilePlus2 className="h-3.5 w-3.5 mr-1" /> Record
+                  <Button variant="outline" size="sm" className="h-7 w-7 p-0" title="Record this bank movement with a journal"
+                    aria-label="Record this bank movement with a journal" onClick={() => openAdjust(l)}>
+                    <FilePlus2 className="h-3.5 w-3.5" />
                   </Button>
                 ) : null}
               </TableCell>
@@ -452,7 +458,9 @@ function ReconciliationDetail({ id, onBack }: { id: string; onBack: () => void }
           )}
           {r.status === 'submitted' && (
             <>
-              <Button size="sm" disabled={busy} onClick={() => act({ action: 'approve' }, () => 'Reconciliation approved.')}>
+              <Button size="sm" disabled={busy || preparedByMe}
+                title={preparedByMe ? 'You prepared or submitted this reconciliation. Another user must approve it.' : undefined}
+                onClick={() => act({ action: 'approve' }, () => 'Reconciliation approved.')}>
                 <CheckCircle2 className="h-4 w-4 mr-1.5" /> Approve
               </Button>
               <Button variant="outline" size="sm" disabled={busy} onClick={() => { setReasonFor('return'); setReason('') }}>
@@ -474,6 +482,11 @@ function ReconciliationDetail({ id, onBack }: { id: string; onBack: () => void }
         </div>
       )}
       {notice && <div className="rounded-md border border-green-200 bg-green-50 p-2.5 text-sm text-green-700">{notice}</div>}
+      {r.status === 'submitted' && preparedByMe && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-2.5 text-sm text-amber-800">
+          Waiting for another user to approve. You prepared or submitted this reconciliation, so you cannot approve it.
+        </div>
+      )}
 
       {reasonFor && (
         <div className="rounded-lg border p-3 space-y-2 bg-muted/20">

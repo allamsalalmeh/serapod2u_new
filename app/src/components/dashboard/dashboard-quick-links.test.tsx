@@ -10,6 +10,11 @@ vi.mock('@/components/dashboard/DashboardStatistics', () => ({ default: () => nu
 vi.mock('@/components/dashboard/ActionRequired', () => ({ default: () => null }))
 vi.mock('@/components/dashboard/RecentActivities', () => ({ default: () => null }))
 
+const access = vi.hoisted(() => ({ allowed: [] as string[] }))
+vi.mock('@/hooks/useNavAccess', () => ({
+  useNavAccess: () => ({ allows: (id: string) => access.allowed.includes(id) }),
+}))
+
 import DashboardOverview from './DashboardOverview'
 
 const profile = (orgType: string, roleLevel: number) => ({
@@ -22,7 +27,10 @@ const profile = (orgType: string, roleLevel: number) => ({
   roles: { role_name: 'HQ Admin', role_level: roleLevel },
 })
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  access.allowed = []
+})
 
 describe('Dashboard quick access', () => {
   it('offers D2H Order right after Create Order and opens the distributor order view', async () => {
@@ -41,5 +49,23 @@ describe('Dashboard quick access', () => {
     render(<DashboardOverview userProfile={profile('SHOP', 10)} onViewChange={vi.fn()} />)
     expect(screen.queryByRole('button', { name: 'D2H Order' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Create Order' })).not.toBeNull()
+  })
+
+  it('shows Finance last for users with Finance access and opens the finance landing', async () => {
+    access.allowed = ['finance']
+    const user = userEvent.setup()
+    const onViewChange = vi.fn()
+    render(<DashboardOverview userProfile={profile('HQ', 10)} onViewChange={onViewChange} />)
+
+    const labels = screen.getAllByRole('button').map(button => button.textContent)
+    expect(labels).toEqual(['Orders', 'Create Order', 'D2H Order', 'Reporting', 'Documents', 'Finance'])
+
+    await user.click(screen.getByRole('button', { name: 'Finance' }))
+    expect(onViewChange).toHaveBeenCalledWith('finance')
+  })
+
+  it('hides Finance from users without Finance access', () => {
+    render(<DashboardOverview userProfile={profile('HQ', 10)} onViewChange={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Finance' })).toBeNull()
   })
 })
