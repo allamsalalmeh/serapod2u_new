@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { adjustmentJournalLines, parseReconRequest, parseReconStart } from './reconciliation'
+import { adjustmentJournalLines, allocatePendingAdjustments, parseReconRequest, parseReconStart } from './reconciliation'
 
 const ID = '11111111-1111-4111-8111-111111111111'
 const ID2 = '22222222-2222-4222-8222-222222222222'
@@ -40,5 +40,26 @@ describe('adjustmentJournalLines', () => {
       { account_id: 'bank', description: 'Interest', debit: 2.5, credit: 0 },
       { account_id: 'interest', description: 'Interest', debit: 0, credit: 2.5 },
     ])
+  })
+})
+
+describe('allocatePendingAdjustments', () => {
+  const fee = (id: string, match_group: string | null = null) => ({ id, date: '2026-11-10', money_in: 0, money_out: 12, match_group })
+  const draft = (id: string, net = -12, date = '2026-11-10') =>
+    ({ journal_id: id, journal_number: `DRAFT-${id}`, status: 'DRAFT' as const, date, net })
+
+  it('links an open bank line to the draft recorded for it', () => {
+    const m = allocatePendingAdjustments([fee('b1')], [draft('j1')])
+    expect(m.get('b1')?.journal_id).toBe('j1')
+  })
+
+  it('ignores drafts of another date or amount, and matched bank lines', () => {
+    expect(allocatePendingAdjustments([fee('b1')], [draft('j1', -15), draft('j2', -12, '2026-11-11')]).size).toBe(0)
+    expect(allocatePendingAdjustments([fee('b1', 'g1')], [draft('j1')]).size).toBe(0)
+  })
+
+  it('uses each journal once: two identical fees with one draft leave one fee open', () => {
+    const m = allocatePendingAdjustments([fee('b1'), fee('b2')], [draft('j1')])
+    expect([...m.keys()]).toEqual(['b1'])
   })
 })

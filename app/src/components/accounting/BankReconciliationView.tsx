@@ -75,6 +75,8 @@ interface Detail {
   reconciliation: ReconListItem & { account_name: string; bank_name: string | null; gl_account_id: string; created_by: string; submitted_by: string | null }
   summary: Summary
   lines: Line[]
+  /** Bank line id → journal already recorded for it and not yet matched (draft, or posted). */
+  pending_adjustments?: Record<string, { journal_number: string; status: 'DRAFT' | 'POSTED' }>
 }
 
 const STATUS: Record<ReconListItem['status'], { label: string; className: string }> = {
@@ -361,15 +363,16 @@ function ReconciliationDetail({ id, currentUserId, onBack }: { id: string; curre
     })
 
   const lineTable = (rows: Line[], side: 'BANK' | 'BOOK') => (
-    <div className="rounded-lg border overflow-x-auto max-h-[520px] overflow-y-auto">
-      <Table>
+    <div className="rounded-lg border max-h-[520px] overflow-y-auto">
+      {/* Fixed layout: the table never grows wider than its panel, so the action column stays visible; long descriptions truncate. */}
+      <Table className="table-fixed">
         <TableHeader className="sticky top-0 bg-background z-10">
           <TableRow className="bg-muted/30">
-            <TableHead className="w-8" />
-            <TableHead>Date</TableHead>
-            <TableHead>{side === 'BANK' ? 'Description' : 'Journal'}</TableHead>
-            <TableHead className="text-right">Amount</TableHead>
-            <TableHead />
+            <TableHead className="w-10 px-2" />
+            <TableHead className="w-[104px] px-2">Date</TableHead>
+            <TableHead className="px-2">{side === 'BANK' ? 'Description' : 'Journal'}</TableHead>
+            <TableHead className="w-[128px] px-2 text-right">Amount</TableHead>
+            <TableHead className="w-[96px] px-2" />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -377,16 +380,16 @@ function ReconciliationDetail({ id, currentUserId, onBack }: { id: string; curre
             <TableRow><TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-6">Nothing to show</TableCell></TableRow>
           ) : rows.map((l) => (
             <TableRow key={l.id} className={l.match_group ? 'bg-green-50/40' : selected.has(l.id) ? 'bg-sky-50' : ''}>
-              <TableCell className="py-1.5">
+              <TableCell className="py-1.5 px-2">
                 {!l.match_group && editable && (
                   <input type="checkbox" checked={selected.has(l.id)} onChange={() => toggle(l.id)} className="h-4 w-4" />
                 )}
               </TableCell>
-              <TableCell className="py-1.5 text-xs whitespace-nowrap">{fmtDate(l.date)}</TableCell>
-              <TableCell className="py-1.5 text-xs">
-                <div className="max-w-[200px]">
+              <TableCell className="py-1.5 px-2 text-xs whitespace-nowrap">{fmtDate(l.date)}</TableCell>
+              <TableCell className="py-1.5 px-2 text-xs">
+                <div className="min-w-0">
                 {side === 'BOOK' && (
-                  <div className="font-mono">
+                  <div className="font-mono truncate">
                     {l.journal_number}
                     {l.journal_status === 'REVERSED' && <span className="ml-1 text-orange-600">(reversed)</span>}
                   </div>
@@ -395,10 +398,10 @@ function ReconciliationDetail({ id, currentUserId, onBack }: { id: string; curre
                 {l.reference && <div className="truncate text-[11px] text-muted-foreground">Ref: {l.reference}</div>}
                 </div>
               </TableCell>
-              <TableCell className={`py-1.5 text-right font-mono text-xs whitespace-nowrap ${Number(l.money_in) > 0 ? 'text-green-700' : 'text-red-700'}`}>
+              <TableCell className={`py-1.5 px-2 text-right font-mono text-xs whitespace-nowrap ${Number(l.money_in) > 0 ? 'text-green-700' : 'text-red-700'}`}>
                 {Number(l.money_in) > 0 ? `+ ${money(l.money_in)}` : Number(l.money_out) > 0 ? `− ${money(l.money_out)}` : ''}
               </TableCell>
-              <TableCell className="py-1.5 text-right whitespace-nowrap">
+              <TableCell className="py-1.5 px-2 text-right whitespace-nowrap">
                 {l.match_group ? (
                   <div className="flex items-center justify-end gap-1">
                     <Badge variant="outline" className="text-[10px] text-green-700 border-green-200">{l.match_type === 'AUTO' ? 'Auto' : 'Matched'}</Badge>
@@ -409,6 +412,13 @@ function ReconciliationDetail({ id, currentUserId, onBack }: { id: string; curre
                       </Button>
                     )}
                   </div>
+                ) : side === 'BANK' && editable && detail.pending_adjustments?.[l.id] ? (
+                  <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-200 bg-amber-50"
+                    title={detail.pending_adjustments[l.id].status === 'DRAFT'
+                      ? `${detail.pending_adjustments[l.id].journal_number} is waiting: post it from GL Journals, then run Auto match`
+                      : `${detail.pending_adjustments[l.id].journal_number} is posted: run Auto match`}>
+                    {detail.pending_adjustments[l.id].status === 'DRAFT' ? 'Draft pending' : 'Run Auto match'}
+                  </Badge>
                 ) : side === 'BANK' && editable ? (
                   <Button variant="outline" size="sm" className="h-7 w-7 p-0" title="Record this bank movement with a journal"
                     aria-label="Record this bank movement with a journal" onClick={() => openAdjust(l)}>

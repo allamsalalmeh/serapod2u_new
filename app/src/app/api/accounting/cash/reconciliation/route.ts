@@ -1,4 +1,6 @@
+import { loadPendingAdjustments, RECON_REFERENCE_PREFIX } from '@/lib/accounting/recon-adjustments'
 import { financeAllowed } from '@/lib/security-access/finance'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { adjustmentJournalLines, parseReconRequest, parseReconStart } from '@/modules/finance/reconciliation'
 import { NextResponse } from 'next/server'
@@ -59,7 +61,19 @@ export async function GET(request: Request) {
     const id = searchParams.get('id')
     if (id) {
       const { data, error } = await a.supabase.rpc('fin_recon_data', { p_recon_id: id })
-      return rpcResult(data, error)
+      if (error || !data?.success) return rpcResult(data, error)
+      // Bank lines that already have a recorded journal waiting (draft, or posted and not yet matched).
+      let pending: Record<string, { journal_number: string; status: string }> = {}
+      try {
+        const bankGl = data.reconciliation?.gl_account_id
+        if (bankGl) {
+          const map = await loadPendingAdjustments(createAdminClient(), a.orgId, bankGl, data.lines || [])
+          pending = Object.fromEntries([...map].map(([lineId, c]) => [lineId, { journal_number: c.journal_number, status: c.status }]))
+        }
+      } catch (e) {
+        console.error('Pending reconciliation journals lookup failed:', e)
+      }
+      return NextResponse.json({ ...data, pending_adjustments: pending })
     }
 
     let query = a.supabase
@@ -181,11 +195,21 @@ export async function PATCH(request: Request) {
         const bankGl = recon.reconciliation?.gl_account_id
         if (!bankGl) return NextResponse.json({ error: 'The bank account is not linked to a GL account' }, { status: 400 })
 
+        // One journal per bank line: refuse a second one while the first is still waiting.
+        const pending = (await loadPendingAdjustments(createAdminClient(), a.orgId, bankGl, recon.lines || [])).get(line.id)
+        if (pending) {
+          return NextResponse.json({
+            error: pending.status === 'DRAFT'
+              ? `Journal ${pending.journal_number} was already recorded for this bank line. Post it from GL Journals, then run Auto match.`
+              : `Journal ${pending.journal_number} already records this bank line. Run Auto match.`,
+          }, { status: 409 })
+        }
+
         const { data, error } = await a.supabase.rpc('fin_save_manual_journal', {
           p_journal_id: null,
           p_journal_date: line.date,
           p_description: req.description,
-          p_reference: `Bank reconciliation ${recon.reconciliation.period_start} to ${recon.reconciliation.period_end}`,
+          p_reference: `${RECON_REFERENCE_PREFIX} ${recon.reconciliation.period_start} to ${recon.reconciliation.period_end}`,
           p_lines: adjustmentJournalLines(line, bankGl, req.accountId, req.description),
         })
         return rpcResult(data, error)

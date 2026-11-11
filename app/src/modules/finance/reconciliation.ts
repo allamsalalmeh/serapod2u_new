@@ -81,6 +81,43 @@ export interface BankLine {
   money_out: number
 }
 
+/** A journal recorded from a bank line (Record) that does not yet close it: a draft, or posted but not matched. */
+export interface AdjustmentCandidate {
+  journal_id: string
+  journal_number: string
+  status: 'DRAFT' | 'POSTED'
+  date: string
+  /** Net movement on the bank's GL account: positive = money in. */
+  net: number
+}
+
+const cents = (v: number) => Math.round(Number(v) * 100)
+
+/**
+ * Pairs each open bank line with at most one pending recorded journal of the same date and amount,
+ * so a bank line that already has a journal waiting is not recorded a second time. Two identical
+ * bank lines on one day need two journals: each journal is used once.
+ */
+export function allocatePendingAdjustments(
+  bankLines: (BankLine & { id: string; match_group?: string | null })[],
+  candidates: AdjustmentCandidate[],
+): Map<string, AdjustmentCandidate> {
+  const result = new Map<string, AdjustmentCandidate>()
+  const used = new Set<string>()
+  const ordered = [...candidates].sort((a, b) =>
+    a.status === b.status ? a.journal_number.localeCompare(b.journal_number) : a.status === 'POSTED' ? -1 : 1)
+  for (const line of bankLines) {
+    if (line.match_group) continue
+    const net = cents(line.money_in) - cents(line.money_out)
+    const hit = ordered.find((c) => !used.has(c.journal_id) && c.date === line.date && cents(c.net) === net)
+    if (hit) {
+      used.add(hit.journal_id)
+      result.set(line.id, hit)
+    }
+  }
+  return result
+}
+
 /**
  * Journal lines recording a bank-only movement: money out (charge) is
  * Dr other account / Cr bank; money in (interest, refund) is Dr bank / Cr other account.
