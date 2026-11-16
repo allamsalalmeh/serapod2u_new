@@ -162,7 +162,7 @@ export default function ManufacturerScanView2({ userProfile }: ManufacturerScanV
         seller_org_id,
         payment_terms,
         buyer_org:organizations!orders_buyer_org_id_fkey(org_name),
-        qr_batches(id, status)
+        qr_batches(id, status, packing_status)
       `)
       .eq('seller_org_id', userProfile.organization_id)
       .in('status', ['approved', 'closed'])
@@ -189,6 +189,13 @@ export default function ManufacturerScanView2({ userProfile }: ManufacturerScanV
 
       // Check each batch for printed master codes
       for (const batch of batchList) {
+        // Packed but production not completed (e.g. the page was closed before step 2):
+        // keep the order in the list so the manufacturer can finish it.
+        if (batch.status !== 'completed' && batch.packing_status === 'completed') {
+          ordersWithPrintedMasters.push(order)
+          break
+        }
+
         // Query master codes for this batch with printed status
         const { count: printedCount } = await supabase
           .from('qr_master_codes')
@@ -317,6 +324,9 @@ export default function ManufacturerScanView2({ userProfile }: ManufacturerScanV
     setProgressStep('packing')
 
     try {
+      // Codes already packed (an earlier run stopped before step 2): go straight to step 2.
+      const alreadyPacked = currentBatch.packing_status === 'completed'
+      if (!alreadyPacked) {
       // Step 1: Start Packing Worker
       const startResponse = await fetch('/api/manufacturer/start-packing', {
         method: 'POST',
@@ -357,6 +367,8 @@ export default function ManufacturerScanView2({ userProfile }: ManufacturerScanV
         }
       }
 
+      }
+
       // Step 2: Ready to Ship & Notify (Complete Production)
       setProgressStep('shipping')
 
@@ -379,7 +391,7 @@ export default function ManufacturerScanView2({ userProfile }: ManufacturerScanV
 
       // Calculate balance percentage from order payment terms
       const order = orders.find(o => o.id === selectedOrder)
-      const balancePct = order?.payment_terms?.balance_pct || 0.5
+      const balancePct = Number(order?.payment_terms?.balance_pct ?? 0.5)
       const balancePercentage = Math.round(balancePct * 100)
 
       // Show success message with balance payment info
