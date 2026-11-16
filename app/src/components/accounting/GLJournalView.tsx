@@ -35,6 +35,7 @@ import { defaultPostingDate } from '@/modules/finance/postingDate'
 import { canReverseJournal } from '@/modules/finance/manualJournal'
 import ManualJournalDialog, { ManualJournalDraft } from '@/components/accounting/ManualJournalDialog'
 import ReverseJournalDialog from '@/components/accounting/ReverseJournalDialog'
+import OrderDocumentsDialogEnhanced from '@/components/dashboard/views/orders/OrderDocumentsDialogEnhanced'
 
 interface GLJournalViewProps {
   userProfile: {
@@ -97,6 +98,8 @@ interface JournalDetail {
     posted_amount: number
   } | null
   edit_lines?: Array<{ account_id: string; description: string | null; debit_amount: number; credit_amount: number }>
+  /** The order behind the posted document (H2M or D2H), if any. */
+  order?: { id: string; order_no: string; display_doc_no: string | null } | null
 }
 
 interface PendingPosting {
@@ -155,6 +158,8 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
 
   // Detail modal
   const [selectedJournal, setSelectedJournal] = useState<JournalDetail | null>(null)
+  // Order whose documents are shown (Order Documents dialog)
+  const [docsOrder, setDocsOrder] = useState<{ id: string; orderNo: string; displayNo: string | null } | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
 
   // Posting modal
@@ -660,6 +665,16 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
                             </TableCell>
                             <TableCell className="font-mono text-sm">
                               {pending.order_display_doc_no || pending.order_no || '-'}
+                              {pending.order_id && (
+                                <button
+                                  type="button"
+                                  className="mt-0.5 flex items-center gap-1 font-sans text-xs text-blue-600 hover:underline"
+                                  onClick={() => setDocsOrder({ id: pending.order_id, orderNo: pending.order_no, displayNo: pending.order_display_doc_no })}
+                                >
+                                  <FileText className="h-3 w-3" />
+                                  Documents
+                                </button>
+                              )}
                             </TableCell>
                             <TableCell>
                               <Badge
@@ -781,6 +796,30 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
                   <p className="text-sm">
                     {selectedJournal.posting.document_type}: {selectedJournal.posting.document_number}
                   </p>
+                </div>
+              )}
+
+              {selectedJournal.order && (
+                <div className="p-3 bg-blue-50 rounded-lg flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <Label className="text-blue-700">Order</Label>
+                    <p className="text-sm font-mono">
+                      {selectedJournal.order.display_doc_no || selectedJournal.order.order_no}
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const o = selectedJournal.order!
+                      // Close this dialog first: the documents dialog opens on top of the page.
+                      setSelectedJournal(null)
+                      setDocsOrder({ id: o.id, orderNo: o.order_no, displayNo: o.display_doc_no })
+                    }}
+                  >
+                    <FileText className="h-4 w-4 mr-1" />
+                    View order documents
+                  </Button>
                 </div>
               )}
 
@@ -1039,6 +1078,17 @@ export default function GLJournalView({ userProfile }: GLJournalViewProps) {
           )}
         </DialogContent>
       </Dialog>
+
+      {docsOrder && (
+        <OrderDocumentsDialogEnhanced
+          open={!!docsOrder}
+          onClose={() => setDocsOrder(null)}
+          orderId={docsOrder.id}
+          orderNo={docsOrder.orderNo}
+          displayOrderNo={docsOrder.displayNo}
+          userProfile={userProfile as any}
+        />
+      )}
     </div>
   )
 }

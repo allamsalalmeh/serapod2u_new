@@ -36,6 +36,8 @@ import {
 import { POSTING_TYPE_COLORS, getPostingType } from '@/modules/finance/postingMap'
 import { useSaCapability } from '@/hooks/useSaCapability'
 import { createClient } from '@/lib/supabase/client'
+import { FileText as FileTextIcon } from 'lucide-react'
+import OrderDocumentsDialogEnhanced from '@/components/dashboard/views/orders/OrderDocumentsDialogEnhanced'
 import { defaultPostingDate, financeToday, isValidPostingDate } from '@/modules/finance/postingDate'
 import { MAX_REFERENCE_LENGTH, toAmount } from '@/modules/finance/supplierPayment'
 
@@ -161,6 +163,8 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
   const [previewLoading, setPreviewLoading] = useState(false)
   const [postingPreview, setPostingPreview] = useState<PostingPreview | null>(null)
   const [selectedPending, setSelectedPending] = useState<PendingPosting | null>(null)
+  // Order whose documents are shown (Order Documents dialog)
+  const [docsOrder, setDocsOrder] = useState<{ id: string; orderNo: string; displayNo: string | null } | null>(null)
   const [postingDate, setPostingDate] = useState('')
   const today = financeToday()
   const postingDateValid = isValidPostingDate(postingDate) && postingDate <= today
@@ -716,6 +720,16 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                           </TableCell>
                           <TableCell className="font-mono text-sm text-muted-foreground">
                             {pending.order_display_doc_no || pending.order_no || '-'}
+                            {pending.order_id && (
+                              <button
+                                type="button"
+                                className="mt-0.5 flex items-center gap-1 font-sans text-xs text-blue-600 hover:underline"
+                                onClick={() => setDocsOrder({ id: pending.order_id, orderNo: pending.order_no, displayNo: pending.order_display_doc_no })}
+                              >
+                                <FileTextIcon className="h-3 w-3" />
+                                Documents
+                              </button>
+                            )}
                           </TableCell>
                           <TableCell>
                             <Badge
@@ -838,6 +852,28 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                     {selectedPending?.display_doc_no || selectedPending?.document_no}
                   </p>
                 </div>
+                {selectedPending?.order_id && (
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Order</Label>
+                    <p className="font-mono text-sm font-medium">
+                      {selectedPending.order_display_doc_no || selectedPending.order_no}
+                    </p>
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 text-xs text-blue-600 hover:underline"
+                      onClick={() => {
+                        const p = selectedPending
+                        // Close this dialog first: the documents dialog opens on top of the page.
+                        setPostingPreview(null)
+                        setSelectedPending(null)
+                        setDocsOrder({ id: p.order_id, orderNo: p.order_no, displayNo: p.order_display_doc_no })
+                      }}
+                    >
+                      <FileTextIcon className="h-3 w-3" />
+                      View order documents
+                    </button>
+                  </div>
+                )}
                 <div>
                   <Label className="text-xs text-muted-foreground">Posting Type</Label>
                   <p className="text-sm font-medium">
@@ -1197,6 +1233,17 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
           )}
         </DialogContent>
       </Dialog>
+
+      {docsOrder && (
+        <OrderDocumentsDialogEnhanced
+          open={!!docsOrder}
+          onClose={() => setDocsOrder(null)}
+          orderId={docsOrder.id}
+          orderNo={docsOrder.orderNo}
+          displayOrderNo={docsOrder.displayNo}
+          userProfile={userProfile as any}
+        />
+      )}
     </div>
   )
 }

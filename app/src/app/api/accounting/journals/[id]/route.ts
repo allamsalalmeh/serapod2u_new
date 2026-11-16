@@ -111,6 +111,28 @@ export async function GET(
       editLines = raw || []
     }
 
+    // The order behind the posted document (H2M or D2H), for the "View order documents" button.
+    let order: { id: string; order_no: string; display_doc_no: string | null } | null = null
+    let sourceDocumentId: string | null = posting?.document_id ?? null
+    let sourceOrderId: string | null = null
+    if (!sourceDocumentId) {
+      const { data: payment } = await (supabase as any)
+        .from('fin_payments').select('document_id, order_id').eq('journal_id', id).limit(1).maybeSingle()
+      sourceDocumentId = payment?.document_id ?? null
+      sourceOrderId = payment?.order_id ?? null
+    }
+    if (sourceDocumentId && !sourceOrderId) {
+      const { data: doc } = await (supabase as any)
+        .from('documents').select('order_id').eq('id', sourceDocumentId).maybeSingle()
+      // Older sales invoice postings point at the order itself.
+      sourceOrderId = doc?.order_id ?? sourceDocumentId
+    }
+    if (sourceOrderId) {
+      const { data: o } = await (supabase as any)
+        .from('orders').select('id, order_no, display_doc_no').eq('id', sourceOrderId).maybeSingle()
+      if (o) order = o
+    }
+
     return NextResponse.json({
       journal: {
         ...journal,
@@ -128,6 +150,7 @@ export async function GET(
       },
       lines: lines || [],
       posting: posting || null,
+      order,
       edit_lines: editLines,
     })
   } catch (error) {
