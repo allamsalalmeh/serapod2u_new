@@ -35,6 +35,7 @@ import {
 } from 'lucide-react'
 import { POSTING_TYPE_COLORS, getPostingType } from '@/modules/finance/postingMap'
 import { useSaCapability } from '@/hooks/useSaCapability'
+import { createClient } from '@/lib/supabase/client'
 import { defaultPostingDate, financeToday, isValidPostingDate } from '@/modules/finance/postingDate'
 import { MAX_REFERENCE_LENGTH, toAmount } from '@/modules/finance/supplierPayment'
 
@@ -202,11 +203,32 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
   const [batchConfirmOpen, setBatchConfirmOpen] = useState(false)
   const [batchResults, setBatchResults] = useState<{ success: number; failed: number; errors: string[] } | null>(null)
 
+  // Warehouse receipt of the orders behind supplier invoices (Finance posts after the goods arrive).
+  const [receivedByOrder, setReceivedByOrder] = useState<Record<string, boolean>>({})
+
   // Shown when Security & Access allows finance.journal.post (the server decides the
   // operation); the historical role-level rule applies until it is enforced.
   const canPost = useSaCapability('finance.journal.post', userProfile.roles.role_level <= 20)
 
   // ── Data Loading ──────────────────────────────────────────────
+
+  useEffect(() => {
+    const orderIds = Array.from(new Set(
+      pendingPostings
+        .filter((p) => p.gl_doc_type === 'SUPPLIER_INVOICE_RECOGNITION' && p.order_id)
+        .map((p) => p.order_id),
+    ))
+    if (orderIds.length === 0) return
+    let cancelled = false
+    ;(async () => {
+      const { data, error } = await (createClient() as any).rpc('fin_orders_warehouse_received', { p_order_ids: orderIds })
+      if (cancelled || error || !Array.isArray(data)) return
+      const map: Record<string, boolean> = {}
+      for (const row of data) map[row.order_id] = !!row.received
+      setReceivedByOrder(map)
+    })()
+    return () => { cancelled = true }
+  }, [pendingPostings])
 
   const loadPendingPostings = useCallback(async () => {
     try {
@@ -672,7 +694,10 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                       const key = uniqueKey(pending)
                       const selected = selectedIds.has(key)
                       const colors = POSTING_TYPE_COLORS[pending.gl_doc_type]
-                      const entityName = pending.buyer_name || pending.supplier_name || '-'
+                      // Supplier documents (H2M) show the supplier; sales documents the customer.
+                      const entityName = (pending.gl_doc_type.startsWith('SUPPLIER_')
+                        ? pending.supplier_name || pending.buyer_name
+                        : pending.buyer_name || pending.supplier_name) || '-'
 
                       return (
                         <TableRow
@@ -702,6 +727,11 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                           </TableCell>
                           <TableCell className="text-sm max-w-[160px] truncate">
                             {entityName}
+                            {pending.gl_doc_type === 'SUPPLIER_INVOICE_RECOGNITION' && pending.order_id in receivedByOrder && (
+                              <div className={`text-xs ${receivedByOrder[pending.order_id] ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                {receivedByOrder[pending.order_id] ? 'Goods received' : 'Goods not received yet'}
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
                             {formatDate(pending.document_date)}
@@ -1009,6 +1039,14 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                       )}
                     </div>
                   )}
+                </div>
+              )}
+
+              {selectedPending?.gl_doc_type === 'SUPPLIER_INVOICE_RECOGNITION'
+                && receivedByOrder[selectedPending.order_id] === false && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                  The goods of this order have not been received in the warehouse yet.
+                  Confirm the receipt before posting the supplier invoice to inventory.
                 </div>
               )}
 

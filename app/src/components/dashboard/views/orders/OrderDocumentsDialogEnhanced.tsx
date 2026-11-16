@@ -10,6 +10,7 @@ import DocumentWorkflowProgress from '@/components/documents/DocumentWorkflowPro
 import AcknowledgeButton from '@/components/documents/AcknowledgeButton'
 import PaymentProofUpload from '@/components/documents/PaymentProofUpload'
 import ManufacturerDocumentUpload from '@/components/documents/ManufacturerDocumentUpload'
+import OrderPaymentTermsCard from '@/components/orders/OrderPaymentTermsCard'
 import { type Document, getDisplayDocNo } from '@/lib/document-permissions'
 import { downloadOrderDocument } from '@/lib/storage/order-documents-client'
 
@@ -860,7 +861,22 @@ export default function OrderDocumentsDialogEnhanced({
               use50_50Split={is50_50Split}
               depositPercentage={depositPercentage}
               orderType={orderData?.order_type}
+              buyerOrgName={orderData?.buyer_org?.org_name}
+              sellerOrgName={orderData?.seller_org?.org_name}
             />
+
+            {orderData && (
+              <OrderPaymentTermsCard
+                orderId={orderId}
+                orderType={orderData.order_type}
+                paymentTerms={orderData.payment_terms}
+                orderTotal={(orderData.order_items || []).reduce(
+                  (sum: number, item: any) => sum + (Number(item.line_total) || Number(item.qty) * Number(item.unit_price) || 0),
+                  0,
+                )}
+                onChanged={loadOrderData}
+              />
+            )}
 
             {/* Document Tabs */}
             <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">

@@ -43,6 +43,8 @@ export interface SaveOrderRequest {
   hasRedeem: boolean
   notes: string | null
   items: SaveOrderRequestItem[]
+  /** H2M: payment term picked from the master data; null keeps the seller's term (create) or the current one (update). */
+  paymentTermId?: string | null
 }
 
 export interface SaveOrderSuccess {
@@ -73,6 +75,7 @@ export function parseSaveOrderRequest(body: unknown): SaveOrderRequest | null {
   if (typeof b.orderId !== 'string' || !UUID_RE.test(b.orderId)) return null
   if (typeof b.sellerOrgId !== 'string' || !UUID_RE.test(b.sellerOrgId)) return null
   if (b.mode === 'update' && (typeof b.expectedUpdatedAt !== 'string' || !b.expectedUpdatedAt)) return null
+  if (b.paymentTermId != null && (typeof b.paymentTermId !== 'string' || !UUID_RE.test(b.paymentTermId))) return null
   if (!Array.isArray(b.items) || b.items.length === 0 || b.items.length > 200) return null
   const items: SaveOrderRequestItem[] = []
   for (const raw of b.items) {
@@ -104,6 +107,7 @@ export function parseSaveOrderRequest(body: unknown): SaveOrderRequest | null {
     hasRedeem: b.hasRedeem === true,
     notes: typeof b.notes === 'string' ? b.notes : null,
     items,
+    paymentTermId: typeof b.paymentTermId === 'string' ? b.paymentTermId : null,
   }
 }
 
@@ -144,6 +148,9 @@ export function classifySaveOrderError(error: PostgrestLikeError): {
     case '28000':
       return { status: 401, code: 'unauthorized', message: 'Your session has expired. Sign in again; your form is unchanged.' }
     case '22023':
+      if (message.startsWith('invalid_payment_term')) {
+        return { status: 400, code: 'invalid_request', message: 'The selected payment term is not available. Choose another one. Nothing was saved.' }
+      }
       return { status: 400, code: 'invalid_request', message: 'The order details are not valid. Nothing was saved.' }
     case '23505':
       return { status: 409, code: 'order_changed', message: 'A conflicting save was detected. Nothing was saved.' }

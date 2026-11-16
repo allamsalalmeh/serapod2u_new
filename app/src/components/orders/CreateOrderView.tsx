@@ -10,6 +10,7 @@ import { ArrowLeft, User, Package, CheckSquare, Loader2, Trash2 } from 'lucide-r
 import { useOrderCreateAccess } from '@/modules/supply-chain/useOrderCreateAccess'
 import { DEFAULT_QR_BUFFER_PERCENT, allocateQrBufferCases, qrBufferCases, resolveQrBufferPercent } from '@/lib/orders/qr-buffer'
 import { formatOrderExpectedBoxes } from '@/lib/orders/packaging'
+import { paymentTermFlow, termIdForOrder, type PaymentTermOption } from '@/lib/orders/payment-terms'
 import { referenceSuffix, reportClientError } from '@/lib/system-logs/client'
 import {
   PRODUCT_SEPARATOR,
@@ -214,6 +215,13 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
   const [enableRedeem, setEnableRedeem] = useState(true)
   const [notes, setNotes] = useState('')
 
+  // H2M payment term, read from the master data (payment_terms). Defaults to the
+  // seller's term; once the user picks one (or an existing order is loaded) it is kept.
+  const [paymentTermOptions, setPaymentTermOptions] = useState<PaymentTermOption[]>([])
+  const [paymentTermId, setPaymentTermId] = useState<string>('')
+  const [paymentTermKept, setPaymentTermKept] = useState(false)
+  const [savedOrderTerms, setSavedOrderTerms] = useState<any>(null)
+
   // Manufacturer lock - order can only contain products from one manufacturer
   const [lockedManufacturerId, setLockedManufacturerId] = useState<string | null>(null)
 
@@ -232,6 +240,51 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (orderType !== 'H2M') return
+    let cancelled = false
+    ;(async () => {
+      const { data, error } = await supabase
+        .from('payment_terms')
+        .select('id, term_code, term_name, deposit_percentage, balance_percentage, is_default')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true })
+      if (!cancelled && !error) setPaymentTermOptions((data || []) as PaymentTermOption[])
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderType])
+
+  // An existing order keeps its own term.
+  useEffect(() => {
+    if (!savedOrderTerms || paymentTermOptions.length === 0) return
+    const id = termIdForOrder(paymentTermOptions, savedOrderTerms)
+    if (id) setPaymentTermId(id)
+  }, [savedOrderTerms, paymentTermOptions])
+
+  // A new order follows the seller's term until the user picks one.
+  useEffect(() => {
+    if (orderType !== 'H2M' || paymentTermKept || paymentTermOptions.length === 0) return
+    const fallback = paymentTermOptions.find((t) => t.is_default)?.id || paymentTermOptions[0].id
+    if (!sellerOrg?.id) {
+      setPaymentTermId(fallback)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      const { data } = await supabase
+        .from('organizations')
+        .select('payment_term_id')
+        .eq('id', sellerOrg.id)
+        .maybeSingle()
+      if (cancelled) return
+      const sellerTerm = (data as any)?.payment_term_id
+      setPaymentTermId(paymentTermOptions.some((t) => t.id === sellerTerm) ? sellerTerm : fallback)
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderType, sellerOrg?.id, paymentTermOptions, paymentTermKept])
 
   const initializeOrder = async () => {
     try {
@@ -887,6 +940,8 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
 
       // Set order type
       setOrderType(orderData.order_type)
+      setPaymentTermKept(true)
+      setSavedOrderTerms(orderData.payment_terms ?? null)
 
       // Set buyer and seller organizations
       if (buyerOrg) {
@@ -1196,6 +1251,7 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
         hasLuckyDraw: enableLuckyDraw,
         hasRedeem: enableRedeem,
         notes: notes || `Customer: ${customerName}, Phone: ${phoneNumber}, Address: ${deliveryAddress}`,
+        paymentTermId: null, // the term comes from the master data; overrides are made in Order Documents
         items: orderItems.map(item => ({
           product_id: item.product_id,
           variant_id: item.variant_id,
@@ -1484,6 +1540,35 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
               </div>
             </CardContent>
           </Card>
+
+          {/* Payment Terms (H2M) */}
+          {orderType === 'H2M' && paymentTermOptions.length > 0 && (
+            <Card className="sera-sc-panel overflow-hidden shadow-none">
+              <CardHeader className="border-b bg-[var(--sera-ink)]/[0.03]">
+                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                  <CheckSquare className="w-4 h-4" />
+                  Payment Terms
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-6 space-y-2">
+                {(() => {
+                  const term = paymentTermOptions.find((t) => t.id === paymentTermId)
+                  return term ? (
+                    <>
+                      <p className="text-sm font-medium text-[var(--sera-ink)]">{term.term_name}</p>
+                      <p className="text-sm text-[var(--sera-muted)]">{paymentTermFlow(term)}</p>
+                    </>
+                  ) : null
+                })()}
+                <p className="text-xs text-[var(--sera-muted)]">
+                  {savedOrderTerms?.source === 'override'
+                    ? 'Changed for this order in Order Documents.'
+                    : 'From the manufacturer\u2019s master data.'}{' '}
+                  HQ Admin can change it in Order Documents until the manufacturer acknowledges the purchase order.
+                </p>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Order Configuration */}
           <Card className="sera-sc-panel overflow-hidden shadow-none">

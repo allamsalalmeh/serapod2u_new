@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
     p_has_redeem: parsed.hasRedeem,
     p_notes: parsed.notes,
     p_items: parsed.items,
+    p_payment_term_id: parsed.paymentTermId ?? null,
   })
 
   if (error || !data) {
