@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import { GLAccount, GLAccountType, GLAccountInsert, GLAccountUpdate, GLAccountsListResponse } from '@/types/accounting'
 import { useSaCapability } from '@/hooks/useSaCapability'
+import ChartOfAccountsTree from '@/components/accounting/ChartOfAccountsTree'
 
 interface ChartOfAccountsTabProps {
   userProfile: {
@@ -69,6 +70,10 @@ export default function ChartOfAccountsTab({ userProfile }: ChartOfAccountsTabPr
   const [activeFilter, setActiveFilter] = useState<'ALL' | 'true' | 'false'>('ALL')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(25)
+
+  // Tree view (ERPNext-style, with balances) or the paged list
+  const [viewMode, setViewMode] = useState<'tree' | 'list'>('tree')
+  const [treeReload, setTreeReload] = useState(0)
   
   // Modal state
   const [modalOpen, setModalOpen] = useState(false)
@@ -175,17 +180,31 @@ export default function ChartOfAccountsTab({ userProfile }: ChartOfAccountsTabPr
   }
 
   // Open create modal
-  const handleCreate = () => {
+  // preset: from the tree's "+" on a group (type, subtype and parent account)
+  const handleCreate = (preset?: { account_type: string; subtype: string | null; parent_account_id: string | null }) => {
     setEditingAccount(null)
     setFormData({
       code: '',
       name: '',
-      account_type: 'ASSET',
-      subtype: '',
+      account_type: (preset?.account_type as GLAccountType) || 'ASSET',
+      subtype: preset?.subtype || '',
       description: '',
-      is_active: true
+      is_active: true,
+      parent_account_id: preset?.parent_account_id || null
     })
     setModalOpen(true)
+  }
+
+  // Edit from the tree, which knows only the account id
+  const handleEditById = async (accountId: string) => {
+    try {
+      const response = await fetch(`/api/accounting/accounts/${accountId}`)
+      const data = await response.json()
+      if (response.ok && data.account) handleEdit(data.account)
+      else toast({ title: 'Error', description: data.error || 'Failed to load account', variant: 'destructive' })
+    } catch {
+      toast({ title: 'Error', description: 'Failed to load account', variant: 'destructive' })
+    }
   }
 
   // Open edit modal
@@ -239,6 +258,7 @@ export default function ChartOfAccountsTab({ userProfile }: ChartOfAccountsTabPr
         })
         setModalOpen(false)
         loadAccounts()
+        setTreeReload((k) => k + 1)
       } else {
         toast({
           title: 'Error',
@@ -418,15 +438,34 @@ export default function ChartOfAccountsTab({ userProfile }: ChartOfAccountsTabPr
               </CardDescription>
             </div>
           </div>
+          <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-md border p-0.5">
+            <Button size="sm" variant={viewMode === 'tree' ? 'secondary' : 'ghost'} onClick={() => setViewMode('tree')}>
+              Tree View
+            </Button>
+            <Button size="sm" variant={viewMode === 'list' ? 'secondary' : 'ghost'} onClick={() => setViewMode('list')}>
+              List View
+            </Button>
+          </div>
           {canManage && (
-            <Button onClick={handleCreate}>
+            <Button onClick={() => handleCreate()}>
               <Plus className="w-4 h-4 mr-2" />
               New Account
             </Button>
           )}
+          </div>
         </div>
       </CardHeader>
       <CardContent>
+        {viewMode === 'tree' && hasAnyAccounts ? (
+          <ChartOfAccountsTree
+            companyName={(userProfile.organizations as any)?.org_name}
+            canManage={canManage}
+            reloadKey={treeReload}
+            onEdit={handleEditById}
+            onAddChild={handleCreate}
+          />
+        ) : (<>
         {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-4 mb-6">
           {/* Search */}
@@ -568,7 +607,7 @@ export default function ChartOfAccountsTab({ userProfile }: ChartOfAccountsTabPr
                       <p className="text-sm text-gray-400 mt-1">Try adjusting your filters</p>
                     )}
                     {canManage && !search && accountTypeFilter === 'ALL' && activeFilter === 'ALL' && (
-                      <Button variant="outline" className="mt-4" onClick={handleCreate}>
+                      <Button variant="outline" className="mt-4" onClick={() => handleCreate()}>
                         <Plus className="w-4 h-4 mr-2" />
                         Create First Account
                       </Button>
@@ -692,6 +731,7 @@ export default function ChartOfAccountsTab({ userProfile }: ChartOfAccountsTabPr
             </div>
           </div>
         )}
+        </>)}
       </CardContent>
 
       {/* Create/Edit Modal */}
