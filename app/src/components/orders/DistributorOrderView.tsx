@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { ArrowLeft, User, Package, Loader2, Trash2, ShoppingCart, Building2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import QuickOrderGrid from './QuickOrderGrid'
+import { orderTermsSummary, paymentTermChangeErrorMessage, type PaymentTermOption } from '@/lib/orders/payment-terms'
 import {
   MISSING_DEFAULT_FULFILLMENT_WAREHOUSE_MESSAGE,
   filterEligibleHqFulfillmentWarehouses,
@@ -123,6 +124,14 @@ export default function DistributorOrderView({ userProfile, onViewChange }: Dist
   const [sellerOrg, setSellerOrg] = useState<Organization | null>(null)
   const [availableDistributors, setAvailableDistributors] = useState<Organization[]>([])
   const [selectedDistributorId, setSelectedDistributorId] = useState('')
+
+  // Payment term: the distributor's term from the master data; HQ Admin may choose another
+  // one with a reason (logged, same as Order Documents).
+  const [paymentTermOptions, setPaymentTermOptions] = useState<PaymentTermOption[]>([])
+  const [masterTermId, setMasterTermId] = useState('')
+  const [paymentTermId, setPaymentTermId] = useState('')
+  const [paymentTermReason, setPaymentTermReason] = useState('')
+  const [canChangePaymentTerm, setCanChangePaymentTerm] = useState(false)
   const [distributorSearchQuery, setDistributorSearchQuery] = useState('')
   const [isDistributorDropdownOpen, setIsDistributorDropdownOpen] = useState(false)
   const distributorSearchRef = useRef<HTMLDivElement>(null)
@@ -137,6 +146,55 @@ export default function DistributorOrderView({ userProfile, onViewChange }: Dist
   // created_at stays the real creation time and is never backdated.
   const [orderDate, setOrderDate] = useState(() => malaysiaToday())
   const [orderDateTouched, setOrderDateTouched] = useState(false)
+
+  // Payment terms list and who may change the term
+  useEffect(() => {
+    let cancelled = false
+    const hqAdminByProfile =
+      userProfile.organizations?.org_type_code === 'HQ' && Number(userProfile.roles?.role_level) <= 20
+    if (hqAdminByProfile) setCanChangePaymentTerm(true)
+    ;(async () => {
+      const { data } = await supabase
+        .from('payment_terms')
+        .select('id, term_code, term_name, deposit_percentage, balance_percentage, is_default')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true })
+      if (!cancelled) setPaymentTermOptions((data || []) as PaymentTermOption[])
+      const { data: isAdmin, error } = await (supabase as any).rpc('is_hq_admin')
+      if (!cancelled && !error) setCanChangePaymentTerm(isAdmin === true || hqAdminByProfile)
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // The selected distributor's term (or the default term) - reset when the distributor changes
+  useEffect(() => {
+    if (paymentTermOptions.length === 0) return
+    const fallback = paymentTermOptions.find((t) => t.is_default)?.id || paymentTermOptions[0].id
+    if (!selectedDistributorId) {
+      setMasterTermId(fallback)
+      setPaymentTermId(fallback)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      const { data } = await supabase
+        .from('organizations')
+        .select('payment_term_id')
+        .eq('id', selectedDistributorId)
+        .maybeSingle()
+      if (cancelled) return
+      const term = (data as any)?.payment_term_id
+      const id = paymentTermOptions.some((t) => t.id === term) ? term : fallback
+      setMasterTermId(id)
+      setPaymentTermId(id)
+      setPaymentTermReason('')
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDistributorId, paymentTermOptions])
+
+  const paymentTermChanged = Boolean(paymentTermId && masterTermId && paymentTermId !== masterTermId)
 
   // Customer Information
   const [customerName, setCustomerName] = useState('')
@@ -613,6 +671,15 @@ export default function DistributorOrderView({ userProfile, onViewChange }: Dist
         return
       }
 
+      if (paymentTermChanged && paymentTermReason.trim().length < 5) {
+        toast({
+          title: 'Reason required',
+          description: 'Enter why this order uses a different payment term (at least 5 characters).',
+          variant: 'destructive'
+        })
+        return
+      }
+
       if (!fulfillmentWarehouseId) {
         toast({
           title: 'Validation Error',
@@ -744,6 +811,22 @@ export default function DistributorOrderView({ userProfile, onViewChange }: Dist
       fetch('/api/cron/notification-outbox-worker').catch(() => { })
 
       console.log('✅ Order submitted and inventory allocated:', order.order_no)
+
+      // A term other than the distributor's: same change as in Order Documents (logged).
+      if (paymentTermChanged && order?.id) {
+        const { error: termError } = await (supabase as any).rpc('order_change_payment_term', {
+          p_order_id: order.id,
+          p_term_id: paymentTermId,
+          p_reason: paymentTermReason.trim(),
+        })
+        if (termError) {
+          toast({
+            title: 'Order saved, payment term not changed',
+            description: `${paymentTermChangeErrorMessage(termError)} You can change it in Order Documents.`,
+            variant: 'destructive'
+          })
+        }
+      }
 
       toast({
         title: 'Success',
@@ -1013,6 +1096,75 @@ export default function DistributorOrderView({ userProfile, onViewChange }: Dist
               )}
             </CardContent>
           </Card>
+
+          {/* Payment Terms */}
+          {selectedDistributorId && paymentTermOptions.length > 0 && (
+            <Card>
+              <CardHeader className="border-b bg-gray-50">
+                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                  <ShoppingCart className="w-4 h-4" />
+                  Payment Terms
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-6 space-y-2">
+                {canChangePaymentTerm ? (
+                  <>
+                    <label htmlFor="d2h-payment-term" className="block text-sm font-medium">
+                      Payment terms for this order
+                    </label>
+                    <select
+                      id="d2h-payment-term"
+                      value={paymentTermId}
+                      onChange={(e) => setPaymentTermId(e.target.value)}
+                      className="w-full px-3 py-2 border rounded-md text-sm"
+                    >
+                      {paymentTermOptions.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.term_name}{t.id === masterTermId ? ' (distributor default)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                ) : (
+                  <p className="text-sm font-medium">
+                    {paymentTermOptions.find((t) => t.id === paymentTermId)?.term_name}
+                  </p>
+                )}
+                {(() => {
+                  const t = paymentTermOptions.find((x) => x.id === paymentTermId)
+                  const total = orderItems.reduce((s, i: any) => s + (Number(i.line_total) || Number(i.qty) * Number(i.unit_price) || 0), 0)
+                  if (!t) return null
+                  const s = orderTermsSummary({ deposit_pct: t.deposit_percentage, balance_pct: t.balance_percentage, term_name: t.term_name }, total)
+                  return (
+                    <p className="text-sm text-[var(--sera-muted)]">
+                      {s.kind === 'split'
+                        ? `Expected: RM ${s.depositAmount.toFixed(2)} (${s.depositPercentage}%) first, then RM ${s.balanceAmount.toFixed(2)} (${s.balancePercentage}%).`
+                        : `Expected: RM ${total.toFixed(2)} (100%) in one payment.`}
+                    </p>
+                  )
+                })()}
+                {paymentTermChanged && (
+                  <div className="space-y-1">
+                    <label htmlFor="d2h-payment-term-reason" className="block text-sm font-medium">
+                      Reason for a different payment term <span className="text-red-500">*</span>
+                    </label>
+                    <textarea
+                      id="d2h-payment-term-reason"
+                      value={paymentTermReason}
+                      onChange={(e) => setPaymentTermReason(e.target.value)}
+                      rows={2}
+                      maxLength={500}
+                      placeholder="Why not the distributor default?"
+                      className="w-full px-3 py-2 border rounded-md text-sm"
+                    />
+                  </div>
+                )}
+                <p className="text-xs text-[var(--sera-muted)]">
+                  Defaults to the distributor&apos;s master data. HQ Admin can change it until the invoice is issued; changes are logged and shown in Order Documents.
+                </p>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Product Selection */}
           <Card>

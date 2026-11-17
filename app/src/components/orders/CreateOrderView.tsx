@@ -250,9 +250,14 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
   // Only HQ Admin may choose a term other than the master data (same rule as Order Documents).
   useEffect(() => {
     let cancelled = false
+    // HQ user with an admin role (level 20 or lower) - the database checks it again on save.
+    const hqAdminByProfile =
+      userProfile.organizations?.org_type_code === 'HQ' && Number(userProfile.roles?.role_level) <= 20
+    if (hqAdminByProfile) setCanChangePaymentTerm(true)
     ;(async () => {
-      const { data } = await (supabase as any).rpc('is_hq_admin')
-      if (!cancelled) setCanChangePaymentTerm(data === true)
+      const { data, error } = await (supabase as any).rpc('is_hq_admin')
+      if (error) console.warn('[payment terms] is_hq_admin check failed:', error.message)
+      if (!cancelled && !error) setCanChangePaymentTerm(data === true || hqAdminByProfile)
     })()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
