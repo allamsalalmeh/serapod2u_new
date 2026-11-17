@@ -7,6 +7,6 @@ interface ARAgingViewProps {
 }
 
 /** Accounts receivable aging from posted invoices and the money actually received. */
-export default function ARAgingView(_props: ARAgingViewProps) {
-  return <SubledgerAgingView side="AR" />
+export default function ARAgingView({ userProfile }: ARAgingViewProps) {
+  return <SubledgerAgingView side="AR" userProfile={userProfile} />
 }

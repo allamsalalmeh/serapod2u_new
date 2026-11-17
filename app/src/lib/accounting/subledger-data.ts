@@ -245,6 +245,7 @@ export async function loadSubledger(
 export interface AgingInvoiceLine {
   documentId: string
   documentNo: string
+  orderId: string
   orderNo: string
   invoiceDate: string | null
   days: number | null
@@ -286,6 +287,7 @@ export async function loadAgingReport(
     const line: AgingInvoiceLine = {
       documentId: i.documentId,
       documentNo: i.documentNo,
+      orderId: i.orderId,
       orderNo: i.orderNo,
       invoiceDate: i.postedDate,
       days,

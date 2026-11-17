@@ -90,6 +90,8 @@ interface PostingPreview {
   requested_amount?: number
   paid_on_document?: number
   remaining_requested?: number
+  receipt_remaining?: number
+  order_unpaid?: number
   max_amount?: number
   lines: {
     account_code: string
@@ -952,12 +954,12 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                         <p className="font-mono">{formatCurrency(Number(postingPreview.requested_amount || 0))}</p>
                       </div>
                       <div>
-                        <p className="text-muted-foreground">Received on order</p>
-                        <p className="font-mono">{formatCurrency(Number(postingPreview.order_paid_total || 0))}</p>
+                        <p className="text-muted-foreground">Posted on this receipt</p>
+                        <p className="font-mono">{formatCurrency(Number(postingPreview.paid_on_document || 0))}</p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">Unpaid on order</p>
-                        <p className="font-mono">{formatCurrency(paymentMax)}</p>
+                        <p className="font-mono">{formatCurrency(Number(postingPreview.order_unpaid ?? paymentMax))}</p>
                       </div>
                     </div>
                   ) : (
@@ -1003,6 +1005,11 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                         onChange={(e) => setPaymentAmount(e.target.value)}
                         className="h-8 text-sm mt-1 font-mono"
                       />
+                      {isReceipt && (
+                        <p className="text-xs mt-1 text-muted-foreground">
+                          At most {formatCurrency(paymentMax)}: the amount on this receipt not yet posted.
+                        </p>
+                      )}
                       {!paymentAmountValid && (
                         <p className="text-xs mt-1 text-red-600">
                           Enter an amount above zero and at most {formatCurrency(paymentMax)}.

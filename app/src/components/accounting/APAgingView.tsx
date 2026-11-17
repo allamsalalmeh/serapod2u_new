@@ -7,6 +7,6 @@ interface APAgingViewProps {
 }
 
 /** Accounts payable aging from posted invoices and the money actually paid. */
-export default function APAgingView(_props: APAgingViewProps) {
-  return <SubledgerAgingView side="AP" />
+export default function APAgingView({ userProfile }: APAgingViewProps) {
+  return <SubledgerAgingView side="AP" userProfile={userProfile} />
 }

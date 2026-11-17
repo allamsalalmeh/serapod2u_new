@@ -9,10 +9,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { toast } from '@/components/ui/use-toast'
 import { BarChart3, RefreshCw, Loader2, Calendar, Download, ChevronDown, ChevronRight, Wallet } from 'lucide-react'
 import { AGING_BUCKETS, AGING_BUCKET_LABELS, type AgingBucket } from '@/modules/finance/subledger'
+import OrderDocumentsDialogEnhanced from '@/components/dashboard/views/orders/OrderDocumentsDialogEnhanced'
 
 interface InvoiceLine {
   documentId: string
   documentNo: string
+  orderId: string
   orderNo: string
   invoiceDate: string | null
   days: number | null
@@ -38,6 +40,8 @@ type Totals = Omit<AgingRow, 'partyId' | 'partyName' | 'invoices'>
 
 export interface SubledgerAgingViewProps {
   side: 'AR' | 'AP'
+  /** Needed to open an order's documents from its order number. */
+  userProfile?: any
 }
 
 const COPY = {
@@ -87,8 +91,10 @@ const csvCell = (v: unknown) => {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
-export default function SubledgerAgingView({ side }: SubledgerAgingViewProps) {
+export default function SubledgerAgingView({ side, userProfile }: SubledgerAgingViewProps) {
   const copy = COPY[side]
+  // Order whose documents are shown (Order Documents dialog)
+  const [docsOrder, setDocsOrder] = useState<{ id: string; orderNo: string } | null>(null)
   const [rows, setRows] = useState<AgingRow[]>([])
   const [totals, setTotals] = useState<Totals>(EMPTY_TOTALS)
   const [loading, setLoading] = useState(true)
@@ -258,7 +264,18 @@ export default function SubledgerAgingView({ side }: SubledgerAgingViewProps) {
                                   {r.invoices.map((i) => (
                                     <TableRow key={i.documentId}>
                                       <TableCell className="py-1.5 font-mono text-xs">{i.documentNo}</TableCell>
-                                      <TableCell className="py-1.5 font-mono text-xs text-muted-foreground">{i.orderNo}</TableCell>
+                                      <TableCell className="py-1.5 font-mono text-xs text-muted-foreground">
+                                        {userProfile && i.orderId ? (
+                                          <button
+                                            type="button"
+                                            className="text-blue-600 hover:underline"
+                                            title="View order documents"
+                                            onClick={() => setDocsOrder({ id: i.orderId, orderNo: i.orderNo })}
+                                          >
+                                            {i.orderNo}
+                                          </button>
+                                        ) : i.orderNo}
+                                      </TableCell>
                                       <TableCell className="py-1.5 text-xs">
                                         {i.posted ? formatDate(i.invoiceDate) : (
                                           <Badge variant="outline" className="text-[10px] text-orange-600 border-orange-200">Not posted</Badge>
@@ -296,6 +313,17 @@ export default function SubledgerAgingView({ side }: SubledgerAgingViewProps) {
           )}
         </CardContent>
       </Card>
+
+      {docsOrder && userProfile && (
+        <OrderDocumentsDialogEnhanced
+          open={!!docsOrder}
+          onClose={() => setDocsOrder(null)}
+          orderId={docsOrder.id}
+          orderNo={docsOrder.orderNo}
+          displayOrderNo={docsOrder.orderNo}
+          userProfile={userProfile}
+        />
+      )}
     </div>
   )
 }

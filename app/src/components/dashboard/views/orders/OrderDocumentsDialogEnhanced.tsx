@@ -11,6 +11,9 @@ import AcknowledgeButton from '@/components/documents/AcknowledgeButton'
 import PaymentProofUpload from '@/components/documents/PaymentProofUpload'
 import ManufacturerDocumentUpload from '@/components/documents/ManufacturerDocumentUpload'
 import OrderPaymentTermsCard from '@/components/orders/OrderPaymentTermsCard'
+import D2HPaymentsPanel from '@/components/orders/D2HPaymentsPanel'
+import { Input } from '@/components/ui/input'
+import { d2hPaymentErrorMessage } from '@/lib/orders/d2h-payments'
 import { type Document, getDisplayDocNo } from '@/lib/document-permissions'
 import { downloadOrderDocument } from '@/lib/storage/order-documents-client'
 
@@ -60,7 +63,11 @@ export default function OrderDocumentsDialogEnhanced({
     balancePayment?: Document | null
     depositReceipt?: Document | null
     finalReceipt?: Document | null
+    allPayments?: Document[]
+    allReceipts?: Document[]
   }>({})
+  // D2H: amount the distributor actually paid with this invoice (empty = the expected amount)
+  const [d2hPaidNow, setD2hPaidNow] = useState('')
   const [paymentProofUrl, setPaymentProofUrl] = useState<string | null>(null)
   const [balancePaymentProofUrl, setBalancePaymentProofUrl] = useState<string | null>(null)
   const [manufacturerDocUrl, setManufacturerDocUrl] = useState<string | null>(null)
@@ -292,6 +299,9 @@ export default function OrderDocumentsDialogEnhanced({
       payments.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
       receipts.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
 
+      docs.allPayments = payments
+      docs.allReceipts = receipts
+
       // Assign deposit and balance documents
       if (invoices.length > 0) {
         docs.depositInvoice = invoices[0] // First invoice = deposit
@@ -371,7 +381,9 @@ export default function OrderDocumentsDialogEnhanced({
       // Check for payment proof if payment document exists
       let depositProofUrl: string | null = null
 
-      if (docs.depositPayment) {
+      // D2H with several payments: the proof shown is the latest payment's.
+      const preferLatestPayment = payments.length > 1 && !docs.balancePayment
+      if (docs.depositPayment && !preferLatestPayment) {
         const { data: depositFile, error: depositFileError } = await supabase
           .from('document_files')
           .select('file_url')
@@ -1260,11 +1272,46 @@ export default function OrderDocumentsDialogEnhanced({
                       />
                     )}
 
+                    {orderData?.order_type === 'D2H' && documents.invoice.status === 'pending' && (
+                      <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-3 text-sm">
+                        <label htmlFor="d2h-paid-now" className="block text-xs font-medium">Amount paid now (RM)</label>
+                        <Input
+                          id="d2h-paid-now"
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          placeholder="Expected amount"
+                          value={d2hPaidNow}
+                          onChange={(e) => setD2hPaidNow(e.target.value)}
+                          className="mt-1 h-8 w-40"
+                        />
+                        <p className="mt-1 text-xs text-gray-500">
+                          Enter the amount on the payment proof. Leave empty to pay the expected amount; the rest can be paid later from the Payment tab.
+                        </p>
+                      </div>
+                    )}
+
                     <AcknowledgeButton
                       document={documents.invoice as Document}
                       userProfile={userProfileWithSignature}
                       order={acknowledgementOrder}
-                      onSuccess={loadData}
+                      onSuccess={async () => {
+                        if (orderData?.order_type === 'D2H' && Number(d2hPaidNow) > 0) {
+                          const { error } = await (supabase as any).rpc('d2h_set_pending_payment_amount', {
+                            p_order_id: orderId,
+                            p_amount: Number(d2hPaidNow),
+                          })
+                          if (error) {
+                            toast({
+                              title: 'Invoice acknowledged, amount not saved',
+                              description: `${d2hPaymentErrorMessage(error)} Set it in the Payment tab.`,
+                              variant: 'destructive',
+                            })
+                          }
+                          setD2hPaidNow('')
+                        }
+                        await loadData()
+                      }}
                       requiresPaymentProof={requiresPaymentProof}
                       paymentProofUrl={paymentProofUrl}
                     />
@@ -1278,6 +1325,16 @@ export default function OrderDocumentsDialogEnhanced({
 
               {/* Payment Tab */}
               <TabsContent value="payment" className="space-y-4">
+                {orderData?.order_type === 'D2H' && (
+                  <D2HPaymentsPanel
+                    orderId={orderId}
+                    companyId={orderData?.company_id}
+                    invoiceId={documents.invoice?.id ?? null}
+                    payments={(documents.allPayments ?? []) as any[]}
+                    receipts={(documents.allReceipts ?? []) as any[]}
+                    onChanged={loadData}
+                  />
+                )}
                 {documents.payment ? (
                   <div className="space-y-4">
                     <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
