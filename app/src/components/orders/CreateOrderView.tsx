@@ -10,7 +10,7 @@ import { ArrowLeft, User, Package, CheckSquare, Loader2, Trash2 } from 'lucide-r
 import { useOrderCreateAccess } from '@/modules/supply-chain/useOrderCreateAccess'
 import { DEFAULT_QR_BUFFER_PERCENT, allocateQrBufferCases, qrBufferCases, resolveQrBufferPercent } from '@/lib/orders/qr-buffer'
 import { formatOrderExpectedBoxes } from '@/lib/orders/packaging'
-import { paymentTermFlow, termIdForOrder, type PaymentTermOption } from '@/lib/orders/payment-terms'
+import { paymentTermChangeErrorMessage, paymentTermFlow, termIdForOrder, type PaymentTermOption } from '@/lib/orders/payment-terms'
 import { referenceSuffix, reportClientError } from '@/lib/system-logs/client'
 import {
   PRODUCT_SEPARATOR,
@@ -221,6 +221,12 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
   const [paymentTermId, setPaymentTermId] = useState<string>('')
   const [paymentTermKept, setPaymentTermKept] = useState(false)
   const [savedOrderTerms, setSavedOrderTerms] = useState<any>(null)
+  // Term from the master data (manufacturer for H2M, distributor for D2H) and the term an
+  // existing order already has; choosing another one needs a reason and is logged.
+  const [masterTermId, setMasterTermId] = useState<string>('')
+  const [savedTermId, setSavedTermId] = useState<string>('')
+  const [paymentTermReason, setPaymentTermReason] = useState('')
+  const [canChangePaymentTerm, setCanChangePaymentTerm] = useState(false)
 
   // Manufacturer lock - order can only contain products from one manufacturer
   const [lockedManufacturerId, setLockedManufacturerId] = useState<string | null>(null)
@@ -241,8 +247,19 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Only HQ Admin may choose a term other than the master data (same rule as Order Documents).
   useEffect(() => {
-    if (orderType !== 'H2M') return
+    let cancelled = false
+    ;(async () => {
+      const { data } = await (supabase as any).rpc('is_hq_admin')
+      if (!cancelled) setCanChangePaymentTerm(data === true)
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (orderType !== 'H2M' && orderType !== 'D2H') return
     let cancelled = false
     ;(async () => {
       const { data, error } = await supabase
@@ -260,15 +277,24 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
   useEffect(() => {
     if (!savedOrderTerms || paymentTermOptions.length === 0) return
     const id = termIdForOrder(paymentTermOptions, savedOrderTerms)
-    if (id) setPaymentTermId(id)
+    if (id) {
+      setPaymentTermId(id)
+      setSavedTermId(id)
+    }
   }, [savedOrderTerms, paymentTermOptions])
 
-  // A new order follows the seller's term until the user picks one.
+  // The master-data term: manufacturer (H2M) or distributor (D2H), else the default term.
+  // A new order follows it until the user picks another one.
+  const termPartnerId = orderType === 'D2H' ? buyerOrg?.id : orderType === 'H2M' ? sellerOrg?.id : undefined
   useEffect(() => {
-    if (orderType !== 'H2M' || paymentTermKept || paymentTermOptions.length === 0) return
+    if ((orderType !== 'H2M' && orderType !== 'D2H') || paymentTermOptions.length === 0) return
     const fallback = paymentTermOptions.find((t) => t.is_default)?.id || paymentTermOptions[0].id
-    if (!sellerOrg?.id) {
-      setPaymentTermId(fallback)
+    const apply = (id: string) => {
+      setMasterTermId(id)
+      if (!paymentTermKept) setPaymentTermId(id)
+    }
+    if (!termPartnerId) {
+      apply(fallback)
       return
     }
     let cancelled = false
@@ -276,15 +302,19 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
       const { data } = await supabase
         .from('organizations')
         .select('payment_term_id')
-        .eq('id', sellerOrg.id)
+        .eq('id', termPartnerId)
         .maybeSingle()
       if (cancelled) return
-      const sellerTerm = (data as any)?.payment_term_id
-      setPaymentTermId(paymentTermOptions.some((t) => t.id === sellerTerm) ? sellerTerm : fallback)
+      const partnerTerm = (data as any)?.payment_term_id
+      apply(paymentTermOptions.some((t) => t.id === partnerTerm) ? partnerTerm : fallback)
     })()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderType, sellerOrg?.id, paymentTermOptions, paymentTermKept])
+  }, [orderType, termPartnerId, paymentTermOptions, paymentTermKept])
+
+  // The term the order has (existing order) or will get from the master data (new order).
+  const baselineTermId = editingOrderId ? savedTermId : masterTermId
+  const paymentTermChanged = Boolean(paymentTermId && baselineTermId && paymentTermId !== baselineTermId)
 
   const initializeOrder = async () => {
     try {
@@ -1233,6 +1263,15 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
         return
       }
 
+      if (paymentTermChanged && paymentTermReason.trim().length < 5) {
+        toast({
+          title: 'Reason required',
+          description: 'Enter why this order uses a different payment term (at least 5 characters).',
+          variant: 'destructive',
+        })
+        return
+      }
+
       saveInFlightRef.current = true
       setSaving(true)
 
@@ -1304,6 +1343,24 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
           title: 'Order Saved',
           description: 'The order was saved, but the submission notification could not be queued.',
         })
+      }
+
+      // A term other than the master data / the saved one: same change as in Order Documents
+      // (HQ Admin, reason required, logged). The order itself is already saved.
+      const savedOrderId = result.order?.id || saveRequest.orderId
+      if (paymentTermChanged && savedOrderId) {
+        const { error: termError } = await (supabase as any).rpc('order_change_payment_term', {
+          p_order_id: savedOrderId,
+          p_term_id: paymentTermId,
+          p_reason: paymentTermReason.trim(),
+        })
+        if (termError) {
+          toast({
+            title: 'Order saved, payment term not changed',
+            description: `${paymentTermChangeErrorMessage(termError)} You can change it in Order Documents.`,
+            variant: 'destructive',
+          })
+        }
       }
 
       // Navigate back to orders list
@@ -1541,8 +1598,8 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
             </CardContent>
           </Card>
 
-          {/* Payment Terms (H2M) */}
-          {orderType === 'H2M' && paymentTermOptions.length > 0 && (
+          {/* Payment Terms (H2M and D2H) */}
+          {(orderType === 'H2M' || orderType === 'D2H') && paymentTermOptions.length > 0 && (
             <Card className="sera-sc-panel overflow-hidden shadow-none">
               <CardHeader className="border-b bg-[var(--sera-ink)]/[0.03]">
                 <CardTitle className="flex items-center gap-2 text-base font-semibold">
@@ -1551,20 +1608,60 @@ export default function CreateOrderView({ userProfile, onViewChange }: CreateOrd
                 </CardTitle>
               </CardHeader>
               <CardContent className="pt-6 space-y-2">
+                {canChangePaymentTerm ? (
+                  <>
+                    <label htmlFor="payment-term" className="block text-sm font-medium text-[var(--sera-ink)]">
+                      Payment terms for this order
+                    </label>
+                    <select
+                      id="payment-term"
+                      value={paymentTermId}
+                      onChange={(e) => { setPaymentTermId(e.target.value); setPaymentTermKept(true) }}
+                      className="w-full px-3 py-2 border border-[var(--sera-line)] rounded-md focus:outline-none focus:ring-2 focus:ring-[var(--sera-orange)]/30 bg-[var(--sera-ink)]/[0.03]"
+                    >
+                      {paymentTermOptions.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.term_name}{t.id === masterTermId ? ` (${orderType === 'D2H' ? 'distributor' : 'manufacturer'} default)` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                ) : (
+                  (() => {
+                    const term = paymentTermOptions.find((t) => t.id === paymentTermId)
+                    return term ? <p className="text-sm font-medium text-[var(--sera-ink)]">{term.term_name}</p> : null
+                  })()
+                )}
                 {(() => {
                   const term = paymentTermOptions.find((t) => t.id === paymentTermId)
-                  return term ? (
-                    <>
-                      <p className="text-sm font-medium text-[var(--sera-ink)]">{term.term_name}</p>
-                      <p className="text-sm text-[var(--sera-muted)]">{paymentTermFlow(term)}</p>
-                    </>
+                  return term && orderType === 'H2M' ? (
+                    <p className="text-sm text-[var(--sera-muted)]">{paymentTermFlow(term)}</p>
                   ) : null
                 })()}
+                {paymentTermChanged && (
+                  <div className="space-y-1">
+                    <label htmlFor="payment-term-reason" className="block text-sm font-medium text-[var(--sera-ink)]">
+                      Reason for a different payment term <span className="text-red-500">*</span>
+                    </label>
+                    <textarea
+                      id="payment-term-reason"
+                      value={paymentTermReason}
+                      onChange={(e) => setPaymentTermReason(e.target.value)}
+                      rows={2}
+                      maxLength={500}
+                      placeholder={editingOrderId ? 'Why is the payment term changed?' : `Why not the ${orderType === 'D2H' ? 'distributor' : 'manufacturer'} default?`}
+                      className="w-full px-3 py-2 border border-[var(--sera-line)] rounded-md text-sm"
+                    />
+                  </div>
+                )}
                 <p className="text-xs text-[var(--sera-muted)]">
                   {savedOrderTerms?.source === 'override'
-                    ? 'Changed for this order in Order Documents.'
-                    : 'From the manufacturer\u2019s master data.'}{' '}
-                  HQ Admin can change it in Order Documents until the manufacturer acknowledges the purchase order.
+                    ? 'Changed for this order (see Order Documents for who and why).'
+                    : `Defaults to the ${orderType === 'D2H' ? 'distributor' : 'manufacturer'}\u2019s master data.`}{' '}
+                  {orderType === 'D2H'
+                    ? 'HQ Admin can change it until the invoice is issued.'
+                    : 'HQ Admin can change it until the manufacturer acknowledges the purchase order.'}{' '}
+                  Changes are logged and shown in Order Documents.
                 </p>
               </CardContent>
             </Card>
