@@ -31,6 +31,7 @@ import {
   CreditCard,
   BarChart3,
   ArrowUpFromLine,
+  ArrowDownToLine,
   Eye,
 } from 'lucide-react'
 import { POSTING_TYPE_COLORS, getPostingType } from '@/modules/finance/postingMap'
@@ -130,6 +131,13 @@ interface BankAccountOption {
   is_active: boolean
   is_default: boolean
   gl_account: { code: string; name: string } | null
+}
+
+/** Money direction of a posting: IN from customers, OUT to suppliers; invoices move no money. */
+function postingFlow(glDocType: string): 'IN' | 'OUT' | null {
+  if (glDocType === 'RECEIPT') return 'IN'
+  if (glDocType === 'SUPPLIER_DEPOSIT_PAYMENT' || glDocType === 'SUPPLIER_BALANCE_PAYMENT') return 'OUT'
+  return null
 }
 
 function formatCurrency(amount: number) {
@@ -720,6 +728,7 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                       <TableHead>Document #</TableHead>
                       <TableHead>Order #</TableHead>
                       <TableHead>Posting Type</TableHead>
+                      <TableHead className="text-center">Flow</TableHead>
                       <TableHead>Entity</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead className="text-right">Amount (MYR)</TableHead>
@@ -786,6 +795,22 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                             >
                               {pending.posting_label}
                             </Badge>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {(() => {
+                              const flow = postingFlow(pending.gl_doc_type)
+                              if (flow === 'IN') return (
+                                <span title="Money in: received from the customer" className="inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-xs font-semibold text-emerald-700">
+                                  <ArrowDownToLine className="h-3 w-3" aria-hidden="true" />IN
+                                </span>
+                              )
+                              if (flow === 'OUT') return (
+                                <span title="Money out: paid to the supplier" className="inline-flex items-center gap-1 rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-xs font-semibold text-red-700">
+                                  <ArrowUpFromLine className="h-3 w-3" aria-hidden="true" />OUT
+                                </span>
+                              )
+                              return <span title="Invoice: no money moves" className="text-xs text-muted-foreground">—</span>
+                            })()}
                           </TableCell>
                           <TableCell className="text-sm max-w-[160px] truncate">
                             {entityName}
