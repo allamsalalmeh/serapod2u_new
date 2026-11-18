@@ -950,7 +950,15 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                 <div>
                   <Label className="text-xs text-muted-foreground">Posting Type</Label>
                   <p className="text-sm font-medium">
-                    {getPostingType(selectedPending?.gl_doc_type || '')?.label || selectedPending?.gl_doc_type}
+                    {(() => {
+                      // Supplier money: the label follows what the entry does (advance vs paying AP).
+                      const type = selectedPending?.gl_doc_type || ''
+                      if (type === 'SUPPLIER_DEPOSIT_PAYMENT' || type === 'SUPPLIER_BALANCE_PAYMENT') {
+                        if (postingPreview?.stage === 'SETTLEMENT') return 'Supplier Payment (settles AP)'
+                        if (postingPreview?.stage === 'ADVANCE') return 'Supplier Deposit (advance)'
+                      }
+                      return getPostingType(type)?.label || type
+                    })()}
                   </p>
                 </div>
                 <div>
