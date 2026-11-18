@@ -11,6 +11,7 @@ import {
   buildAging,
   daysBetween,
   invoiceBalance,
+  pickPayableInvoiceDocs,
   type AgingBucket,
   type AgingRow,
   type InvoiceBalance,
@@ -45,7 +46,7 @@ async function inChunks<T>(ids: string[], fetch: (chunk: string[]) => Promise<T[
 
 const SIDE = {
   AR: {
-    invoiceDocType: 'INVOICE',
+    invoiceDocTypes: ['INVOICE'],
     invoicePosting: 'SALES_INVOICE',
     direction: 'IN',
     legacyPaymentPostings: ['RECEIPT'],
@@ -53,7 +54,8 @@ const SIDE = {
     partyColumn: 'buyer_org_id',
   },
   AP: {
-    invoiceDocType: 'PAYMENT_REQUEST',
+    // Split orders: the balance request; single-payment orders: the INVOICE.
+    invoiceDocTypes: ['PAYMENT_REQUEST', 'INVOICE'],
     invoicePosting: 'SUPPLIER_INVOICE_RECOGNITION',
     direction: 'OUT',
     legacyPaymentPostings: ['SUPPLIER_DEPOSIT_PAYMENT', 'SUPPLIER_BALANCE_PAYMENT'],
@@ -72,15 +74,15 @@ export async function loadSubledger(
   // 1. Invoices (D2H only for AR; everything but D2H for AP).
   let docQuery = admin
     .from('documents')
-    .select(`id, doc_no, display_doc_no, status, created_at, order_id,
+    .select(`id, doc_type, doc_no, display_doc_no, status, created_at, order_id,
              orders!inner ( id, order_no, display_doc_no, order_type, buyer_org_id, seller_org_id )`)
     .eq('company_id', opts.companyId)
-    .eq('doc_type', cfg.invoiceDocType)
+    .in('doc_type', [...cfg.invoiceDocTypes])
   docQuery = opts.side === 'AR' ? docQuery.eq('orders.order_type', 'D2H') : docQuery.neq('orders.order_type', 'D2H')
   const { data: docs, error: docError } = await docQuery.order('created_at', { ascending: true })
   if (docError) return { invoices: [], error: docError.message }
 
-  const invoiceDocs: any[] = docs || []
+  const invoiceDocs: any[] = opts.side === 'AP' ? pickPayableInvoiceDocs((docs || []) as any[]) : (docs || [])
   const docIds = invoiceDocs.map((d) => d.id)
   const orderIdsWithInvoice = new Set(invoiceDocs.map((d) => d.order_id))
 

@@ -135,3 +135,20 @@ export function buildAging(lines: AgingLine[], asOf: string): { rows: AgingRow[]
   )
   return { rows, totals }
 }
+
+/**
+ * Payables: which documents are the supplier invoice of each order.
+ * Split orders: the balance PAYMENT_REQUEST. Single-payment orders (COD / 100%) have
+ * no request; their INVOICE is the supplier invoice. An INVOICE is used only for
+ * orders without a PAYMENT_REQUEST, so no order is counted twice.
+ */
+export function pickPayableInvoiceDocs<T extends { doc_type: string; order_id: string }>(docs: T[]): T[] {
+  const withRequest = new Set(docs.filter((d) => d.doc_type === 'PAYMENT_REQUEST').map((d) => d.order_id))
+  const seenInvoice = new Set<string>()
+  return docs.filter((d) => {
+    if (d.doc_type === 'PAYMENT_REQUEST') return true
+    if (d.doc_type !== 'INVOICE' || withRequest.has(d.order_id) || seenInvoice.has(d.order_id)) return false
+    seenInvoice.add(d.order_id)
+    return true
+  })
+}

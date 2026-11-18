@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agingBucket, buildAging, daysBetween, invoiceBalance } from './subledger'
+import { agingBucket, buildAging, daysBetween, invoiceBalance, pickPayableInvoiceDocs } from './subledger'
 
 describe('invoiceBalance', () => {
   it('holds money received before the invoice is posted as an advance', () => {
@@ -42,5 +42,17 @@ describe('aging', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ current: 1000, d91_120: 200, total: 1200, advances: 300, net: 900, openInvoices: 2 })
     expect(totals).toMatchObject({ total: 1200, advances: 300, net: 900 })
+  })
+})
+
+describe('pickPayableInvoiceDocs', () => {
+  it('uses the balance request for split orders and the invoice for single-payment orders', () => {
+    const docs = [
+      { id: 'inv-split', doc_type: 'INVOICE', order_id: 'split' },
+      { id: 'req-split', doc_type: 'PAYMENT_REQUEST', order_id: 'split' },
+      { id: 'inv-cod', doc_type: 'INVOICE', order_id: 'cod' },
+      { id: 'inv-cod-2', doc_type: 'INVOICE', order_id: 'cod' },
+    ]
+    expect(pickPayableInvoiceDocs(docs).map((d) => d.id)).toEqual(['req-split', 'inv-cod'])
   })
 })
