@@ -34,6 +34,7 @@ import {
   Eye,
 } from 'lucide-react'
 import { POSTING_TYPE_COLORS, getPostingType } from '@/modules/finance/postingMap'
+import { orderDocumentsCompletion, type OrderCompletion } from '@/lib/orders/order-completion'
 import { useSaCapability } from '@/hooks/useSaCapability'
 import { createClient } from '@/lib/supabase/client'
 import { FileText as FileTextIcon } from 'lucide-react'
@@ -211,6 +212,8 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
 
   // Warehouse receipt of the orders behind supplier invoices (Finance posts after the goods arrive).
   const [receivedByOrder, setReceivedByOrder] = useState<Record<string, boolean>>({})
+  // Supply Chain documents of each order: complete (green) or not (yellow).
+  const [completionByOrder, setCompletionByOrder] = useState<Record<string, OrderCompletion>>({})
 
   // Shown when Security & Access allows finance.journal.post (the server decides the
   // operation); the historical role-level rule applies until it is enforced.
@@ -232,6 +235,34 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
       const map: Record<string, boolean> = {}
       for (const row of data) map[row.order_id] = !!row.received
       setReceivedByOrder(map)
+    })()
+    return () => { cancelled = true }
+  }, [pendingPostings])
+
+  useEffect(() => {
+    const orderIds = Array.from(new Set(pendingPostings.map((p) => p.order_id).filter(Boolean)))
+    if (orderIds.length === 0) return
+    let cancelled = false
+    ;(async () => {
+      const supabase = createClient() as any
+      const orders: any[] = []
+      const docs: any[] = []
+      for (let i = 0; i < orderIds.length; i += 100) {
+        const chunk = orderIds.slice(i, i + 100)
+        const [o, d] = await Promise.all([
+          supabase.from('orders').select('id, order_type, status').in('id', chunk),
+          supabase.from('documents').select('order_id, doc_type, status, payment_percentage').in('order_id', chunk),
+        ])
+        if (o.error || d.error) return
+        orders.push(...(o.data || []))
+        docs.push(...(d.data || []))
+      }
+      if (cancelled) return
+      const map: Record<string, OrderCompletion> = {}
+      for (const order of orders) {
+        map[order.id] = orderDocumentsCompletion(order, docs.filter((x) => x.order_id === order.id))
+      }
+      setCompletionByOrder(map)
     })()
     return () => { cancelled = true }
   }, [pendingPostings])
@@ -723,14 +754,29 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                           <TableCell className="font-mono text-sm text-muted-foreground">
                             {pending.order_display_doc_no || pending.order_no || '-'}
                             {pending.order_id && (
-                              <button
-                                type="button"
-                                className="mt-0.5 flex items-center gap-1 font-sans text-xs text-blue-600 hover:underline"
-                                onClick={() => setDocsOrder({ id: pending.order_id, orderNo: pending.order_no, displayNo: pending.order_display_doc_no })}
-                              >
-                                <FileTextIcon className="h-3 w-3" />
-                                Documents
-                              </button>
+                              (() => {
+                                const completion = completionByOrder[pending.order_id]
+                                const tone = !completion
+                                  ? { text: 'text-blue-600', box: 'bg-blue-300' }
+                                  : completion.complete
+                                    ? { text: 'text-emerald-700', box: 'bg-emerald-500' }
+                                    : { text: 'text-amber-700', box: 'bg-amber-500' }
+                                const title = completion
+                                  ? (completion.complete ? 'Order complete' : `Order not complete: ${completion.reason}`)
+                                  : 'View order documents'
+                                return (
+                                  <button
+                                    type="button"
+                                    title={title}
+                                    aria-label={`Documents. ${title}`}
+                                    className={`mt-0.5 flex items-center gap-1.5 font-sans text-xs font-medium hover:underline ${tone.text}`}
+                                    onClick={() => setDocsOrder({ id: pending.order_id, orderNo: pending.order_no, displayNo: pending.order_display_doc_no })}
+                                  >
+                                    <span className={`inline-block h-2.5 w-2.5 rounded-[2px] ${tone.box}`} aria-hidden="true" />
+                                    Documents
+                                  </button>
+                                )
+                              })()
                             )}
                           </TableCell>
                           <TableCell>
