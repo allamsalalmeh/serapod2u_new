@@ -133,6 +133,11 @@ interface BankAccountOption {
   gl_account: { code: string; name: string } | null
 }
 
+/** Payments to the supplier (deposit or balance). */
+function isSupplierPaymentType(glDocType: string): boolean {
+  return glDocType === 'SUPPLIER_DEPOSIT_PAYMENT' || glDocType === 'SUPPLIER_BALANCE_PAYMENT'
+}
+
 /** Money direction of a posting: IN from customers, OUT to suppliers; invoices move no money. */
 function postingFlow(glDocType: string): 'IN' | 'OUT' | null {
   if (glDocType === 'RECEIPT') return 'IN'
@@ -819,6 +824,11 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                                 {receivedByOrder[pending.order_id] ? 'Goods received' : 'Goods not received yet'}
                               </div>
                             )}
+                            {isSupplierPaymentType(pending.gl_doc_type) && (
+                              <div className={`text-xs ${pending.document_status === 'acknowledged' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                {pending.document_status === 'acknowledged' ? 'Confirmed by supplier' : 'Not confirmed by supplier'}
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
                             {formatDate(pending.document_date)}
@@ -1161,6 +1171,14 @@ export default function PendingPostingsView({ userProfile }: PendingPostingsView
                       )}
                     </div>
                   )}
+                </div>
+              )}
+
+              {selectedPending && isSupplierPaymentType(selectedPending.gl_doc_type)
+                && selectedPending.document_status !== 'acknowledged' && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                  The supplier has not confirmed receiving this payment yet.
+                  Check the bank transfer before posting.
                 </div>
               )}
 

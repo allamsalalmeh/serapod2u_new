@@ -248,42 +248,21 @@ export default function DocumentWorkflowProgress({
     return 'text-gray-400'
   }
 
-  const getProgressPercentage = () => {
-    if (orderType === 'D2H' || orderType === 'S2D') {
-      let completed = 0
-      const total = 5
-      if (documents.so) completed++
-      if (documents.do) completed++
-      if (documents.invoice) completed++
-      if (documents.payment) completed++
-      if (documents.receipt) completed++
-      return (completed / total) * 100
-    } else if (use50_50Split) {
-      let completed = 0
-      const total = 6
-
-      if (documents.po?.status === 'acknowledged' || documents.depositInvoice || documents.invoice) completed++
-      if (documents.depositInvoice?.status === 'acknowledged' || documents.depositPayment || documents.invoice?.status === 'acknowledged' || documents.payment) completed++
-      if (documents.depositPayment?.status === 'acknowledged' || (!documents.balancePayment && documents.payment?.status === 'acknowledged') || documents.balancePaymentRequest) completed++
-      if (documents.balancePaymentRequest?.status === 'acknowledged' || documents.balancePayment) completed++
-      if (documents.balancePayment?.status === 'acknowledged' || documents.receipt) completed++
-      if (documents.receipt) completed++
-
-      return (completed / total) * 100
-    } else {
-      let completed = 0
-      const total = 4
-
-      if (documents.po?.status === 'acknowledged' || documents.invoice) completed++
-      if (documents.invoice?.status === 'acknowledged' || documents.payment) completed++
-      if (documents.payment?.status === 'acknowledged' || documents.receipt) completed++
-      if (documents.receipt) completed++
-
-      return (completed / total) * 100
-    }
+  // Status shown on a step card. The receipt of a split order is only complete with the
+  // final receipt; a deposit receipt alone is partial.
+  const getDisplayStatus = (step: Step) => {
+    const isReceiptStep = use50_50Split && step.key === 'receipt'
+    if (!isReceiptStep) return getStepStatus(step.document)
+    if (documents.finalReceipt) return 'completed'
+    if (documents.depositReceipt) return 'partial'
+    return getStepStatus(step.document)
   }
 
-  const progress = getProgressPercentage()
+  // Progress counts only the steps shown as complete (green), so it matches the cards:
+  // a yellow step never counts as done.
+  const progress = steps.length > 0
+    ? (steps.filter((s) => getDisplayStatus(s) === 'completed').length / steps.length) * 100
+    : 0
 
   return (
     <Card className="p-6">
@@ -302,21 +281,8 @@ export default function DocumentWorkflowProgress({
 
       <div className={`grid gap-3 sm:gap-4 ${use50_50Split ? 'grid-cols-2 md:grid-cols-3 lg:grid-cols-6' : (orderType === 'D2H' || orderType === 'S2D') ? 'grid-cols-2 md:grid-cols-3 lg:grid-cols-5' : 'grid-cols-2 md:grid-cols-4'}`}>
         {steps.map((step, index) => {
-          const isReceiptStep = use50_50Split && step.key === 'receipt'
-          const depositReceipt = documents.depositReceipt
-          const finalReceipt = documents.finalReceipt
-
-          // Receipt status logic:
-          // - If both deposit and final receipts exist: 'completed' (green)
-          // - If only deposit receipt exists: 'partial' (yellow/amber)
-          // - If no receipts exist: 'not-started' (gray)
-          const status = isReceiptStep
-            ? finalReceipt
-              ? 'completed'  // Both receipts complete
-              : depositReceipt
-                ? 'partial'  // Only deposit receipt
-                : getStepStatus(step.document)
-            : getStepStatus(step.document)
+          // Receipt of a split order: green with the final receipt, amber with the deposit receipt only.
+          const status = getDisplayStatus(step)
           const StepIcon = step.icon
           const displayLabel = use50_50Split && 'shortLabel' in step ? step.shortLabel : step.label
 
