@@ -64,7 +64,7 @@ function ResultBadge({ row, tab }: { row: any; tab: Tab }) {
   const tone = row.severity === 'error' ? 'bg-rose-50 text-rose-700' : row.severity === 'warning' ? 'bg-amber-50 text-amber-800' : 'bg-slate-100 text-slate-700'
   return (
     <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium ${tone}`}>
-      {row.category ?? row.severity}{row.http_status ? ` · ${row.http_status}` : ''}
+      {row.category === 'permission' && row.http_status === 403 ? 'Denied' : row.category ?? row.severity}{row.http_status ? ` · ${row.http_status}` : ''}
     </span>
   )
 }
@@ -188,6 +188,7 @@ export default function SystemLogsView() {
         ))}
       </div>
 
+      {tab === 'errors' && <button type="button" className="rounded border px-3 py-2 text-sm text-amber-800" onClick={() => update({ category: 'permission', severity: '' })}>Access Denied · access control warnings</button>}
       <section aria-label="Filters" className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
         <label className="flex flex-col gap-0.5 text-xs text-gray-600">Date range
           <select className={INPUT} value={filters.range} onChange={e => update({ range: e.target.value as Filters['range'] })}>
@@ -230,7 +231,7 @@ export default function SystemLogsView() {
           <label className="flex flex-col gap-0.5 text-xs text-gray-600">Category
             <select className={INPUT} value={filters.category} onChange={e => update({ category: e.target.value })}>
               <option value="">All categories</option>
-              {LOG_CATEGORIES.filter(c => c !== 'cancelled').map(c => <option key={c} value={c}>{c.replace('_', ' ')}</option>)}
+              {LOG_CATEGORIES.filter(c => c !== 'cancelled').map(c => <option key={c} value={c}>{c === 'permission' ? 'Access Control / Authorization' : c.replace('_', ' ')}</option>)}
             </select>
           </label>
         </> : (
@@ -366,11 +367,12 @@ function LogDetailDrawer({ row, tab, onClose, onOpenEvent, onFilterUser, onCopie
   onFilterUser: (id: string, name: string) => void; onCopied: (ok: boolean) => void
 }) {
   const [detail, setDetail] = useState<LogEventDetail | null>(null)
+  const [diagnostics, setDiagnostics] = useState<any>(null)
   const [orgName, setOrgName] = useState<string | null>(null)
   const [status, setStatus] = useState<'idle' | 'loading' | 'ok' | 'missing' | 'error'>('idle')
 
   useEffect(() => {
-    setDetail(null); setOrgName(null)
+    setDetail(null); setOrgName(null); setDiagnostics(null)
     if (!row) { setStatus('idle'); return }
     const fromOtherSource = tab === 'activity' && row.sort_key && !String(row.sort_key).startsWith('ev:')
     if (fromOtherSource) { setDetail(activityDetail(row)); setStatus('ok'); return }
@@ -382,7 +384,7 @@ function LogDetailDrawer({ row, tab, onClose, onOpenEvent, onFilterUser, onCopie
       .then(async res => ({ res, body: await res.json().catch(() => ({})) }))
       .then(({ res, body }) => {
         if (!active) return
-        if (res.ok && body.detail) { setDetail(body.detail); setOrgName(body.organizationName ?? null); setStatus('ok') }
+        if (res.ok && body.detail) { setDetail(body.detail); setDiagnostics(body.authorizationDiagnostics ?? null); setOrgName(body.organizationName ?? null); setStatus('ok') }
         else setStatus(res.status === 404 ? 'missing' : 'error')
       })
       .catch(() => { if (active) setStatus('error') })
@@ -438,6 +440,24 @@ function LogDetailDrawer({ row, tab, onClose, onOpenEvent, onFilterUser, onCopie
               {e.counted === false && <Fact label="Counting" value="Linked to the server's report of the same failure (not counted twice)" />}
               <Fact label="Browser / device" value={[client.browser, client.os, client.device, client.viewport, client.online === false ? 'offline' : null].filter(Boolean).join(' · ') || null} />
             </dl>
+            {diagnostics && <section className="space-y-2 rounded border border-amber-200 p-3 text-xs" aria-label="Authorization diagnostics">
+              <h3 className="font-semibold">Authorization diagnostics</h3>
+              {diagnostics.unavailable ? <p>Policy diagnostics are unavailable. Retry shortly.</p> : <>
+                <p>Required permission: <strong>{diagnostics.requiredPermission}</strong></p>
+                <p>Reason: {diagnostics.reason}</p>
+                <p>{diagnostics.review}</p>
+                {!diagnostics.policyResolvable && <p>Review the scope, membership or security condition; another policy may not resolve this denial.</p>}
+                {diagnostics.policyResolvable && !diagnostics.candidates?.length && <p>{diagnostics.matchingPolicyCount > 0 ? 'Matching policies exist, but none are currently eligible. Review the restrictions below; do not create a duplicate policy.' : 'No existing policy contains this permission. Review catalogue and enforcement registration before creating a policy.'}</p>}
+                {diagnostics.restrictedPolicies?.map((policy: any) => <p key={policy.id} className="rounded bg-amber-50 p-2"><strong>{policy.name}</strong>: {policy.reason}</p>)}
+                {diagnostics.candidates?.map((candidate: any, i: number) => <div key={candidate.id} className="rounded bg-amber-50 p-2">
+                  <strong>{candidate.name}</strong>{i === 0 && !candidate.sensitivePermissions.length && <span> · narrowest ordinary candidate</span>}
+                  <p>Extra permissions: {candidate.extraPermissions.join(', ') || 'None'}</p>
+                  {!!candidate.sensitivePermissions.length && <p>Sensitive privileges requiring explicit review: {candidate.sensitivePermissions.join(', ')}</p>}
+                </div>)}
+                <details><summary>Current assignments in this organization</summary><pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(diagnostics.relevantAssignments, null, 2)}</pre></details>
+                <a className="inline-block underline" href="/security-access">Review in Security &amp; Access → People &amp; Access / Group Policies</a>
+              </>}
+            </section>}
             {detail.group && (
               <section className="rounded-md bg-gray-50 p-3 text-xs text-gray-700">
                 <h3 className="mb-1 font-semibold text-gray-900">Grouped error</h3>

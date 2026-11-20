@@ -40,6 +40,21 @@ export async function readableOrganizations(
     console.error('[sa-scope] readable organizations unavailable', { permission, code: error?.code })
     return NONE
   }
+  // Root Access is an explicit, server-validated GLOBAL grant. The S&A engine
+  // materializes it as a list of every organization, which — without this check —
+  // would be narrowed to a non-global list and hide platform-level (NULL-organization)
+  // records from the one actor entitled to see them. We never infer "global" from
+  // a list length: only sa_actor_is_root() (active account + active, unexpired
+  // grant, decided in the database) carries that signal. A missing Root Access
+  // migration or an expired/revoked grant simply means "not Root".
+  let isRoot = false
+  try {
+    const { data: rootData, error: rootError } = await admin.rpc('sa_actor_is_root', { p_actor: userId })
+    isRoot = !rootError && rootData === true
+  } catch {
+    isRoot = false
+  }
+  if (isRoot) return { all: true }
   return { all: false, organizationIds: data.map(String) }
 }
 

@@ -40,6 +40,16 @@ import {
 import { stockCountDraftSignature } from '@/lib/inventory/stock-count-snapshot'
 import InventoryOpeningCutoffSection from '@/components/inventory/InventoryOpeningCutoffSection'
 import StockCountQuantityInput from '@/components/inventory/StockCountQuantityInput'
+import StockQuantityDisplay from '@/components/inventory/StockQuantityDisplay'
+import { normalizeStockQuantity, stockUnitForProduct } from '@/lib/inventory/stock-count-quantity'
+import {
+  casesToPcs,
+  formatQuantityTotals,
+  formatSignedQuantityWithUnit,
+  quantityUnitLabel,
+  sumQuantityTotals,
+  type QuantityTotals,
+} from '@/lib/inventory/stock-count-quantity'
 import {
   buildOpeningBalanceScopeRows,
   buildStockCountCatalogRows,
@@ -215,7 +225,6 @@ interface ProductCategoryOption {
   category_code: string | null
 }
 
-const ALL_GROUP_ID = 'all'
 // Radix Select forbids an empty-string item value, so "All Categories" (which
 // maps to selectedCategory === '') uses this sentinel in the trigger only.
 const ALL_CATEGORIES_VALUE = '__all_categories__'
@@ -278,14 +287,52 @@ const discardErrorMessage = (message: string) => {
 }
 const formatMoney = (value: number) => `RM ${value.toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const parseCount = (value: string) => (value.trim() === '' ? null : Number(value))
+// A scope can hold case-stocked cartridges and piece-stocked products at the
+// same time, so a combined figure is rendered per unit instead of as one number.
+const varianceTotalsTone = (totals: QuantityTotals) => {
+  const hasUp = totals.cases > 0 || totals.pcs > 0
+  const hasDown = totals.cases < 0 || totals.pcs < 0
+  if (!hasUp && !hasDown) return 'text-slate-700'
+  if (hasUp && hasDown) return 'text-amber-700'
+  return hasUp ? 'text-green-600' : 'text-red-600'
+}
+// The catalog always sets countUnit; a row without one falls back to the same
+// product-line rule rather than assuming pieces.
+const rowQuantityUnit = (row: Pick<StockCountCatalogRow, 'countUnit' | 'productName'>) =>
+  row.countUnit ?? stockUnitForProduct(row.productName)
 const skuForRow = (row: CountRow) => row.stockSku
 const varianceForRow = (row: CountRow) => {
   const physical = parseCount(row.physicalCount)
   return physical === null ? null : physical - row.systemQuantity
 }
+/** Loose pieces typed into the Pcs box (0 when the operator left it blank). */
+const physicalPcsForRow = (row: CountRow) =>
+  row.physicalPcs.trim() === '' ? 0 : Number(row.physicalPcs)
+/** Pieces in one case for this row: the balance snapshot, else the pack rule. */
+const pcsPerCaseForRow = (row: CountRow) => row.pcsPerCase ?? row.unitsPerCase ?? 1
+/**
+ * Loose-piece variance. Kept separate from the whole-case variance so a piece
+ * shortage is never rounded away: counting 3,861 cases against 3,861 cases + 2
+ * pcs is a -2 pcs variance, not a match.
+ */
+const pcsVarianceForRow = (row: CountRow) => {
+  const physical = parseCount(row.physicalCount)
+  if (physical === null) return null
+  return physicalPcsForRow(row) - (row.systemPcs ?? 0)
+}
+/** True when the row has been counted at all (either box has content). */
+const rowIsCounted = (row: CountRow): boolean =>
+  parseCount(row.physicalCount) !== null || row.physicalPcs.trim() !== ''
 const adjustmentValueForRow = (row: CountRow) => {
   const variance = varianceForRow(row)
-  return variance === null ? null : stockCountImpact(variance, row.unitCost)
+  if (variance === null) return null
+  const value = stockCountImpact(variance, row.unitCost)
+  // The loose-piece part of the variance is valued at unit cost / pcs per case,
+  // the same cost authority the posted movement uses.
+  const pcsVariance = pcsVarianceForRow(row) ?? 0
+  if (pcsVariance === 0 || row.unitCost === null || value === null) return value
+  const perCase = pcsPerCaseForRow(row)
+  return value + Math.round((pcsVariance * row.unitCost / perCase) * 100) / 100
 }
 const formatVerificationApiError = (
   result: { error?: string; reference?: string },
@@ -339,7 +386,6 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
   const [discardingDrafts, setDiscardingDrafts] = useState(false)
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const [currentStatus, setCurrentStatus] = useState<SessionStatus>('draft')
-  const [selectedGroupId, setSelectedGroupId] = useState(ALL_GROUP_ID)
   const [searchTerm, setSearchTerm] = useState('')
   const [showVarianceOnly, setShowVarianceOnly] = useState(false)
   const [showNotCountedOnly, setShowNotCountedOnly] = useState(false)
@@ -491,7 +537,6 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
     }
     loadCountRows(selectedWarehouse)
     loadPostedOpeningCategories(selectedWarehouse)
-    setSelectedGroupId(ALL_GROUP_ID)
     setSearchTerm('')
     setCurrentSessionId(null)
     setCurrentStatus('draft')
@@ -525,7 +570,6 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
       return
     }
     void loadOpeningBalancePosted(selectedWarehouse, selectedCategory)
-    setSelectedGroupId(ALL_GROUP_ID)
     setSearchTerm('')
     setShowNotCountedOnly(false)
     setShowCountedOnly(false)
@@ -540,7 +584,6 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
   // category change resets the active group tab and search to the recalculated,
   // category-scoped set for every count type.
   useEffect(() => {
-    setSelectedGroupId(ALL_GROUP_ID)
     setSearchTerm('')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCategory])
@@ -892,50 +935,30 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
     [rows, countableRows, isOpeningBalanceMode, selectedCategory, currentSessionId, openingDraftScopeIds],
   )
 
-  const groups = useMemo(() => {
-    const map = new Map<string, { id: string; name: string; count: number; logoUrl: string | null; description: string | null }>()
-    visibleRows.forEach(row => {
-      const existing = map.get(row.groupId)
-      if (existing) existing.count += 1
-      else map.set(row.groupId, { id: row.groupId, name: row.groupName, count: 1, logoUrl: row.brandLogoUrl || row.imageUrl, description: row.groupDescription })
-    })
-    return [{ id: ALL_GROUP_ID, name: 'All', count: visibleRows.length, logoUrl: null, description: null }, ...Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name))]
-  }, [visibleRows])
-
-  const selectedGroup = groups.find(group => group.id === selectedGroupId) || groups[0]
+  // One flat list: the Product Groups side filter is gone, so the count table
+  // always shows the full (already category-scoped) configuration set at full
+  // width. Row filters and search still narrow it.
   const selectedGroupRows = useMemo(() => {
-    const scoped = selectedGroupId === ALL_GROUP_ID ? visibleRows : visibleRows.filter(row => row.groupId === selectedGroupId)
     const query = searchTerm.trim().toLowerCase()
-    return scoped.filter(row => {
+    return visibleRows.filter(row => {
       const variance = varianceForRow(row)
       if (showVarianceOnly && (!variance || variance === 0)) return false
-      if (showNotCountedOnly && parseCount(row.physicalCount) !== null) return false
+      if (showNotCountedOnly && rowIsCounted(row)) return false
       if (showCountedOnly && parseCount(row.physicalCount) === null) return false
       if (!query) return true
       return matchesStockCountSearch(row, query)
     })
-  }, [visibleRows, searchTerm, selectedGroupId, showVarianceOnly, showNotCountedOnly, showCountedOnly])
-
-  const countedByGroup = useMemo(() => {
-    const counts = new Map<string, number>()
-    visibleRows.forEach(row => {
-      if (parseCount(row.physicalCount) === null) return
-      counts.set(row.groupId, (counts.get(row.groupId) || 0) + 1)
-      counts.set(ALL_GROUP_ID, (counts.get(ALL_GROUP_ID) || 0) + 1)
-    })
-    return counts
-  }, [visibleRows])
+  }, [visibleRows, searchTerm, showVarianceOnly, showNotCountedOnly, showCountedOnly])
 
   const rowFilterCounts = useMemo(() => {
-    const scoped = selectedGroupId === ALL_GROUP_ID ? visibleRows : visibleRows.filter(row => row.groupId === selectedGroupId)
     let counted = 0
     let variance = 0
-    scoped.forEach(row => {
-      if (parseCount(row.physicalCount) !== null) counted += 1
+    visibleRows.forEach(row => {
+      if (rowIsCounted(row)) counted += 1
       if (varianceForRow(row)) variance += 1
     })
-    return { all: scoped.length, notCounted: scoped.length - counted, counted, variance }
-  }, [visibleRows, selectedGroupId])
+    return { all: visibleRows.length, notCounted: visibleRows.length - counted, counted, variance }
+  }, [visibleRows])
 
   const rowFilter = showVarianceOnly ? 'variance' : showNotCountedOnly ? 'not_counted' : showCountedOnly ? 'counted' : 'all'
   const applyRowFilter = (filter: 'all' | 'not_counted' | 'counted' | 'variance') => {
@@ -954,7 +977,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
   )
 
   const pageSummary = useMemo(() => {
-    const counted = visibleRows.filter(row => parseCount(row.physicalCount) !== null)
+    const counted = visibleRows.filter(row => rowIsCounted(row))
     const variances = counted.map(row => varianceForRow(row) || 0)
     return {
       totalItems: visibleRows.length,
@@ -962,6 +985,13 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
       notCounted: visibleRows.length - counted.length,
       varianceItems: variances.filter(value => value !== 0).length,
       netAdjustment: variances.reduce((sum, value) => sum + value, 0),
+      // Cases and pieces cannot be summed into one figure; keep them apart so
+      // the UI can label each part (see formatQuantityTotals).
+      netAdjustmentTotals: sumQuantityTotals(counted.map(row => ({
+        value: varianceForRow(row) || 0,
+        unit: rowQuantityUnit(row),
+        unitsPerCase: row.unitsPerCase ?? 1,
+      }))),
       estimatedValue: sumStockCountImpacts(visibleRows.flatMap(row => {
         const variance = varianceForRow(row)
         return variance === null ? [] : [{ quantityChange: variance, baseCost: row.unitCost }]
@@ -970,14 +1000,23 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
   }, [visibleRows])
 
   const groupSummary = useMemo(() => {
-    const scoped = selectedGroupId === ALL_GROUP_ID ? visibleRows : visibleRows.filter(row => row.groupId === selectedGroupId)
+    const totalsFor = (pick: (row: StockCountCatalogRow) => number | null) => sumQuantityTotals(
+      visibleRows.flatMap(row => {
+        const value = pick(row)
+        return value === null ? [] : [{
+          value,
+          unit: rowQuantityUnit(row),
+          unitsPerCase: row.unitsPerCase ?? 1,
+        }]
+      }),
+    )
     return {
-      variants: scoped.length,
-      systemTotal: scoped.reduce((sum, row) => sum + row.systemQuantity, 0),
-      countedTotal: scoped.reduce((sum, row) => sum + (parseCount(row.physicalCount) ?? 0), 0),
-      varianceTotal: scoped.reduce((sum, row) => sum + (varianceForRow(row) || 0), 0),
+      variants: visibleRows.length,
+      systemTotals: totalsFor(row => row.systemQuantity),
+      countedTotals: totalsFor(row => parseCount(row.physicalCount)),
+      varianceTotals: totalsFor(row => varianceForRow(row)),
     }
-  }, [visibleRows, selectedGroupId])
+  }, [visibleRows])
 
   // "Count Type History" is the saved-session list narrowed to the currently
   // selected Count Type (legacy initial_configuration_classification folds into
@@ -1033,17 +1072,17 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
   const draftRows = useMemo<CountRow[]>(() => (
     isClassificationMode
       ? classificationGroups
-        .filter(group => group.targetRows.some(row => parseCount(row.physicalCount) !== null))
+        .filter(group => group.targetRows.some(row => rowIsCounted(row)))
         .flatMap(group => [
           { ...group.legacyRow, physicalCount: '0' },
-          ...group.targetRows.filter(row => parseCount(row.physicalCount) !== null || row.note.trim()),
+          ...group.targetRows.filter(row => rowIsCounted(row) || row.note.trim()),
         ])
       : isOpeningBalanceMode
         ? visibleRows
       // Full / Partial / Spot persist every entered count across all categories,
       // independent of the current category lens, so navigating categories never
       // drops saved work.
-      : countableRows.filter(row => parseCount(row.physicalCount) !== null || row.note.trim())
+      : countableRows.filter(row => rowIsCounted(row) || row.note.trim())
   ), [isClassificationMode, isOpeningBalanceMode, classificationGroups, visibleRows, countableRows])
 
   // Snapshot the complete eligible catalog on first save, not only rows that
@@ -1067,7 +1106,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
         .filter(group =>
           group.legacyRow.quantityAllocated > 0
           && allocationTargets[group.variantId]
-          && group.targetRows.some(row => parseCount(row.physicalCount) !== null),
+          && group.targetRows.some(row => rowIsCounted(row)),
         )
         .map(group => ({
           variantId: group.variantId,
@@ -1095,7 +1134,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
   const classificationMisuseRows = useMemo(() => {
     if (isClassificationMode || isOpeningBalanceMode) return [] as CountRow[]
     return draftRows.filter(row =>
-      parseCount(row.physicalCount) !== null
+      rowIsCounted(row)
       && (TARGET_CONFIG_CODES as readonly string[]).includes(row.configCode)
       && unclassifiedVariantIds.has(row.variantId)
       && !postedOpeningCategoryIds.has(row.categoryId)
@@ -1112,7 +1151,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
   const configEligibilityViolations = useMemo(
     () => findIneligibleStockConfigs(
       draftRows
-        .filter(row => parseCount(row.physicalCount) !== null || row.note.trim() !== '')
+        .filter(row => rowIsCounted(row) || row.note.trim() !== '')
         .map(row => ({
           stockConfigId: row.stockConfigId,
           configCode: row.configCode,
@@ -1148,13 +1187,23 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
     && !hasConfigEligibilityViolation
     && (isClassificationMode ? classificationSummary.selectedFlavours > 0 : pageSummary.counted > 0)
 
-  const updateRow = (stockConfigId: string, patch: Partial<Pick<CountRow, 'physicalCount' | 'note'>>) => {
+  const updateRow = (
+    stockConfigId: string,
+    patch: Partial<Pick<CountRow, 'physicalCount' | 'physicalPcs' | 'note'>>,
+  ) => {
     if (isOpeningBalanceReadOnly || !selectedWarehouseIsValid || currentStatus === 'posted') return
     setRows(prev => prev.map(row => row.stockConfigId === stockConfigId ? { ...row, ...patch } : row))
   }
 
-  const handlePhysicalCountChange = (stockConfigId: string, value: string) => {
-    if (value === '' || /^\d+$/.test(value)) updateRow(stockConfigId, { physicalCount: value })
+  const handlePhysicalCountChange = (
+    stockConfigId: string,
+    next: { cases: string; pcs: string },
+  ) => {
+    const cases = next.cases ?? ''
+    const pcs = next.pcs ?? ''
+    if (cases !== '' && !/^\d+$/.test(cases)) return
+    if (pcs !== '' && !/^\d+$/.test(pcs)) return
+    updateRow(stockConfigId, { physicalCount: cases, physicalPcs: pcs })
   }
 
   const focusNextCountInput = (stockConfigId: string) => {
@@ -1383,7 +1432,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
           isOpeningBalanceMode && updatingExistingSession
             ? await supabase
               .from('stock_count_session_items' as any)
-              .select('stock_config_id, variant_id, sku, system_quantity, physical_quantity, unit_cost, note')
+              .select('stock_config_id, variant_id, sku, system_quantity, system_pcs, physical_quantity, physical_pcs, pcs_per_case, unit_cost, note')
               .eq('session_id', sessionId)
             : { data: null, error: null }
         if (persistedItemError) throw persistedItemError
@@ -1415,14 +1464,27 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
             const snapshotSystemQuantity = persisted
               ? Number(persisted.system_quantity)
               : row.systemQuantity
+            const snapshotSystemPcs = persisted
+              ? Number((persisted as any).system_pcs ?? 0)
+              : (row.systemPcs ?? 0)
+            const perCase = pcsPerCaseForRow(row)
+            // Fold loose pieces into whole cases before they reach the database:
+            // 100 cases + 7 pcs at 4 pcs/case is stored as 101 cases + 3 pcs.
+            const counted = physical === null
+              ? null
+              : normalizeStockQuantity(physical, physicalPcsForRow(row), perCase)
             return {
               session_id: sessionId,
               variant_id: persisted ? persisted.variant_id : row.variantId,
               stock_config_id: row.stockConfigId,
               sku: persisted ? persisted.sku : skuForRow(row),
               system_quantity: snapshotSystemQuantity,
-              physical_quantity: physical,
-              adjustment_quantity: physical === null ? null : physical - snapshotSystemQuantity,
+              system_pcs: snapshotSystemPcs,
+              pcs_per_case: perCase,
+              physical_quantity: counted === null ? null : counted.cases,
+              physical_pcs: counted === null ? null : counted.pcs,
+              adjustment_quantity: counted === null ? null : counted.cases - snapshotSystemQuantity,
+              adjustment_pcs: counted === null ? null : counted.pcs - snapshotSystemPcs,
               unit_cost: persisted ? persisted.unit_cost : row.unitCost,
               note: row.note.trim() || null,
             }
@@ -1466,7 +1528,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
       setLastSavedSignature(savedSignature)
       if (!options.silent) {
         const countedOrNotedCount = draftRows.filter(row =>
-          parseCount(row.physicalCount) !== null || row.note.trim() !== ''
+          rowIsCounted(row) || row.note.trim() !== ''
         ).length
         toast({
           title: updatingExistingSession ? 'Draft updated' : 'Draft saved',
@@ -1674,7 +1736,14 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
     setNotes((session as any).notes || '')
     setRows(scopedCatalogRows.map(row => {
       const item = itemMap.get(row.stockConfigId) as any
-      return item ? { ...row, physicalCount: item.physical_quantity === null ? '' : String(item.physical_quantity), note: item.note || '' } : { ...row, physicalCount: '', note: '' }
+      return item
+        ? {
+          ...row,
+          physicalCount: item.physical_quantity === null ? '' : String(item.physical_quantity),
+          physicalPcs: item.physical_pcs === null || item.physical_pcs === undefined ? '' : String(item.physical_pcs),
+          note: item.note || '',
+        }
+        : { ...row, physicalCount: '', physicalPcs: '', note: '' }
     }))
     const loadedAllocationTargets = Object.fromEntries((allocationResolutions || []).map((resolution: any) => [
       resolution.variant_id,
@@ -1909,6 +1978,8 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
       variantName: row.variantName,
       productName: row.productName,
       productCode: row.productCode,
+      stockUnit: rowQuantityUnit(row),
+      unitsPerCase: row.unitsPerCase ?? 1,
       systemQuantity: row.systemQuantity,
       physicalCount: row.physicalCount,
       note: row.note,
@@ -2365,11 +2436,15 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
     ? classificationSummary.perGroup.filter(entry => entry.complete && entry.variance !== 0).length
     : pageSummary.varianceItems
   const reviewNetAdjustment = isClassificationMode ? classificationSummary.netVariance : pageSummary.netAdjustment
+  // Classification targets are always cases, so that mode reports a single unit.
+  const reviewNetTotals: QuantityTotals = isClassificationMode
+    ? { cases: classificationSummary.netVariance, pcs: 0, casePieces: 0 }
+    : pageSummary.netAdjustmentTotals
   const reviewEstimatedValue = isClassificationMode ? classificationSummary.estimatedValue : pageSummary.estimatedValue
   const highImpact = Math.abs(reviewEstimatedValue) >= HIGH_IMPACT_VALUE_THRESHOLD || Math.abs(reviewNetAdjustment) >= 1000
   const openingCountsComplete = isOpeningBalanceMode
     && visibleRows.length > 0
-    && visibleRows.every(row => parseCount(row.physicalCount) !== null)
+    && visibleRows.every(row => rowIsCounted(row))
 
   // Per-configuration breakdown shown in Review & Post so the exact lines that
   // will post (system → physical → variance for each configuration, plus the
@@ -2395,7 +2470,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
         complete: entry.complete,
       }))
     }
-    const counted = draftRows.filter(row => parseCount(row.physicalCount) !== null)
+    const counted = draftRows.filter(row => rowIsCounted(row))
     const byVariant = new Map<string, CountBreakdownGroup>()
     counted.forEach(row => {
       const group = byVariant.get(row.variantId)
@@ -2790,7 +2865,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-label="Counted items" aria-valuemin={0} aria-valuemax={100} aria-valuenow={countedPercent}>
                 <div className="h-full rounded-full bg-orange-500 transition-all" style={{ width: `${countedPercent}%` }} />
               </div>
-              <p className="mt-1 text-xs text-slate-500">{formatNumber(pageSummary.notCounted)} not counted · {Math.max(groups.length - 1, 0)} groups</p>
+              <p className="mt-1 text-xs text-slate-500">{formatNumber(pageSummary.notCounted)} not counted</p>
             </div>
             <div className="p-4">
               <p className="text-sm font-semibold text-slate-600">Items with variance</p>
@@ -2798,7 +2873,8 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
             </div>
             <div className="p-4">
               <p className="text-sm font-semibold text-slate-600">Net adjustment</p>
-              <p className={`text-2xl font-bold tabular-nums ${pageSummary.netAdjustment > 0 ? 'text-green-600' : pageSummary.netAdjustment < 0 ? 'text-red-600' : 'text-slate-950'}`}>{pageSummary.netAdjustment > 0 ? '+' : ''}{formatNumber(pageSummary.netAdjustment)} <span className="text-sm font-medium text-slate-500">units</span></p>
+              <p className={`text-lg font-bold leading-tight tabular-nums ${varianceTotalsTone(pageSummary.netAdjustmentTotals)}`}>{formatQuantityTotals(pageSummary.netAdjustmentTotals)}</p>
+              <p className="text-xs text-slate-500">In stock units (cases / pcs)</p>
             </div>
             <div className="p-4">
               <p className="text-sm font-semibold text-slate-600">Estimated value</p>
@@ -2844,36 +2920,6 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
       )}
 
       {!isClassificationMode && (
-        <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
-        <Card className="self-start">
-          <CardContent className="p-2">
-            <p className="px-2 pb-1 pt-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">Product groups</p>
-            <nav className="flex flex-wrap gap-1 xl:flex-col" aria-label="Product groups">
-              {groups.map(group => {
-                const counted = countedByGroup.get(group.id) || 0
-                const percent = group.count ? Math.round((counted / group.count) * 100) : 0
-                const selected = selectedGroupId === group.id
-                return (
-                  <button
-                    key={group.id}
-                    type="button"
-                    aria-pressed={selected}
-                    onClick={() => setSelectedGroupId(group.id)}
-                    className={`rounded-lg px-3 py-2 text-left text-sm transition xl:w-full ${selected ? 'bg-orange-50 font-semibold text-orange-800' : 'text-slate-700 hover:bg-slate-50'}`}
-                  >
-                    <span className="flex items-center justify-between gap-3">
-                      <span className="truncate">{group.name}</span>
-                      <span className={`text-xs tabular-nums ${group.count > 0 && counted === group.count ? 'font-semibold text-green-700' : 'text-slate-500'}`}>{counted} / {group.count}</span>
-                    </span>
-                    <span className="mt-1.5 hidden h-1 overflow-hidden rounded-full bg-slate-100 xl:block">
-                      <span className="block h-full rounded-full bg-orange-500" style={{ width: `${percent}%` }} />
-                    </span>
-                  </button>
-                )
-              })}
-            </nav>
-          </CardContent>
-        </Card>
         <Card className="min-w-0">
           <CardContent className="space-y-4 p-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center">
@@ -2890,7 +2936,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
                   </button>
                 ))}
               </div>
-              <div className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><Input className="w-full pl-9" value={searchTerm} onChange={event => setSearchTerm(event.target.value)} placeholder={selectedGroupId === ALL_GROUP_ID ? 'Search all variants...' : 'Search variants in this group...'} /></div>
+              <div className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><Input className="w-full pl-9" value={searchTerm} onChange={event => setSearchTerm(event.target.value)} placeholder="Search variants..." /></div>
               <div className="flex flex-wrap items-center gap-3">
                 {!isOpeningBalanceMode && <div className="flex items-center gap-2"><Switch checked={showInactive} onCheckedChange={setShowInactive} /><span className="text-sm font-semibold text-slate-700">Show inactive</span></div>}
                 <DropdownMenu>
@@ -2907,13 +2953,13 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
             <div className="rounded-lg border">
               <button type="button" className="flex w-full items-center justify-between gap-4 p-4 text-left" onClick={() => setGroupExpanded(!groupExpanded)}>
                 <div className="flex items-center gap-4">
-                  <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-lg bg-slate-100">{selectedGroup?.logoUrl ? <img src={getStorageUrl(selectedGroup.logoUrl) || selectedGroup.logoUrl} alt="" className="h-full w-full object-cover" /> : <Package className="h-8 w-8 text-slate-400" />}</div>
-                  <div><div className="flex items-center gap-2"><h2 className="text-xl font-bold text-slate-950">{selectedGroup?.name || 'All'}</h2><Badge variant="outline">{groupSummary.variants} configurations</Badge></div><p className="text-sm text-slate-500">{selectedGroup?.description || (selectedGroupId === ALL_GROUP_ID ? 'Configuration-aware inventory balances in the selected warehouse.' : 'Stock configurations in this product group.')}</p></div>
+                  <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-lg bg-slate-100"><Package className="h-8 w-8 text-slate-400" /></div>
+                  <div><div className="flex items-center gap-2"><h2 className="text-xl font-bold text-slate-950">Stock Configurations</h2><Badge variant="outline">{groupSummary.variants} configurations</Badge></div><p className="text-sm text-slate-500">Configuration-aware inventory balances in the selected warehouse.</p></div>
                 </div>
                 <div className="hidden flex-1 grid-cols-3 divide-x text-center md:grid">
-                  <div><p className="text-xs font-semibold text-slate-500">System Qty (Total)</p><p className="text-lg font-bold">{formatNumber(groupSummary.systemTotal)}</p></div>
-                  <div><p className="text-xs font-semibold text-slate-500">Counted (Total)</p><p className="text-lg font-bold">{formatNumber(groupSummary.countedTotal)}</p></div>
-                  <div><p className="text-xs font-semibold text-slate-500">Variance (Total)</p><p className={`text-lg font-bold ${groupSummary.varianceTotal > 0 ? 'text-green-600' : groupSummary.varianceTotal < 0 ? 'text-red-600' : 'text-slate-700'}`}>{groupSummary.varianceTotal > 0 ? '+' : ''}{formatNumber(groupSummary.varianceTotal)}</p></div>
+                  <div className="px-2"><p className="text-xs font-semibold text-slate-500">System Qty (stock unit)</p><p className="text-sm font-bold leading-tight tabular-nums">{formatQuantityTotals(groupSummary.systemTotals)}</p></div>
+                  <div className="px-2"><p className="text-xs font-semibold text-slate-500">Counted (stock unit)</p><p className="text-sm font-bold leading-tight tabular-nums">{formatQuantityTotals(groupSummary.countedTotals)}</p></div>
+                  <div className="px-2"><p className="text-xs font-semibold text-slate-500">Variance (stock unit)</p><p className={`text-sm font-bold leading-tight tabular-nums ${varianceTotalsTone(groupSummary.varianceTotals)}`}>{formatQuantityTotals(groupSummary.varianceTotals)}</p></div>
                 </div>
                 <ChevronDown className={`h-5 w-5 transition ${groupExpanded ? '' : '-rotate-90'}`} />
               </button>
@@ -2921,19 +2967,26 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
               {groupExpanded && (
                 <div className="overflow-x-auto border-t">
                   <Table>
-                    <TableHeader><TableRow><TableHead className="min-w-[320px]">{showConfiguration ? 'Variant / Stock Configuration' : 'Variant'}</TableHead><TableHead className="text-right">System Quantity</TableHead><TableHead className="min-w-[240px]">Physical Count</TableHead><TableHead className="text-right">Variance</TableHead>{visibleColumns.unitCost && <TableHead className="text-right">Unit Cost</TableHead>}{visibleColumns.adjustmentValue && <TableHead className="text-right">Adjustment Value</TableHead>}{visibleColumns.note && <TableHead className="min-w-[240px]">Note / Status</TableHead>}</TableRow></TableHeader>
+                    <TableHeader><TableRow><TableHead className="min-w-[320px]">{showConfiguration ? 'Variant / Stock Configuration' : 'Variant'}</TableHead><TableHead className="text-right">System Quantity <span className="font-normal text-slate-500">(stock unit)</span></TableHead><TableHead className="min-w-[240px]">Physical Count</TableHead><TableHead className="text-right">Variance</TableHead>{visibleColumns.unitCost && <TableHead className="text-right">Unit Cost</TableHead>}{visibleColumns.adjustmentValue && <TableHead className="text-right">Adjustment Value</TableHead>}{visibleColumns.note && <TableHead className="min-w-[240px]">Note / Status</TableHead>}</TableRow></TableHeader>
                     <TableBody>
                       {loadingRows && <TableRow><TableCell colSpan={7} className="py-8 text-center text-slate-500">Loading inventory configurations...</TableCell></TableRow>}
                       {!loadingRows && selectedGroupRows.length === 0 && <TableRow><TableCell colSpan={7} className="py-8 text-center text-slate-500">No variants match this view.</TableCell></TableRow>}
                       {selectedGroupRows.map(row => {
                         const variance = varianceForRow(row)
                         const adjustmentValue = adjustmentValueForRow(row)
+                        const unit = rowQuantityUnit(row)
+                        const unitsPerCase = row.unitsPerCase ?? 1
                         return (
                           <TableRow key={row.stockConfigId}>
                             <TableCell className={`border-l-4 ${variance === null ? 'border-l-transparent' : variance === 0 ? 'border-l-green-500' : 'border-l-amber-500'}`}><div className="flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded bg-slate-100">{row.imageUrl ? <img src={getStorageUrl(row.imageUrl) || row.imageUrl} alt="" className="h-full w-full object-cover" /> : <Package className="h-5 w-5 text-slate-400" />}</div><div><p className="font-semibold text-slate-950">{row.variantName}</p><div className="mt-1 flex flex-wrap items-center gap-1.5">{showConfiguration && <Badge variant={row.configStatus === 'active' ? 'secondary' : 'outline'}>{withStockStrengthUnit(row.configLabel)}</Badge>}{!row.variantIsActive && <Badge variant="outline" className="border-amber-300 text-amber-700" title="Archived variant — historical snapshot item">Archived variant · historical</Badge>}{row.variantIsActive && (!row.productIsActive || row.configStatus !== 'active') && <Badge variant="outline" className="border-amber-300 text-amber-700" title="Inactive master data — historical snapshot item">Historical configuration</Badge>}{row.productCode && <span className="text-xs text-slate-500">{row.productCode}</span>}</div><p className="text-xs text-slate-500">{row.productName}</p></div></div></TableCell>
-                            <TableCell className="text-right font-medium tabular-nums">{formatNumber(row.systemQuantity)}</TableCell>
-                            <TableCell><StockCountQuantityInput countInputId={row.stockConfigId} value={row.physicalCount} unit={row.countUnit} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={value => handlePhysicalCountChange(row.stockConfigId, value)} onEnter={() => focusNextCountInput(row.stockConfigId)} /></TableCell>
-                            <TableCell className="text-right tabular-nums">{variance === null ? <span className="text-sm font-medium text-slate-400">Not counted</span> : variance === 0 ? <span className="inline-flex rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-semibold text-green-700">Match</span> : <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${variance > 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>{variance > 0 ? '+' : ''}{formatNumber(variance)}</span>}</TableCell>
+                            <TableCell className="text-right font-medium tabular-nums">
+                              <StockQuantityDisplay
+                                quantity={{ cases: row.systemQuantity, pcs: row.systemPcs ?? 0, pcsPerCase: pcsPerCaseForRow(row), unit: rowQuantityUnit(row) }}
+                                className="items-end"
+                              />
+                            </TableCell>
+                            <TableCell><StockCountQuantityInput countInputId={row.stockConfigId} cases={row.physicalCount} pcs={row.physicalPcs} unit={unit} unitsPerCase={unitsPerCase} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={next => handlePhysicalCountChange(row.stockConfigId, next)} onEnter={() => focusNextCountInput(row.stockConfigId)} /></TableCell>
+                            <TableCell className="text-right tabular-nums">{variance === null ? <span className="text-sm font-medium text-slate-400">Not counted</span> : (variance === 0 && !pcsVarianceForRow(row)) ? <span className="inline-flex rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-semibold text-green-700">Match</span> : <span className="inline-flex rounded-full bg-amber-50 px-2.5 py-0.5"><StockQuantityDisplay variant="change" quantity={{ cases: variance, pcs: pcsVarianceForRow(row) ?? 0, pcsPerCase: pcsPerCaseForRow(row), unit: rowQuantityUnit(row) }} className="items-end" /></span>}</TableCell>
                             {visibleColumns.unitCost && <TableCell className="text-right tabular-nums">{row.unitCost === null ? '—' : formatMoney(row.unitCost)}</TableCell>}
                             {visibleColumns.adjustmentValue && <TableCell className={`text-right font-semibold tabular-nums ${!adjustmentValue ? 'text-slate-600' : adjustmentValue > 0 ? 'text-green-600' : 'text-red-600'}`}>{adjustmentValue === null ? '-' : formatMoney(adjustmentValue)}</TableCell>}
                             {visibleColumns.note && <TableCell><div className="flex items-center gap-2"><MessageSquare className="h-4 w-4 text-slate-400" /><Input value={row.note} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={event => updateRow(row.stockConfigId, { note: event.target.value })} placeholder={variance === null ? 'Not counted' : variance === 0 ? 'Matched' : 'Add note'} /></div></TableCell>}
@@ -2947,7 +3000,6 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
             </div>
           </CardContent>
         </Card>
-        </div>
       )}
 
       {isClassificationMode && (
@@ -3052,8 +3104,13 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
                         <TableRow key={row.stockConfigId}>
                           <TableCell><Badge variant="secondary">{withStockStrengthUnit(row.configLabel)}</Badge></TableCell>
                           <TableCell><Badge className="bg-[var(--sera-orange)]/[0.06] text-blue-700 hover:bg-[var(--sera-orange)]/[0.06]">Target Configuration</Badge></TableCell>
-                          <TableCell className="text-right font-medium tabular-nums">{formatNumber(row.systemQuantity)}</TableCell>
-                          <TableCell><StockCountQuantityInput value={row.physicalCount} unit={row.countUnit} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={value => handlePhysicalCountChange(row.stockConfigId, value)} /></TableCell>
+                          <TableCell className="text-right font-medium tabular-nums">
+                            <StockQuantityDisplay
+                              quantity={{ cases: row.systemQuantity, pcs: row.systemPcs ?? 0, pcsPerCase: pcsPerCaseForRow(row), unit: rowQuantityUnit(row) }}
+                              className="items-end"
+                            />
+                          </TableCell>
+                          <TableCell><StockCountQuantityInput cases={row.physicalCount} pcs={row.physicalPcs} unit={row.countUnit} unitsPerCase={row.unitsPerCase ?? 1} disabled={currentStatus === 'posted' || isOpeningBalanceReadOnly} onChange={next => handlePhysicalCountChange(row.stockConfigId, next)} /></TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -3211,7 +3268,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
               )}
               <div className="flex justify-between sm:col-span-2"><span>{isClassificationMode ? 'Flavours fully classified' : 'Total configurations counted'}</span><strong>{formatNumber(reviewCounted)}</strong></div>
               <div className="flex justify-between sm:col-span-2"><span>Variance items</span><strong>{formatNumber(reviewVarianceItems)}</strong></div>
-              <div className={`flex justify-between rounded-md px-2 py-1 sm:col-span-2 ${highImpact ? 'bg-amber-100 text-amber-950' : ''}`}><span>{isClassificationMode ? 'Genuine net variance' : 'Net quantity adjustment'}</span><strong className={reviewNetAdjustment < 0 ? 'text-red-700' : reviewNetAdjustment > 0 ? 'text-emerald-700' : ''}>{reviewNetAdjustment > 0 ? '+' : ''}{formatNumber(reviewNetAdjustment)}</strong></div>
+              <div className={`flex justify-between rounded-md px-2 py-1 sm:col-span-2 ${highImpact ? 'bg-amber-100 text-amber-950' : ''}`}><span>{isClassificationMode ? 'Genuine net variance' : 'Net quantity adjustment'}</span><strong className={reviewNetAdjustment < 0 ? 'text-red-700' : reviewNetAdjustment > 0 ? 'text-emerald-700' : ''}>{formatQuantityTotals(reviewNetTotals)}</strong></div>
               <div className={`flex justify-between rounded-md px-2 py-1 sm:col-span-2 ${highImpact ? 'bg-amber-100 text-amber-950' : ''}`}><span>Estimated adjustment value</span><strong className={reviewEstimatedValue < 0 ? 'text-red-700' : reviewEstimatedValue > 0 ? 'text-emerald-700' : ''}>{formatMoney(reviewEstimatedValue)}</strong></div>
             </div>
 
@@ -3302,7 +3359,7 @@ export default function StockAdjustmentView({ userProfile, onViewChange }: Stock
         </DialogContent>
       </Dialog>
 
-      <Card className="border-amber-200 bg-amber-50"><CardContent className="flex items-center gap-3 p-3 text-sm text-amber-900"><Warehouse className="h-4 w-4" /><span>Tip: select a group, update all variant physical counts directly or by Excel import, then save draft before posting.</span></CardContent></Card>
+      <Card className="border-amber-200 bg-amber-50"><CardContent className="flex items-center gap-3 p-3 text-sm text-amber-900"><Warehouse className="h-4 w-4" /><span>Tip: enter physical counts directly (cases, or pcs where the product is case-stocked), or import an Excel worksheet, then save the draft before posting.</span></CardContent></Card>
     </div>
   )
 }

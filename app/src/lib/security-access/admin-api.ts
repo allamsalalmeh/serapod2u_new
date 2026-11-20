@@ -1,4 +1,5 @@
 import 'server-only'
+import { AuthorizationUnavailableError } from './authorization'
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -18,9 +19,9 @@ export interface SecurityActor {
 type ActorIdentity = { userId: string; organizationId: string | null }
 
 /** Fail-closed infrastructure failure: never presented as a confirmed denial. */
-export function unavailableResponse(trace: Trace, reason: string): NextResponse {
+export function unavailableResponse(trace: Trace, reason: string, referenceId?: string): NextResponse {
   return NextResponse.json(
-    { error: 'Security & Access is temporarily unavailable. Please retry.', code: 'sa_unavailable', reason, correlationId: trace.id },
+    { error: 'Security & Access is temporarily unavailable. Please retry.', code: 'sa_unavailable', reason, correlationId: trace.id, referenceId },
     { status: 503, headers: { 'Retry-After': '5' } },
   )
 }
@@ -84,11 +85,11 @@ export async function requireSecurityActor(permission: string, trace: Trace = cr
     })
   } catch (error) {
     trace.fail('authorize', error)
-    return unavailableResponse(trace, 'authorization_unavailable')
+    return unavailableResponse(trace, 'authorization_unavailable', error instanceof AuthorizationUnavailableError ? error.referenceId : undefined)
   }
-  if (decision.unavailable) return unavailableResponse(trace, decision.unavailable)
+  if (decision.unavailable) return unavailableResponse(trace, decision.unavailable, decision.referenceId)
   if (decision.decision !== 'ALLOW') {
-    return NextResponse.json({ error: 'Forbidden', code: 'sa_forbidden', permission, decisionId: decision.decisionId, reason: decision.reasonCode }, { status: 403 })
+    return NextResponse.json({ error: 'Forbidden', code: 'sa_forbidden', permission, decisionId: decision.decisionId, reason: decision.reasonCode, referenceId: decision.referenceId }, { status: 403 })
   }
   return { ...actor, admin: createAdminClient() as any, trace }
 }

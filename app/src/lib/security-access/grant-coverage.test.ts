@@ -28,6 +28,21 @@ describe('grant coverage', () => {
     expect(isRedundantPolicy(['finance.cash.prepare', 'hr.payroll.approve'], c)).toBe(false) // adds HR: still legitimate
   })
 
+  it('decision B: Finance Full Access does not cover bank statement import/approve, so they stay grantable explicitly', () => {
+    const fa = role('fa', ['finance.module.view', 'finance.cash.view', 'finance.payment.approve'])
+    const roles = new Map<string, CoverageRole>([
+      ['fa', fa],
+      ['prep', role('prep', ['finance.module.view', 'finance.cash.view', 'finance.statement.import'])],
+      ['appr', role('appr', ['finance.module.view', 'finance.cash.view', 'finance.statement.approve'])],
+    ])
+    const required = grantableModulePermissions(Array.from(roles.values()))
+    expect(required.get('finance')).toEqual(new Set(['finance.module.view', 'finance.cash.view', 'finance.payment.approve', 'finance.statement.import', 'finance.statement.approve']))
+    const c = coveredPermissions({ assignments: [grant('fa')], organizationId: HQ, roles, now: NOW })
+    expect(fullyCoveredModules(required, c).has('finance')).toBe(false)
+    expect(isRedundantPolicy(roles.get('prep')!.permissionKeys, c)).toBe(false)
+    expect(isRedundantPolicy(roles.get('appr')!.permissionKeys, c)).toBe(false)
+  })
+
   it('partial access never covers a module', () => {
     expect(fullyCoveredModules(REQUIRED, covered([grant('bank'), grant('fake-fa')])).has('finance')).toBe(false)
   })

@@ -176,12 +176,20 @@ describe('default entry', () => {
     expect(requested).toEqual([{ month: '2026-09', distributor: 'all', status: 'all' }])
   })
 
-  it('renders the monthly KPIs, using Order Value rather than Total Amount or Sales', async () => {
+  it('leads with approved KPIs and an approved period comparison — no Active Order Value, never Total Amount', async () => {
     await renderTab()
 
-    expect(screen.getAllByText('Total Orders').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Order Value').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Avg Order Value').length).toBeGreaterThan(0)
+    const headline = screen.getByTestId('distributor-headline-kpis')
+    for (const label of ['Approved Sales', 'Approved Orders', 'Active Distributors', 'Average Approved Order Value']) {
+      expect(within(headline).getByText(label)).toBeTruthy()
+    }
+    expect(within(headline).queryByText('Active Order Value')).toBeNull()
+    expect(within(headline).queryByText(/cancelled/i)).toBeNull()
+    expect(screen.queryByText('Active Order Value')).toBeNull()
+    expect(screen.queryByText('Avg Order Value')).toBeNull()
+    expect(screen.getAllByText('Approved Sales').length).toBeGreaterThan(1) // card + comparison row
+    expect(screen.getByTestId('active-kpi-definition').textContent).toMatch(/Draft and cancelled orders never count/)
+    expect(screen.getAllByText('Total Orders Created').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Active Distributors').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Returning Rate').length).toBeGreaterThan(0)
     expect(screen.queryByText('Total Amount (RM)')).toBeNull()

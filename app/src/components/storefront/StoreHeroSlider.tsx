@@ -28,6 +28,8 @@ interface StoreHeroCarouselProps {
   banners: HeroBanner[]
   /** Interval in ms between auto-slides. 0 = no auto-rotate. Default: 6000 */
   interval?: number
+  /** Off on the customer store address; staff sign in on the portal address. */
+  showBusinessLogin?: boolean
 }
 
 // ── Animation variants (stagger: badge → title → subtitle → CTA) ──
@@ -53,6 +55,7 @@ const textItem = {
 export default function StoreHeroSlider({
   banners,
   interval = 6000,
+  showBusinessLogin = true,
 }: StoreHeroCarouselProps) {
   const count = banners.length
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -227,12 +230,14 @@ export default function StoreHeroSlider({
                             {banner.link_text || 'Shop Now'}
                             <ArrowRight className="h-4 w-4 transition-transform group-hover/cta:translate-x-0.5" />
                           </Link>
-                          <Link
-                            href="/login"
-                            className="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold text-white/65 bg-white/10 backdrop-blur-sm rounded-full hover:bg-white/20 transition-all border border-white/10"
-                          >
-                            Business Login
-                          </Link>
+                          {showBusinessLogin && (
+                            <Link
+                              href="/login"
+                              className="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold text-white/65 bg-white/10 backdrop-blur-sm rounded-full hover:bg-white/20 transition-all border border-white/10"
+                            >
+                              Business Login
+                            </Link>
+                          )}
                         </motion.div>
                       )}
                     </motion.div>

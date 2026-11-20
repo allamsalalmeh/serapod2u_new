@@ -149,7 +149,17 @@ async function triggerJob(path: string, expression: string): Promise<void> {
       console.warn(`[Cron] ${path} responded ${res.status}`)
       // 5xx = the worker run failed. 409 (remote-DB guard) and 401 (secret) are configuration states, not failures.
       if (res.status >= 500) {
-        reportCronFailure(path, { status: res.status, message: `${path} responded ${res.status}`, serverReferenceId: res.headers.get('x-request-id') })
+        // A worker that fails closed (e.g. lease unavailable) returns a JSON body with a
+        // machine-readable code and cause. Capture them so the System Log diagnostic shows WHY,
+        // not just the status. Values are sanitized again on ingest.
+        let code: string | undefined
+        let cause: string | undefined
+        try {
+          const body = (await res.clone().json()) as Record<string, unknown>
+          if (typeof body.code === 'string') code = body.code
+          if (typeof body.cause === 'string') cause = body.cause
+        } catch { /* non-JSON body - ignore */ }
+        reportCronFailure(path, { status: res.status, message: `${path} responded ${res.status}`, serverReferenceId: res.headers.get('x-request-id'), code, cause })
       }
     }
   } catch (err: any) {
@@ -167,16 +177,21 @@ async function triggerJob(path: string, expression: string): Promise<void> {
  * System Logs worker report for a failed run (fire-and-forget, never throws). When the route itself crashed, its own
  * server report carries the same X-Request-ID and the two are linked instead of counted twice.
  */
-function reportCronFailure(path: string, input: { status?: number; message?: string; error?: unknown; serverReferenceId?: string | null }) {
+function reportCronFailure(path: string, input: { status?: number; message?: string; error?: unknown; serverReferenceId?: string | null; code?: string | null; cause?: string | null }) {
   import('./system-logs/server')
     .then(({ reportWorkerFailure }) => reportWorkerFailure(path.replace(/^\/api\/cron\//, ''), {
       error: input.error,
       status: input.status ?? null,
+      code: input.code ?? null,
       message: input.message,
       apiRoute: path,
       method: 'GET',
       correlationId: null,
-      details: { scheduler: getRegistry().schedulerInstanceId, ...(input.serverReferenceId ? { server_reference_id: input.serverReferenceId } : {}) },
+      details: {
+        scheduler: getRegistry().schedulerInstanceId,
+        ...(input.cause ? { cause: input.cause } : {}),
+        ...(input.serverReferenceId ? { server_reference_id: input.serverReferenceId } : {}),
+      },
       serverReferenceId: input.serverReferenceId ?? null,
     }))
     .catch(() => { /* diagnostics must never affect the scheduler */ })

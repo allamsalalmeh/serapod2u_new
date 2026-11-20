@@ -14,7 +14,7 @@ export async function GET() {
         if (!organizationId) {
             return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 400 })
         }
-        if (!(await hrCan(ctxResult.data, 'hr.benefits.manage', () => true))) {
+        if (!(await hrCan(ctxResult.data, 'hr.benefits.manage'))) {
             return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
         }
 

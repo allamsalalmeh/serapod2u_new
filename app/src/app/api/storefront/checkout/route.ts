@@ -17,6 +17,7 @@ import {
   loadOutdoorCheckoutSettings,
   resolveOutdoorAffiliate,
 } from '@/lib/outdoor/sales-tools-server'
+import { resolveCheckoutAffiliate } from '@/lib/affiliate/server'
 
 // NOTE: storefront_orders / storefront_order_items are not in the
 // auto-generated database types yet. After running STOREFRONT_MIGRATION.sql
@@ -67,6 +68,11 @@ interface CheckoutBody {
   orderBump?: boolean
   /** Outdoor: live host / affiliate code from a ?ref= link. */
   affiliateCode?: string
+  /** Affiliate program: the link's ?sub= and when it was clicked (ms). */
+  affiliateSubId?: string
+  affiliateClickedAt?: number
+  /** Server-signed referral click. Required for program commission. */
+  affiliateRefToken?: string
 }
 
 const MAX_LINE_QUANTITY = 999
@@ -341,6 +347,18 @@ export async function POST(request: NextRequest) {
         shippingCourierName = `${quote.courierName} — ${quote.serviceName}`.slice(0, 120)
       }
     }
+    const affiliateDecision = await resolveCheckoutAffiliate(supabase, {
+      channel: salesChannel,
+      outdoorResolved: affiliate,
+      code: body.affiliateCode,
+      subId: body.affiliateSubId,
+      clickedAt: body.affiliateClickedAt,
+      refToken: body.affiliateRefToken,
+      buyer: { email: body.customer.email, phone: body.customer.phone },
+      lines: lineItems,
+      variants,
+    })
+    affiliate = affiliateDecision.affiliate
     const payableTotal = orderTotal + shippingAmount
     if (payableTotal < MIN_ORDER_TOTAL) {
       return NextResponse.json(
@@ -381,6 +399,7 @@ export async function POST(request: NextRequest) {
     if (affiliate) {
       salesToolColumns.affiliate_id = affiliate.id
       salesToolColumns.affiliate_code = affiliate.code
+      Object.assign(salesToolColumns, affiliateDecision.columns)
     }
 
     let order: { id: string; order_ref: string } | null = null

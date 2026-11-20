@@ -161,7 +161,7 @@ export async function GET() {
                         count: holidays.length,
                         link: 'hr/attendance/public-holidays',
                         linkLabel: 'Public Holidays',
-                        autoSetupKey: 'default_holidays_my',
+                        // auto-setup 'default_holidays_my' disabled in B2B (broken seed); see POST
                     },
                 ],
             },
@@ -208,7 +208,7 @@ export async function GET() {
                             : 'Overtime tracking disabled',
                         link: 'hr/attendance/clock-in-out',
                         linkLabel: 'Attendance',
-                        autoSetupKey: 'enable_overtime_ea1955',
+                        // auto-setup 'enable_overtime_ea1955' disabled in B2B (broken seed); see POST
                     },
                     {
                         key: 'timesheet_config',
@@ -238,7 +238,7 @@ export async function GET() {
                         count: leaveTypes.length,
                         link: 'hr/leave/types',
                         linkLabel: 'Manage Leave Types',
-                        autoSetupKey: 'default_leave_types',
+                        // auto-setup 'default_leave_types' disabled in B2B (broken seed); see POST
                     },
                     {
                         key: 'approval_chains',
@@ -246,11 +246,9 @@ export async function GET() {
                         status: chains.length > 0 ? 'configured' : 'missing',
                         detail: chains.length > 0
                             ? `${chains.length} approval chain(s)`
-                            : 'No approval chains — leave approvals will not work',
+                            : 'Approval chains are not used yet: leave is decided by the direct manager (Manager Self-Service) or authorized HR',
                         count: chains.length,
-                        link: 'hr/leave/approval-flow',
-                        linkLabel: 'Approval Flow',
-                        autoSetupKey: 'default_approval_chain',
+                        // auto-setup 'default_approval_chain' disabled in B2B (broken seed); see POST
                     },
                     {
                         key: 'delegation_rules',
@@ -258,10 +256,8 @@ export async function GET() {
                         status: delegations.length > 0 ? 'configured' : 'partial',
                         detail: delegations.length > 0
                             ? `${delegations.length} active delegation(s)`
-                            : 'No delegation rules (approver absence not covered)',
+                            : 'Leave delegation is not used yet (arrives with the leave backend)',
                         count: delegations.length,
-                        link: 'hr/leave/approval-flow',
-                        linkLabel: 'Manage Delegation',
                     },
                     {
                         key: 'carry_forward',
@@ -430,67 +426,20 @@ export async function POST(request: Request) {
             return NextResponse.json({ success: true, message: 'Default workweek (Mon–Fri) created' })
         }
 
-        if (action === 'default_holidays_my') {
-            // Seed Malaysian public holidays for current year
-            const year = new Date().getFullYear()
-            const holidays = [
-                { name: 'New Year', date: `${year}-01-01`, is_recurring: true },
-                { name: 'Thaipusam', date: `${year}-01-25`, is_recurring: false },
-                { name: 'Federal Territory Day', date: `${year}-02-01`, is_recurring: true, state: 'WP' },
-                { name: 'Nuzul Al-Quran', date: `${year}-03-27`, is_recurring: false },
-                { name: 'Labour Day', date: `${year}-05-01`, is_recurring: true },
-                { name: 'Vesak Day', date: `${year}-05-12`, is_recurring: false },
-                { name: 'Agong Birthday', date: `${year}-06-02`, is_recurring: false },
-                { name: 'Hari Raya Aidilfitri', date: `${year}-03-30`, is_recurring: false },
-                { name: 'Hari Raya Haji', date: `${year}-06-07`, is_recurring: false },
-                { name: 'Awal Muharram', date: `${year}-06-27`, is_recurring: false },
-                { name: 'Malaysia Day', date: `${year}-09-16`, is_recurring: true },
-                { name: 'Mawlid Nabi', date: `${year}-09-05`, is_recurring: false },
-                { name: 'Deepavali', date: `${year}-10-20`, is_recurring: false },
-                { name: 'Christmas Day', date: `${year}-12-25`, is_recurring: true },
-                { name: 'Merdeka Day', date: `${year}-08-31`, is_recurring: true },
-            ]
-
-            const rows = holidays.map(h => ({
-                organization_id: ctx.orgId,
-                name: h.name,
-                date: h.date,
-                is_recurring: h.is_recurring,
-                state: h.state || null,
-            }))
-
-            const { error } = await supabase.from('hr_public_holidays').insert(rows)
-            if (error) return NextResponse.json({ error: error.message }, { status: 400 })
-            return NextResponse.json({ success: true, message: `${rows.length} Malaysian holidays added for ${year}` })
+        // B2B: these seeds wrote columns that do not exist (hr_leave_types.default_days; hr_approval_chains.steps/is_active;
+        // hr_overtime_presets.organization_id/rules_json — and reported success anyway), or fixed this year's lunar dates and
+        // loaded state holidays nationwide. Retired (410); real setup happens on the owning screens.
+        if (action === 'default_leave_types' || action === 'default_approval_chain' || action === 'default_holidays_my' || action === 'enable_overtime_ea1955') {
+            const where: Record<string, string> = {
+                default_leave_types: 'Create leave types in Leave → Leave Types.',
+                default_approval_chain: 'Leave is decided by the direct manager (Manager Self-Service) or authorized HR; approval chains arrive with the leave backend.',
+                default_holidays_my: 'Use Public Holidays → Load template (national holidays) and add state holidays manually.',
+                enable_overtime_ea1955: 'Enable overtime in Attendance → Overtime policy (hr_overtime_policies), which overtime requests use.',
+            }
+            return NextResponse.json({ error: 'This auto-setup action is no longer available. ' + where[action], code: 'AUTO_SETUP_RETIRED' }, { status: 410 })
         }
 
-        if (action === 'enable_overtime_ea1955') {
-            // Enable OT tracking in attendance policy + seed Malaysia EA 1955 preset
-            const { error: policyErr } = await supabase
-                .from('hr_attendance_policies')
-                .upsert({
-                    organization_id: ctx.orgId,
-                    overtime_policy_json: { enabled: true, rate: 1.5 },
-                }, { onConflict: 'organization_id' })
-            if (policyErr) return NextResponse.json({ error: policyErr.message }, { status: 400 })
 
-            // Upsert Malaysia EA 1955 OT preset
-            await supabase.from('hr_overtime_presets').upsert({
-                organization_id: ctx.orgId,
-                name: 'Malaysia EA 1955',
-                country_code: 'MY',
-                rules_json: {
-                    multiplier_normal: 1.5,
-                    multiplier_rest_day: 2.0,
-                    multiplier_holiday: 3.0,
-                    multiplier_extended: 2.0,
-                    extended_after_minutes: 720,
-                    max_daily_hours: 4,
-                },
-            }, { onConflict: 'organization_id,name' })
-
-            return NextResponse.json({ success: true, message: 'Overtime enabled with Malaysia EA 1955 rates (1.5×/2.0×/3.0×)' })
-        }
 
         if (action === 'default_hr_notifications') {
             // Enable default HR notification rules (all off by default, just create the rows)
@@ -517,50 +466,7 @@ export async function POST(request: Request) {
             return NextResponse.json({ success: true, message: `${rows.length} HR notification rules created (disabled by default)` })
         }
 
-        if (action === 'default_leave_types') {
-            // Seed common leave types: Annual, Sick, Unpaid
-            const leaveTypes = [
-                { code: 'ANNUAL', name: 'Annual Leave', default_days: 14, carry_forward: JSON.stringify({ enabled: true, max_days: 5 }), accrual_frequency: 'monthly', color: '#3B82F6' },
-                { code: 'SICK', name: 'Sick Leave', default_days: 14, carry_forward: JSON.stringify({ enabled: false }), accrual_frequency: 'none', color: '#EF4444' },
-                { code: 'UNPAID', name: 'Unpaid Leave', default_days: 30, carry_forward: JSON.stringify({ enabled: false }), accrual_frequency: 'none', color: '#6B7280' },
-                { code: 'MATERNITY', name: 'Maternity Leave', default_days: 98, carry_forward: JSON.stringify({ enabled: false }), accrual_frequency: 'none', color: '#EC4899' },
-                { code: 'PATERNITY', name: 'Paternity Leave', default_days: 7, carry_forward: JSON.stringify({ enabled: false }), accrual_frequency: 'none', color: '#8B5CF6' },
-            ]
 
-            const rows = leaveTypes.map(lt => ({
-                organization_id: ctx.orgId,
-                code: lt.code,
-                name: lt.name,
-                default_days: lt.default_days,
-                carry_forward: lt.carry_forward,
-                accrual_frequency: lt.accrual_frequency,
-                color: lt.color,
-                status: 'active',
-            }))
-
-            const { error } = await supabase.from('hr_leave_types').upsert(rows, { onConflict: 'organization_id,code' })
-            if (error) return NextResponse.json({ error: error.message }, { status: 400 })
-            return NextResponse.json({ success: true, message: `${rows.length} default leave types created (Annual, Sick, Unpaid, Maternity, Paternity)` })
-        }
-
-        if (action === 'default_approval_chain') {
-            // Create default Manager → HR approval chain
-            const { error } = await supabase
-                .from('hr_approval_chains')
-                .upsert({
-                    organization_id: ctx.orgId,
-                    name: 'Default Approval Chain',
-                    description: 'Manager → HR Admin approval flow',
-                    steps: JSON.stringify([
-                        { order: 1, role: 'manager', label: 'Direct Manager' },
-                        { order: 2, role: 'hr_admin', label: 'HR Admin' },
-                    ]),
-                    is_default: true,
-                    is_active: true,
-                }, { onConflict: 'organization_id,name' })
-            if (error) return NextResponse.json({ error: error.message }, { status: 400 })
-            return NextResponse.json({ success: true, message: 'Default approval chain created (Manager → HR Admin)' })
-        }
 
         if (action === 'default_salary_bands') {
             // Create placeholder salary bands

@@ -74,6 +74,14 @@ export async function POST(request: NextRequest) {
     if ('databaseError' in outcome) return governanceError(outcome.databaseError)
     return NextResponse.json({ error: outcome.message, code: outcome.code }, { status: outcome.status })
   }
+  if (body.action === 'revoke') {
+    // sa_revoke_assignment changes no row for an already revoked assignment yet returns normally: never report that as a
+    // revoke. The database still authorizes and locks the row on the real call below.
+    const { data: current, error: readError } = await actor.admin.from('sa_role_assignments').select('status').eq('id', body.assignmentId).maybeSingle()
+    if (readError) return NextResponse.json({ error: 'The access assignment could not be checked. Nothing was changed. Try again.', code: 'sa_revoke_check_failed' }, { status: 503 })
+    if (!current) return NextResponse.json({ error: 'That access assignment no longer exists. Nothing was changed.', code: 'sa_assignment_not_found' }, { status: 404 })
+    if (current.status === 'revoked') return NextResponse.json({ error: 'This access was already revoked. Nothing was changed.', code: 'sa_assignment_already_revoked' }, { status: 409 })
+  }
   const { error } = await actor.admin.rpc(body.action === 'restore' ? 'sa_restore_assignment' : 'sa_revoke_assignment',
     { p_actor: actor.userId, p_assignment: body.assignmentId, p_reason: body.reason })
   if (error) return governanceError(error)

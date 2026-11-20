@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { commissionErrorOf } from '@/lib/hr/commission/errors'
 import { parseCommissionAccess, type CommissionAccess, type CommissionPermission } from '@/lib/security-access/commission'
+import { COMMISSION_NOT_RELEASED, commissionReleased } from '@/lib/hr/commission/release'
 
 /**
  * Commission API context. Access is decided by the DATABASE (hr_commission_my_access → hr_commission_allowed: the S&A
@@ -17,6 +18,8 @@ export interface CommissionContext {
 }
 
 export async function commissionContext(): Promise<CommissionContext | NextResponse> {
+  // Not released in this environment: every commission API answers 404 before touching the database.
+  if (!commissionReleased()) return NextResponse.json(COMMISSION_NOT_RELEASED, { status: 404 })
   const supabase = (await createClient()) as any
   const { data: { user }, error } = await supabase.auth.getUser()
   if (error || !user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })

@@ -1,3 +1,4 @@
+import { createInventoryTrace, inventoryEvent } from '@/lib/inventory/inventory-timing'
 import { authorizeOperation, organizationResource } from '@/lib/security-access/operation'
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { getSupplyChainPageContext } from '@/app/supply-chain/_lib'
@@ -12,8 +13,10 @@ interface SupplyChainSubPageProps {
 export default async function SupplyChainSubPage({ params }: SupplyChainSubPageProps) {
     const { slug = [] } = await params
     const { initialView, initialOrgId, initialOrderId, initialProductId } = resolveSupplyChainSlug(slug)
+    const timingTrace = initialView === 'inventory-list' ? createInventoryTrace() : undefined
+    inventoryEvent(timingTrace, 'server.inventory.page', 'start')
     // A direct URL needs the same S&A decision as its menu entry (module entry + the view's own destination).
-    const { userProfile, canViewSupplyChain, accessState } = await getSupplyChainPageContext(supplyChainDestinationForView(initialView))
+    const { userProfile, canViewSupplyChain, accessState } = await getSupplyChainPageContext(supplyChainDestinationForView(initialView), timingTrace)
 
     const orgType = userProfile.organizations?.org_type_code
     const roleLevel = userProfile.roles?.role_level
@@ -36,8 +39,10 @@ export default async function SupplyChainSubPage({ params }: SupplyChainSubPageP
         )
     }
 
+    inventoryEvent(timingTrace, 'server.inventory.page', 'shellReady')
     return (
         <DashboardContent
+            inventoryTimingId={timingTrace?.id}
             userProfile={userProfile}
             initialView={initialView}
             initialOrgId={initialOrgId}

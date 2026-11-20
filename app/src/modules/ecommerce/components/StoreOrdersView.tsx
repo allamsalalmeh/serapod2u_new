@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import SupplyChainPageHeader from '@/modules/supply-chain/components/SupplyChainPageHeader'
 import { isOwnDelivery } from '@/lib/storefront/delivery'
+import { REFUND_WINDOW_DAYS, refundWindowEndsAt, refundWindowOpen } from '@/lib/storefront/refund-window'
 import { OutdoorMessagesPanel, OutdoorSubscribersPanel } from '@/modules/ecommerce/components/OutdoorInboxPanels'
 import { OutdoorCustomerMessagesPanel } from '@/modules/ecommerce/components/OutdoorCustomerMessagesPanel'
 import { OutdoorNewsletterComposer } from '@/modules/ecommerce/components/OutdoorNewsletterComposer'
@@ -76,6 +77,8 @@ interface StorefrontOrder {
     shipping_amount?: number | null
     shipping_courier_name?: string | null
     shipping_tracking_no?: string | null
+    /** Delivered orders: when they were marked delivered (refund window). */
+    delivered_at?: string | null
     easyparcel_order_no?: string | null
     stock_out_at?: string | null
     stock_returned_at?: string | null
@@ -472,7 +475,9 @@ export default function StoreOrdersView({ userProfile, onViewChange }: StoreOrde
     const renderOrderDetail = () => {
         if (!selectedOrder) return null
 
-        const transitions = STATUS_TRANSITIONS[selectedOrder.status] || []
+        const refundClosed = selectedOrder.status === 'delivered' && !refundWindowOpen(selectedOrder.delivered_at)
+        const refundEnds = selectedOrder.status === 'delivered' ? refundWindowEndsAt(selectedOrder.delivered_at) : null
+        const transitions = (STATUS_TRANSITIONS[selectedOrder.status] || []).filter((s) => !(refundClosed && s === 'refunded'))
         const addr = selectedOrder.shipping_address || {}
 
         return (
@@ -541,6 +546,13 @@ export default function StoreOrdersView({ userProfile, onViewChange }: StoreOrde
                                     </div>
                                 )}
                             </div>
+                            {refundEnds && (
+                                <p className="text-xs text-muted-foreground">
+                                    {refundClosed
+                                        ? `Refund window ended ${formatDate(refundEnds.toISOString())} (${REFUND_WINDOW_DAYS} days after delivery).`
+                                        : `Can be refunded until ${formatDate(refundEnds.toISOString())} (${REFUND_WINDOW_DAYS} days after delivery).`}
+                                </p>
+                            )}
                             {shipForm && (
                                 <div className="mt-2 rounded-xl border border-border p-3 space-y-2">
                                     <p className="text-xs font-medium text-foreground">How is this order being delivered?</p>

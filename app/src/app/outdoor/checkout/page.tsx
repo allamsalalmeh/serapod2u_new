@@ -18,6 +18,7 @@ import type { OutdoorCheckoutPrefill } from '@/lib/outdoor/checkout-prefill'
 import { validateCheckoutCustomer, type CheckoutFieldErrors } from '@/lib/storefront/customer-validation'
 import type { OutdoorOrderBumpOffer } from '@/lib/outdoor/sales-tools'
 import { readOutdoorRef } from '@/components/outdoor/OutdoorRefCapture'
+import { checkoutAffiliateFields } from '@/components/affiliate/AffiliateRefCapture'
 
 function loginForCheckout() {
   const here = `${window.location.pathname}${window.location.search}`
@@ -190,7 +191,7 @@ export default function OutdoorCheckoutPage() {
           paymentProvider: payProvider || undefined,
           shipping: { amount: shippingCost },
           orderBump: Boolean(bump),
-          affiliateCode: readOutdoorRef() || undefined,
+          ...checkoutAffiliateFields(readOutdoorRef()),
         }),
       })
       const data = await res.json().catch(() => null)

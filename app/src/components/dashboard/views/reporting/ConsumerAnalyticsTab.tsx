@@ -6,8 +6,8 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, Calendar, ChevronLeft,
-  ChevronRight, Clock, Crown, Eye, Info, Loader2, Minus, RefreshCw, Repeat,
+  AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3,
+  Clock, Crown, Eye, Info, Loader2, Minus, RefreshCw, Repeat,
   Scan, Target, TrendingUp, Users,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -16,13 +16,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import {
-  buildReportingMonthOptions,
   currentReportingMonthKey,
   type ConsumerAnalyticsReport,
   type MetricDelta,
 } from '@/lib/reporting/consumer-analytics'
 import type { ReportingPeriod } from '@/lib/reporting/reporting-period'
 import ExecutiveKpiValue from './ExecutiveKpiValue'
+import ReportingMonthSelector from './ReportingMonthSelector'
 import { REPORTING_COLORS, REPORTING_PANEL_CLASS, ReportingTabLoading } from './reportingChrome'
 
 interface ConsumerAnalyticsTabProps {
@@ -30,6 +30,9 @@ interface ConsumerAnalyticsTabProps {
   chartGridColor: string
   chartTickColor: string
   isDark: boolean
+  /** Dashboard-level Reporting Month; the tab keeps its own when rendered alone. */
+  month?: string
+  onMonthChange?: (month: string) => void
 }
 
 interface ReportResponse {
@@ -163,8 +166,10 @@ function SectionCard({ title, description, icon: Icon, action, children, classNa
   )
 }
 
-export default function ConsumerAnalyticsTab({ chartGridColor, chartTickColor }: ConsumerAnalyticsTabProps) {
-  const [month, setMonth] = useState<string>(() => currentReportingMonthKey())
+export default function ConsumerAnalyticsTab({ chartGridColor, chartTickColor, month: monthProp, onMonthChange }: ConsumerAnalyticsTabProps) {
+  const [localMonth, setLocalMonth] = useState<string>(() => currentReportingMonthKey())
+  const month = monthProp ?? localMonth
+  const setMonth = onMonthChange ?? setLocalMonth
   const [availableMonths, setAvailableMonths] = useState<string[]>([])
   const [response, setResponse] = useState<ReportResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -217,15 +222,6 @@ export default function ConsumerAnalyticsTab({ chartGridColor, chartTickColor }:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month, loadReport])
 
-  const monthOptions = useMemo(
-    () => buildReportingMonthOptions([...availableMonths, month]),
-    [availableMonths, month],
-  )
-
-  const monthIndex = monthOptions.findIndex((option) => option.value === month)
-  const olderMonth = monthIndex >= 0 ? monthOptions[monthIndex + 1]?.value : undefined
-  const newerMonth = monthIndex > 0 ? monthOptions[monthIndex - 1]?.value : undefined
-
   const report = response?.report ?? null
   const meta = response?.meta ?? null
 
@@ -245,47 +241,19 @@ export default function ConsumerAnalyticsTab({ chartGridColor, chartTickColor }:
 
   const controls = (
     <div className="flex flex-wrap items-end gap-3">
-      <div className="space-y-1.5">
-        <label htmlFor="consumer-analytics-month" className="text-xs font-medium text-[var(--sera-muted)]">
-          Reporting Month
-        </label>
-        <div className="flex items-center gap-1.5">
-          <Select value={month} onValueChange={setMonth}>
-            <SelectTrigger id="consumer-analytics-month" className="h-9 w-[190px] bg-white text-sm border-[var(--sera-line)]">
-              <Calendar className="mr-2 h-3.5 w-3.5 text-[var(--sera-muted)]" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {monthOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline" size="icon"
-            className="h-9 w-9 border-[var(--sera-line)]"
-            onClick={() => olderMonth && setMonth(olderMonth)}
-            disabled={!olderMonth}
-            title="Previous month"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="outline" size="icon"
-            className="h-9 w-9 border-[var(--sera-line)]"
-            onClick={() => newerMonth && setMonth(newerMonth)}
-            disabled={!newerMonth}
-            title="Next month"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
-        {report ? (
-          <p className="text-[11px] text-[var(--sera-muted)]">
-            Comparing with {report.period.previousMonthLabel}
-          </p>
+      <ReportingMonthSelector
+        id="consumer-analytics-month"
+        month={month}
+        onMonthChange={setMonth}
+        availableMonths={availableMonths}
+        caption={report ? (
+          month === currentReportingMonthKey()
+            // The consumer RPC compares whole calendar months; a month-to-date
+            // figure is therefore measured against a COMPLETE previous month.
+            ? `Month to date · compared with all of ${report.period.previousMonthLabel} (not like-for-like days)`
+            : `Comparing with ${report.period.previousMonthLabel}`
         ) : null}
-      </div>
+      />
       <Button
         variant="outline"
         className="h-9 gap-2 border-[var(--sera-line)]"

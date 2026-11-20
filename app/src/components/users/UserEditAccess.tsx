@@ -96,9 +96,9 @@ export function useEditAccess({ enabled, userId, organizationId, loader }: {
 }
 
 const KIND_BADGE: Record<string, { label: string; tone: string }> = {
-  explicit: { label: 'Granted', tone: 'bg-blue-50 text-blue-700' },
-  managed: { label: 'Managed', tone: 'bg-slate-100 text-slate-700' },
-  legacy: { label: 'Legacy migration', tone: 'bg-gray-100 text-gray-600' },
+  explicit: { label: 'Assigned', tone: 'bg-blue-50 text-blue-700' },
+  managed: { label: 'System-assigned', tone: 'bg-slate-100 text-slate-700' },
+  legacy: { label: 'Legacy-based', tone: 'bg-gray-100 text-gray-600' },
 }
 const dateOnly = (value: string | null) => (value ? new Date(value).toLocaleDateString() : null)
 
@@ -130,7 +130,7 @@ export default function UserEditAccess({ state, draft, onDraft, disabled, organi
       <h4 id="edit-access-heading" className="text-sm font-semibold text-gray-950">Group Policies</h4>
       <InfoPopover label="About Group Policies in Edit User">
         <p>Group Policies decide what this person can do. Only access granted by an administrator is edited here, through the same checks as Security &amp; Access → People &amp; Access. Nothing is changed until you save on the last step; Cancel discards your selections.</p>
-        <p>Managed access (such as Employee Self Service), legacy-migration access, access held through another organization and anything you are not authorized to manage are shown for information and are never removed by this form.</p>
+        <p>System-assigned access (such as Employee Self Service), legacy-based access (a compatibility policy that mirrors the legacy role code and still grants its permissions), access held through another organization and anything you are not authorized to manage are shown for information and are never removed by this form.</p>
         <p>Unticking a policy removes it only when it is a grant you manage here. A change of scope replaces that grant (its end date is kept).</p>
       </InfoPopover>
       {organizationName ? <span className="text-xs text-gray-500 max-sm:basis-full sm:ml-auto">{organizationName}</span> : null}

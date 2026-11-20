@@ -1,7 +1,9 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { resolvePortalHomePath } from '@/lib/serapp/access'
-import { resolveMarketingHostRewrite } from '@/lib/hosts/site-hosts'
+import { getRequestHostname, resolveMarketingHostRewrite, resolveSiteSplitRoute } from '@/lib/hosts/site-hosts'
+import { phoneAppSignInKeepsMainSite } from '@/lib/hosts/site-split'
+import { authCookieOptionsForHost, isSharedAuthCookie, sharedAuthCookieForHost } from '@/lib/supabase/auth-cookie-scope'
 import {
   extractQRCodeFromPath,
   extractTokenFromQRCode,
@@ -88,6 +90,10 @@ async function handleQRSecurityRedirect(
 }
 
 export async function middleware(request: NextRequest) {
+  // 0) Main site / store / portal addresses. A no-op on hosts outside an active split group.
+  const siteSplit = resolveSiteSplitRoute(request)
+  if (siteSplit) return siteSplit
+
   // 1) QR security redirect – may return a redirect response
   const qrRedirect = await handleQRSecurityRedirect(request);
   if (qrRedirect) return qrRedirect;
@@ -104,7 +110,7 @@ export async function middleware(request: NextRequest) {
     /^\/rt\/\d{4}\//.test(pathname)
 
   // Public paths that don't require authentication
-  const PUBLIC_PATHS = ['/', '/auth', '/verify', '/track', '/api/verify', '/api/consumer', '/api/scratch-card', '/app', '/api/journey/default', '/api/master-banner', '/store', '/cart', '/checkout', '/orders/success', '/orders/failed', '/api/storefront', '/lp', '/api/landing-pages/events', '/signup', '/api/export/ellbow', '/api/orders/from-ellbow', '/api/cron', '/api/auth/password-reset', '/api/auth/register', '/api/auth/oauth', '/api/outdoor/newsletter', '/api/outdoor/contact', '/api/outdoor/password-reset', '/api/outdoor/register', '/api/reference/search', '/api/shops/search', '/api/shops/locations', '/api/shops/prepare-registration', '/api/shops/contact-verification', '/api/health', '/scan', '/api/roadtour/claim-reward', '/api/roadtour/qr-image', '/event', '/api/event-management/public', '/api/support/whatsapp/ingest', '/api/webhooks/whatsapp/meta', '/api/webhooks/sms-gateway', '/api/telegram/webhook', '/privacy-policy', '/terms-of-service', '/data-deletion', '/help', '/outdoor', '/corporate', '/forgot-password', '/login']
+  const PUBLIC_PATHS = ['/', '/auth', '/verify', '/track', '/api/verify', '/api/consumer', '/api/scratch-card', '/app', '/api/journey/default', '/api/master-banner', '/api/affiliate/me', '/api/affiliate/ref', '/store', '/cart', '/checkout', '/orders/success', '/orders/failed', '/api/storefront', '/lp', '/api/landing-pages/events', '/signup', '/api/export/ellbow', '/api/orders/from-ellbow', '/api/cron', '/api/auth/password-reset', '/api/auth/register', '/api/auth/oauth', '/api/outdoor/newsletter', '/api/outdoor/contact', '/api/outdoor/password-reset', '/api/outdoor/register', '/api/reference/search', '/api/shops/search', '/api/shops/locations', '/api/shops/prepare-registration', '/api/shops/contact-verification', '/api/health', '/scan', '/api/roadtour/claim-reward', '/api/roadtour/qr-image', '/event', '/api/event-management/public', '/api/support/whatsapp/ingest', '/api/webhooks/whatsapp/meta', '/api/webhooks/sms-gateway', '/api/telegram/webhook', '/privacy-policy', '/terms-of-service', '/data-deletion', '/help', '/outdoor', '/corporate', '/forgot-password', '/login']
 
   // Check if current path is public
   const isPublicPath = isPublicRoadtourScanPath || PUBLIC_PATHS.some((path) =>
@@ -131,10 +137,12 @@ export async function middleware(request: NextRequest) {
   response.headers.set('Pragma', 'no-cache')
   response.headers.set('Expires', '0')
 
+  const sharedAuthCookie = sharedAuthCookieForHost(getRequestHostname(request))
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      ...authCookieOptionsForHost(getRequestHostname(request)),
       cookies: {
         get(name: string) {
           return request.cookies.get(name)?.value
@@ -223,7 +231,11 @@ export async function middleware(request: NextRequest) {
 
         // Only redirect if not already on login page
         if (request.nextUrl.pathname !== '/login' && request.nextUrl.pathname !== '/forgot-password') {
-          response = NextResponse.redirect(new URL('/login', request.url))
+          const loginUrl = new URL('/login', request.url)
+          if (phoneAppSignInKeepsMainSite(getRequestHostname(request), request.nextUrl.pathname)) {
+            loginUrl.searchParams.set('next', `${request.nextUrl.pathname}${request.nextUrl.search || ''}`)
+          }
+          response = NextResponse.redirect(loginUrl)
 
           // Clear ALL session cookies
           const cookieNames = [
@@ -239,6 +251,12 @@ export async function middleware(request: NextRequest) {
               request.cookies.delete(name)
             }
           })
+          // The shared shopper login lives on the parent domain: it is only cleared with that domain.
+          for (const { name } of request.cookies.getAll()) {
+            if (isSharedAuthCookie(name, sharedAuthCookie)) {
+              response.cookies.set({ name, value: '', path: '/', domain: sharedAuthCookie!.domain, maxAge: 0 })
+            }
+          }
 
           return response
         }

@@ -101,6 +101,8 @@ export interface LeaveRequest {
     approvals: LeaveApprovalStep[]
     createdAt: string
     updatedAt: string
+    /** Set to false only by a decision whose approval-history step could not be written (the decision itself stands). */
+    approvalStepRecorded?: boolean
 }
 
 export interface LeaveApprovalStep {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { remoteDbWorkerBlockedResponse } from './remote-db-guard'
+import { sanitizeText } from '../system-logs/sanitize'
 
 /**
  * Database-backed distributed execution lease for internal cron workers.
@@ -52,6 +53,21 @@ export const DEFAULT_LEASE_TTL_SECONDS = 180
 
 /** Response marker for a harmless overlapping invocation. */
 export const LEASE_SKIPPED = 'SKIPPED_ALREADY_RUNNING'
+
+/** Response marker for a run skipped because the lease infrastructure could not be reached. */
+export const LEASE_UNAVAILABLE = 'LEASE_UNAVAILABLE'
+
+/**
+ * Short, sanitized cause for a lease acquisition failure (diagnostics only).
+ * `tryAcquireWorkerLease` prefixes its error with "Worker lease acquisition failed for <name>: ",
+ * so the meaningful part is everything after the last ": ".
+ */
+export function leaseFailureCause(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err)
+  const idx = message.lastIndexOf(': ')
+  const cause = idx >= 0 ? message.slice(idx + 2).trim() : message.trim()
+  return sanitizeText(cause, 200) || 'unknown'
+}
 
 /**
  * Minimal shape we need - avoids coupling to the generated Supabase types.
@@ -152,7 +168,13 @@ export async function withWorkerLease<T>(
     return {
       status: 'unavailable',
       response: NextResponse.json(
-        { status: 'LEASE_UNAVAILABLE', worker: workerName, message: 'Worker lease unavailable; run skipped' },
+        {
+          status: LEASE_UNAVAILABLE,
+          worker: workerName,
+          code: LEASE_UNAVAILABLE,
+          cause: leaseFailureCause(err),
+          message: 'Worker lease unavailable; run skipped',
+        },
         { status: 503 }
       ),
     }

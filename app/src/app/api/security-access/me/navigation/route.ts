@@ -1,3 +1,5 @@
+import { headers } from 'next/headers'
+import { createInventoryTrace, timeInventoryOperation } from '@/lib/inventory/inventory-timing'
 import { NextResponse } from 'next/server'
 import { requireSelfServiceActor } from '@/lib/security-access/admin-api'
 import { evaluateNavSnapshot, loadNavActor } from '@/lib/server/nav-access'
@@ -20,12 +22,14 @@ const NO_STORE = { 'Cache-Control': 'no-store' }
  * Hiding a destination is never authorization: every route, API and mutation decides again on the server.
  */
 export async function GET() {
-  const actor = await requireSelfServiceActor()
+  const traceId = process.env.NODE_ENV === 'development' ? (await headers()).get('x-inventory-trace-id') : null
+  const timingTrace = traceId && /^inv-[a-zA-Z0-9-]{1,100}$/.test(traceId) ? createInventoryTrace(traceId) : undefined
+  const actor = await timeInventoryOperation(timingTrace, 'server.navigation.actor', () => requireSelfServiceActor())
   if (actor instanceof NextResponse) return actor
   try {
-    const navActor = await loadNavActor(actor.userId)
+    const navActor = await timeInventoryOperation(timingTrace, 'server.navigation.profile', () => loadNavActor(actor.userId))
     if (!navActor) return NextResponse.json({ status: 'unavailable' }, { status: 503, headers: NO_STORE })
-    const snapshot = await evaluateNavSnapshot(navActor)
+    const snapshot = await timeInventoryOperation(timingTrace, 'server.navigation.evaluate', () => evaluateNavSnapshot(navActor))
     return NextResponse.json({ status: 'ready', snapshot }, { headers: NO_STORE })
   } catch {
     return NextResponse.json({ status: 'unavailable' }, { status: 503, headers: NO_STORE })

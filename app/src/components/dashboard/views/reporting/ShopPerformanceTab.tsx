@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -13,16 +13,20 @@ import {
   ResponsiveContainer, Cell, PieChart, Pie, AreaChart, Area,
 } from 'recharts'
 import {
-  RefreshCw, Loader2, TrendingUp, TrendingDown,
+  RefreshCw, Loader2, TrendingUp, TrendingDown, Download, AlertCircle,
   Store, Users, Scan, Target, Crown, Eye,
   ArrowUpRight, ArrowDownRight, ChevronRight,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import ExecutiveKpiValue from './ExecutiveKpiValue'
+import ReportingMonthSelector from './ReportingMonthSelector'
 import {
-  reportingPeriodRangeLabel,
-  type ReportingPeriod,
-} from '@/lib/reporting/reporting-period'
+  buildShopPerformanceReport,
+  readShopScans,
+  resolveShopPerformancePeriod,
+  type ShopInfoRow,
+} from '@/lib/reporting/shop-performance'
+import type { NegeriStateRow } from '@/lib/reporting/shop-by-negeri'
 
 // ── Types ──────────────────────────────────────────────────────────────
 interface ShopPerformanceTabProps {
@@ -30,9 +34,11 @@ interface ShopPerformanceTabProps {
   chartGridColor: string
   chartTickColor: string
   isDark: boolean
-  periods: ReportingPeriod[]
-  selectedPeriod: ReportingPeriod | null
-  onPeriodChange: (key: string) => void
+  /** Selected Reporting Month, `YYYY-MM`. */
+  month: string
+  onMonthChange: (month: string) => void
+  /** Months with scans; only the earliest bounds the selector. */
+  availableMonths: string[]
   onRefreshPeriods: () => Promise<void>
 }
 
@@ -45,12 +51,7 @@ interface ScanRow {
   points_amount: number | null
 }
 
-interface ShopInfo {
-  id: string
-  org_name: string
-  org_code: string | null
-  branch: string | null
-}
+type ShopInfo = ShopInfoRow
 
 interface ShopContact {
   organization_id: string | null
@@ -127,13 +128,18 @@ function Skeleton({ className = '' }: { className?: string }) {
 // ── Main Component ─────────────────────────────────────────────────────
 export default function ShopPerformanceTab({
   userProfile, chartGridColor, chartTickColor, isDark,
-  periods, selectedPeriod, onPeriodChange, onRefreshPeriods,
+  month, onMonthChange, availableMonths, onRefreshPeriods,
 }: ShopPerformanceTabProps) {
   const supabase = useMemo(() => createClient(), [])
 
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [scans, setScans] = useState<ScanRow[]>([])
+  const [scansMonth, setScansMonth] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [downloading, setDownloading] = useState(false)
+  const [states, setStates] = useState<NegeriStateRow[]>([])
+  const requestId = useRef(0)
   const [shops, setShops] = useState<Map<string, ShopInfo>>(new Map())
   const [shopContacts, setShopContacts] = useState<Map<string, ShopContact>>(new Map())
   const [consumerProfiles, setConsumerProfiles] = useState<Map<string, ConsumerProfile>>(new Map())
@@ -151,28 +157,26 @@ export default function ShopPerformanceTab({
   }
 
   // ── Data Fetching ────────────────────────────────────────────────────
+  // A slower earlier request must never overwrite a newer month: every state
+  // write below is dropped unless it belongs to the latest request.
   const fetchData = useCallback(async () => {
+    const id = ++requestId.current
+    const isLatest = () => id === requestId.current
     try {
-      if (!selectedPeriod) {
-        setScans([])
-        setShops(new Map())
-        setShopContacts(new Map())
-        setConsumerProfiles(new Map())
-        return
-      }
+      setError(null)
+      const period = resolveShopPerformancePeriod(month)
+      // The same half-open Malaysia-time window drives every metric; it is read
+      // page by page so a busy month is never truncated by the row cap.
+      const [scanData, stateResult] = await Promise.all([
+        readShopScans(supabase, period.startUtc, period.endUtc),
+        supabase.from('states').select('id, state_name, region_id').order('state_name'),
+      ])
+      if (!isLatest()) return
+      setStates(((stateResult as any).data as NegeriStateRow[]) || [])
 
-      // The same half-open Malaysia-time month boundary drives every metric.
-      const { data: scanData, error: scanErr } = await supabase
-        .from('consumer_qr_scans')
-        .select('id, consumer_id, scanned_at, shop_id, collected_points, points_amount')
-        .eq('is_manual_adjustment', false)
-        .not('shop_id', 'is', null)
-        .gte('scanned_at', selectedPeriod.startUtc)
-        .lt('scanned_at', selectedPeriod.endUtc)
-        .order('scanned_at', { ascending: false })
-
-      if (!scanErr && scanData) {
+      {
         setScans(scanData as unknown as ScanRow[])
+        setScansMonth(month)
 
         // Fetch shop info for all referenced shop_ids
         const shopIds = [...new Set((scanData as any[]).map(s => s.shop_id).filter(Boolean))]
@@ -184,12 +188,13 @@ export default function ShopPerformanceTab({
             const batch = shopIds.slice(i, i + batchSize)
             const { data: orgData } = await supabase
               .from('organizations')
-              .select('id, org_name, org_code, branch')
+              .select('id, org_name, org_code, branch, state_id')
               .in('id', batch)
             if (orgData) {
               (orgData as any[]).forEach(o => shopMap.set(o.id, o))
             }
           }
+          if (!isLatest()) return
           setShops(shopMap)
 
           const contactMap = new Map<string, ShopContact>()
@@ -214,7 +219,11 @@ export default function ShopPerformanceTab({
               })
             }
           }
+          if (!isLatest()) return
           setShopContacts(contactMap)
+        } else {
+          setShops(new Map())
+          setShopContacts(new Map())
         }
 
         if (consumerIds.length > 0) {
@@ -233,19 +242,27 @@ export default function ShopPerformanceTab({
               })
             }
           }
+          if (!isLatest()) return
           setConsumerProfiles(profileMap)
         } else {
           setConsumerProfiles(new Map())
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('ShopPerformanceTab fetch error:', err)
+      // Never show the previous month's numbers under the new month's label.
+      if (isLatest()) {
+        setScans([])
+        setScansMonth(null)
+        setError(err?.message || 'Unable to load shop performance')
+      }
     }
-  }, [supabase, selectedPeriod])
+  }, [supabase, month])
 
   useEffect(() => {
     setLoading(true)
-    fetchData().finally(() => setLoading(false))
+    const id = requestId.current + 1
+    fetchData().finally(() => { if (id === requestId.current) setLoading(false) })
   }, [fetchData])
 
   const handleRefresh = async () => {
@@ -258,43 +275,13 @@ export default function ShopPerformanceTab({
   // ── Period scans ─────────────────────────────────────────────────────
   const periodScans = scans
 
-  // ── KPI ──────────────────────────────────────────────────────────────
-  const kpis = useMemo(() => {
-    const activeShops = new Set(periodScans.map(s => s.shop_id).filter(Boolean)).size
-    const totalScans = periodScans.length
-    const uniqueConsumers = new Set(periodScans.map(s => s.consumer_id).filter(Boolean)).size
-    const totalPoints = periodScans.reduce((a, s) => a + (s.points_amount || 0), 0)
-    const avgScansPerShop = activeShops > 0 ? totalScans / activeShops : 0
-
-    return { activeShops, totalScans, uniqueConsumers, totalPoints, avgScansPerShop }
-  }, [periodScans])
-
-  // ── Top 10 Shops ─────────────────────────────────────────────────────
-  const top10Shops = useMemo(() => {
-    const map = new Map<string, { scans: number; consumers: Set<string>; points: number }>()
-    periodScans.forEach(s => {
-      if (!s.shop_id) return
-      if (!map.has(s.shop_id)) map.set(s.shop_id, { scans: 0, consumers: new Set(), points: 0 })
-      const entry = map.get(s.shop_id)!
-      entry.scans++
-      if (s.consumer_id) entry.consumers.add(s.consumer_id)
-      entry.points += (s.points_amount || 0)
-    })
-
-    return [...map.entries()]
-      .map(([shopId, data]) => {
-        const info = shops.get(shopId)
-        return {
-          shopId,
-          name: info ? `${info.org_name}${info.branch ? ` (${info.branch})` : ''}` : shopId.slice(0, 8),
-          scans: data.scans,
-          consumers: data.consumers.size,
-          points: data.points,
-        }
-      })
-      .sort((a, b) => b.scans - a.scans)
-      .slice(0, 10)
-  }, [periodScans, shops])
+  // ── Report: the one DTO the cards, charts and PDF all read ───────────
+  const report = useMemo(
+    () => buildShopPerformanceReport({ month: scansMonth ?? month, scans: periodScans, shops, states }),
+    [scansMonth, month, periodScans, shops, states],
+  )
+  const kpis = report.kpis
+  const top10Shops = useMemo(() => report.shopRanking.slice(0, 10), [report])
 
   // ── Drill-down: consumers for selected shop ──────────────────────────
   const drillData = useMemo(() => {
@@ -328,56 +315,33 @@ export default function ShopPerformanceTab({
       .slice(0, 20)
   }, [drillShopId, periodScans, consumerProfiles])
 
-  // ── Daily trend for selected reporting month ─────────────────────────
-  const monthlyTrend = useMemo(() => {
-    if (!selectedPeriod) return []
-    const days = Number(selectedPeriod.endDate.slice(-2))
-    const formatter = new Intl.DateTimeFormat('en-MY', {
-      day: 'numeric', timeZone: 'Asia/Kuala_Lumpur',
-    })
-    const byDay = new Map<number, { scans: number; shops: Set<string> }>()
-    for (const scan of scans) {
-      if (!scan.scanned_at) continue
-      const day = Number(formatter.format(new Date(scan.scanned_at)))
-      const bucket = byDay.get(day) || { scans: 0, shops: new Set<string>() }
-      bucket.scans++
-      if (scan.shop_id) bucket.shops.add(scan.shop_id)
-      byDay.set(day, bucket)
+  const monthlyTrend = report.dailyTrend
+  const shopDistribution = useMemo(() => report.sizeDistribution.filter((band) => band.count > 0), [report])
+  const periodLabel = report.period.label
+
+  const handleDownloadPdf = async () => {
+    setDownloading(true)
+    try {
+      const { buildShopPerformancePdf } = await import('@/lib/reporting/shop-performance-pdf')
+      const pdf = await buildShopPerformancePdf(report, {
+        generatedAt: new Date().toISOString(),
+        generatedBy: userProfile?.full_name || userProfile?.email || null,
+        scopeLabel: 'All shops',
+      })
+      const url = URL.createObjectURL(pdf.blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = pdf.filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (err: any) {
+      setError(err?.message || 'Unable to generate the PDF report')
+    } finally {
+      setDownloading(false)
     }
-    return Array.from({ length: days }, (_, index) => {
-      const day = index + 1
-      const bucket = byDay.get(day)
-      return {
-        month: String(day),
-        scans: bucket?.scans || 0,
-        shops: bucket?.shops.size || 0,
-      }
-    })
-  }, [scans, selectedPeriod])
-
-  // ── Distribution by shop size ────────────────────────────────────────
-  const shopDistribution = useMemo(() => {
-    const map = new Map<string, number>()
-    periodScans.forEach(s => {
-      if (!s.shop_id) return
-      map.set(s.shop_id, (map.get(s.shop_id) || 0) + 1)
-    })
-    const counts = [...map.values()]
-    const bins = [
-      { name: '1-5 scans', min: 1, max: 5, count: 0 },
-      { name: '6-20 scans', min: 6, max: 20, count: 0 },
-      { name: '21-50 scans', min: 21, max: 50, count: 0 },
-      { name: '51-100 scans', min: 51, max: 100, count: 0 },
-      { name: '100+ scans', min: 101, max: Infinity, count: 0 },
-    ]
-    counts.forEach(c => {
-      const bin = bins.find(b => c >= b.min && c <= b.max)
-      if (bin) bin.count++
-    })
-    return bins.filter(b => b.count > 0)
-  }, [periodScans])
-
-  const periodLabel = selectedPeriod?.label || 'No transaction period'
+  }
 
   const activeShopRows = useMemo(() => {
     const shopMap = new Map<string, {
@@ -489,10 +453,6 @@ export default function ShopPerformanceTab({
   }
 
   // ── Render ───────────────────────────────────────────────────────────
-  if (!selectedPeriod) {
-    return <div className="rounded-xl border bg-card/80 p-10 text-center text-sm text-muted-foreground">No transaction periods available.</div>
-  }
-
   if (loading) {
     return (
       <div className="space-y-6">
@@ -516,32 +476,53 @@ export default function ShopPerformanceTab({
   return (
     <div className="space-y-6">
       {/* Period & Refresh */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex items-center gap-3">
           <Store className="h-5 w-5 text-purple-600" />
           <h3 className="text-lg font-semibold">Shop Performance</h3>
         </div>
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Reporting Month</label>
-          <Select value={selectedPeriod.key} onValueChange={onPeriodChange}>
-            <SelectTrigger className="h-9 w-[190px] text-sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {periods.map(o => (
-                <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:items-end">
+          <ReportingMonthSelector
+            id="shop-performance-month"
+            month={month}
+            onMonthChange={onMonthChange}
+            availableMonths={availableMonths}
+            caption={(
+              <>
+                <span className="font-medium text-[var(--sera-ink)]">{report.period.rangeLabel}</span>
+                {report.period.isCurrentMonth ? ' (month to date)' : ''}
+              </>
+            )}
+          />
+          <div className="flex items-center gap-2 lg:pb-[18px]">
+            <Button variant="outline" className="h-10 flex-1 gap-1.5 border-[var(--sera-line)] lg:h-9 lg:flex-none" onClick={handleRefresh} disabled={refreshing}>
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+            <Button
+              variant="outline"
+              className="h-10 flex-1 gap-2 border-[var(--sera-line)] lg:h-9 lg:flex-none"
+              onClick={handleDownloadPdf}
+              disabled={downloading || loading || Boolean(error)}
+              title="Download the Shop Performance report for the selected month"
+            >
+              {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              <span className="whitespace-nowrap">Download PDF</span>
+            </Button>
           </div>
-          <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={handleRefresh} disabled={refreshing}>
-            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">{reportingPeriodRangeLabel(selectedPeriod)}</p>
+      {error ? (
+        <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 flex-1">{error}</span>
+          <Button variant="outline" size="sm" onClick={handleRefresh} className="shrink-0 border-red-300 text-red-700 hover:bg-red-100">Retry</Button>
+        </div>
+      ) : report.isEmpty ? (
+        <div className="rounded-xl border border-[var(--sera-line)] bg-[var(--sera-mist)] p-4 text-sm text-[var(--sera-muted)]">
+          No shop scans were recorded in {report.period.label}. Choose another Reporting Month to review a period with activity.
+        </div>
+      ) : null}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -601,7 +582,7 @@ export default function ShopPerformanceTab({
                 <Target className="h-4 w-4 text-amber-600 dark:text-amber-400" />
               </div>
             </div>
-            <ExecutiveKpiValue><AnimatedCounter value={kpis.totalPoints} /></ExecutiveKpiValue>
+            <ExecutiveKpiValue><AnimatedCounter value={kpis.pointsIssued} /></ExecutiveKpiValue>
             <p className="text-xs text-muted-foreground mt-1">total points</p>
           </CardContent>
         </Card>
@@ -625,7 +606,7 @@ export default function ShopPerformanceTab({
         <Card className="lg:col-span-2 border-0 shadow-lg bg-card/80 backdrop-blur">
           <CardHeader className="pb-2">
             <CardTitle className="text-lg font-semibold">Daily Shop Activity</CardTitle>
-            <CardDescription>Scans and active shops during {selectedPeriod.label}</CardDescription>
+            <CardDescription>Scans and active shops during {report.period.label}{report.period.isCurrentMonth ? ' (to date)' : ''}</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="h-[300px]">
@@ -638,7 +619,7 @@ export default function ShopPerformanceTab({
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={chartGridColor} />
-                  <XAxis dataKey="month" tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} />
+                  <XAxis dataKey="day" tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} />
                   <YAxis tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} />
                   <Tooltip contentStyle={tooltipStyle} />
                   <Area type="monotone" dataKey="scans" stroke={COLORS.primary} strokeWidth={2} fill="url(#colorShopScans)" name="Scans" />

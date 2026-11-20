@@ -136,14 +136,19 @@ describe('withWorkerLease', () => {
 
   it('fails CLOSED with 503 when the lease infrastructure errors', async () => {
     const c = {
-      rpc: vi.fn(async () => ({ data: null, error: { message: 'relation does not exist' } })),
+      rpc: vi.fn(async () => ({ data: null, error: { message: 'An invalid response was received from the upstream server' } })),
     }
     const ran = vi.fn()
     const outcome = await withWorkerLease(c, 'w', async () => ran())
 
     expect(outcome.status).toBe('unavailable')
     expect(ran).not.toHaveBeenCalled()
-    if (outcome.status === 'unavailable') expect(outcome.response.status).toBe(503)
+    if (outcome.status === 'unavailable') {
+      expect(outcome.response.status).toBe(503)
+      const body = await outcome.response.json()
+      expect(body).toMatchObject({ status: 'LEASE_UNAVAILABLE', worker: 'w', code: 'LEASE_UNAVAILABLE' })
+      expect(body.cause).toContain('invalid response was received from the upstream server')
+    }
   })
 
   it('does not let a stale run release a lease already reclaimed by a newer run', async () => {

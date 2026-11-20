@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
   // Whether the Root Access option is offered (display only: the database decides every Root Access change).
   const [canManageUsers, rootAccess] = await Promise.all([
     actorAlsoHolds(actor, 'platform.user.manage').catch(() => false),
-    rootAccessCapability(actor.admin, actor.userId).catch(() => ({ available: false, viewerIsRoot: false, activeCount: null })),
+    rootAccessCapability(actor.admin, actor.userId).catch(() => ({ available: false, viewerIsRoot: false, activeCount: null, activePermissionCount: null })),
   ])
   const res = NextResponse.json({ ok: true, ...result.value, viewerId: actor.userId, capabilities: { userManagement: canManageUsers, rootAccess } })
   res.headers.set('Cache-Control', 'no-store')

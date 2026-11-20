@@ -9,7 +9,7 @@ import { permissionLabel } from './labels'
 import { isSensitivePermission } from './profiles'
 import { coverageReport, seededProfilePermissions } from './coverage-audit'
 
-const migration = readFileSync(new URL('../../../../supabase/migrations/20261219100000_finance_fiscal_period_permissions.sql', import.meta.url), 'utf8')
+const migration = readFileSync(new URL('../../../../supabase/migrations/20261228090200_finance_fiscal_period_permissions.sql', import.meta.url), 'utf8')
 
 describe('Fiscal Year & Periods permissions ↔ migration lock-step', () => {
   it.each(FISCAL_PERIOD_CATALOG)('$key is seeded (SHADOW, Super Admin compatibility) and registered as ready', ({ key, compat }) => {

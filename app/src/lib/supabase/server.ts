@@ -1,9 +1,27 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { Database } from '@/types/database'
+import { authCookieOptionsForHost } from '@/lib/supabase/auth-cookie-scope'
+
+/** This request's host, as the middleware reads it. */
+export async function requestHostname() {
+  try {
+    const h = await headers()
+    const raw = h.get('x-forwarded-host') || h.get('host') || ''
+    return raw.split(',')[0]?.trim().split(':')[0]?.toLowerCase() || ''
+  } catch {
+    return ''
+  }
+}
+
+/** Cookie name/domain for Supabase clients built in this request (shared shopper login on split hosts). */
+export async function requestAuthCookieOptions() {
+  return authCookieOptionsForHost(await requestHostname())
+}
 
 export async function createClient() {
   const cookieStore = await cookies()
+  const cookieScope = await requestAuthCookieOptions()
 
   // Get environment variables with validation
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -26,6 +44,7 @@ export async function createClient() {
     supabaseUrl,
     supabaseAnonKey,
     {
+      ...cookieScope,
       cookies: {
         get(name: string) {
           return cookieStore.get(name)?.value

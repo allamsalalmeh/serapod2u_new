@@ -1,5 +1,6 @@
 import { getSmsTemplatesForEvent } from './smsTemplates'
 import { REQUIRED_NOTIFICATION_TYPES } from '@/lib/notifications/notificationEventCatalog'
+import { SYSTEM_LOG_ALERT_BODY } from '@/lib/notifications/systemLogAlertCopy'
 
 /**
  * WhatsApp and email templates for system events.
@@ -55,6 +56,11 @@ export interface Template {
     body: string;
 }
 
+const SYSTEM_LOG_ALERT_TEMPLATES: Template[] = [
+    { id: 'system_log_wa_1', name: 'System Log Alert', channel: 'whatsapp', body: SYSTEM_LOG_ALERT_BODY },
+    { id: 'system_log_email_1', name: 'System Log Alert', channel: 'email', subject: '[{{environment_label}}] Serapod2U {{alert_title}} {{reference_id}}', body: SYSTEM_LOG_ALERT_BODY },
+]
+
 export const notificationTemplates: Record<string, Template[]> = {
 
     // ══════════════════════════════════════════════════════════
@@ -97,6 +103,23 @@ export const notificationTemplates: Record<string, Template[]> = {
             channel: 'email',
             subject: 'Order #{{order_no}} — Pending Your Approval',
             body: `Dear Approver,\n\nA new order has been submitted and requires your review.\n\nOrder Number: {{order_no}}\nDate: {{order_date}}\nCustomer: {{customer_name}}\nPhone: {{customer_phone}}\nDelivery Address: {{delivery_address}}\n\nOrder Items:\n{{item_list}}\n\nTotal Amount: RM {{amount}}\nTotal Cases: {{total_cases}}\n\nPlease review and approve or reject this order at your earliest convenience.\n\n{{order_url}}\n\nRegards,\nSerapod2U System`
+        },
+        // For "Related organization" recipients (distributor/manufacturer): approval
+        // belongs to HQ, so these say what happened without asking the reader to approve.
+        {
+            id: 'os_wa_partner',
+            name: 'Partner Update (no approval request)',
+            description: 'For the distributor or manufacturer on the order — approval stays with HQ',
+            channel: 'whatsapp',
+            body: `📋 *Order Submitted*\n\n*Order:* #{{order_no}}\n*Date:* {{order_date}}\n*Total:* RM {{amount}}\n*Cases:* {{total_cases}}\n\nThis order is awaiting approval by HQ. No action is needed from you yet — you will be notified when it is approved.\n\n👉 {{order_url}}`
+        },
+        {
+            id: 'os_email_partner',
+            name: 'Partner Update (no approval request)',
+            description: 'For the distributor or manufacturer on the order — approval stays with HQ',
+            channel: 'email',
+            subject: 'Order #{{order_no}} — Submitted, awaiting HQ approval',
+            body: `Dear Partner,\n\nOrder #{{order_no}} has been submitted.\n\nDate: {{order_date}}\nTotal Amount: RM {{amount}}\nTotal Cases: {{total_cases}}\n\nThe order is awaiting approval by HQ. No action is needed from you yet; you will be notified when it is approved.\n\n{{order_url}}\n\nRegards,\nSerapod2U System`
         }
     ],
 
@@ -1124,6 +1147,10 @@ export const notificationTemplates: Record<string, Template[]> = {
             body: `*New paid {{shop_name}} order*\n\n*Order:* {{order_ref}}\n*Total:* {{total}}\n*Customer:* {{buyer_name}}\n*Paid:* {{paid_at}}\n\n{{item_summary}}`
         },
     ],
+
+    'system_error_critical': SYSTEM_LOG_ALERT_TEMPLATES,
+    'system_error_application': SYSTEM_LOG_ALERT_TEMPLATES,
+    'system_error_database': SYSTEM_LOG_ALERT_TEMPLATES,
 
     // ══════════════════════════════════════════════════════════
     // SYSTEM CHECK

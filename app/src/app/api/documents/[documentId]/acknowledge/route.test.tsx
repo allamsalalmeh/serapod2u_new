@@ -12,6 +12,12 @@ let documentRow: any
 let userRow: any
 let orderRow: any
 
+const reportSystemFailure = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/system-logs/server', () => ({
+  reportSystemFailure,
+  referenceHeaders: (reference: string | null) => (reference ? { 'x-request-id': reference } : {})
+}))
+
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
     auth: { getUser: authGetUser },
@@ -85,6 +91,9 @@ beforeEach(() => {
   authGetUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
   adminRpc.mockResolvedValue({ data: null, error: null })
   userRpc.mockResolvedValue({ data: null, error: null })
+  reportSystemFailure.mockReset()
+  reportSystemFailure.mockResolvedValue('SYS-7K3M9QX2')
+  vi.spyOn(console, 'error').mockImplementation(() => {})
   // D2H sales order SO26000152: issued by HQ to distributor MAXVAPER.
   documentRow = {
     id: 'doc-so-152',
@@ -188,5 +197,89 @@ describe('POST /api/documents/[documentId]/acknowledge', () => {
     const response = await call()
     expect(response.status).toBe(409)
     expect(documentUpdate).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/documents/[id]/acknowledge failure handling', () => {
+  const constraintError = {
+    code: '23514',
+    message: 'new row for relation "document_signatures" violates check constraint "document_signatures_document_type_check"',
+    details: 'Failing row contains (secret-row-value)',
+    hint: null
+  }
+  const asHq = () => asUser(HQ_ORG, 'HQ', 10)
+  const expectNothingTechnical = (body: unknown) => {
+    const text = JSON.stringify(body)
+    for (const leak of ['document_signatures', 'constraint', 'relation', 'secret-row-value', '23514']) expect(text).not.toContain(leak)
+  }
+
+  it('turns the SO constraint failure into a safe response linked to a recorded reference', async () => {
+    asHq()
+    adminRpc.mockResolvedValue({ data: null, error: constraintError })
+    const response = await call()
+    const body = await response.json()
+    expect(response.status).toBe(500)
+    expect(body).toMatchObject({ code: 'ack_system_failure', referenceId: 'SYS-7K3M9QX2' })
+    expect(response.headers.get('x-request-id')).toBe('SYS-7K3M9QX2')
+    expectNothingTechnical(body)
+    expect(documentUpdate).not.toHaveBeenCalled()
+  })
+
+  it('records who, what and where, and never the row values the database quoted', async () => {
+    asHq()
+    adminRpc.mockResolvedValue({ data: null, error: constraintError })
+    await call()
+    const report = reportSystemFailure.mock.calls[0][0]
+    expect(report).toMatchObject({
+      module: 'Supply Chain',
+      action: 'document.acknowledge.record_signature',
+      actorId: 'user-1',
+      organizationId: HQ_ORG,
+      details: { step: 'record_signature', doc_type: 'SO' }
+    })
+    expect(report.error.code).toBe('23514')
+    expect(JSON.stringify(report)).not.toContain('secret-row-value')
+  })
+
+  it('keeps an unexpected RPC failure generic', async () => {
+    asHq()
+    documentRow = { ...documentRow, doc_type: 'INVOICE' }
+    userRpc.mockResolvedValue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout at /internal/path' } })
+    const response = await call()
+    const body = await response.json()
+    expect(response.status).toBe(500)
+    expect(body.referenceId).toBe('SYS-7K3M9QX2')
+    expect(JSON.stringify(body)).not.toContain('/internal/path')
+  })
+
+  it('reports an expected business rule as itself, without a system log entry', async () => {
+    asHq()
+    documentRow = { ...documentRow, doc_type: 'INVOICE' }
+    userRpc.mockResolvedValue({ data: null, error: { code: 'P0001', message: 'Payment proof is required for this organization' } })
+    const response = await call()
+    expect(response.status).toBe(400)
+    expect((await response.json()).code).toBe('ack_payment_proof_required')
+    expect(reportSystemFailure).not.toHaveBeenCalled()
+  })
+
+  it('does not record an already acknowledged document or an access denial', async () => {
+    asHq()
+    documentRow = { ...documentRow, status: 'acknowledged' }
+    expect((await (await call()).json()).code).toBe('ack_already_acknowledged')
+    documentRow = { ...documentRow, status: 'pending' }
+    asUser(OTHER_DISTRIBUTOR_ORG, 'DIST', 10)
+    const denied = await call()
+    expect(denied.status).toBe(403)
+    expect((await denied.json()).code).toBe('ack_access_denied')
+    expect(reportSystemFailure).not.toHaveBeenCalled()
+  })
+
+  it('still answers safely when the reporter itself returns no reference', async () => {
+    asHq()
+    reportSystemFailure.mockResolvedValue(null)
+    adminRpc.mockResolvedValue({ data: null, error: constraintError })
+    const response = await call()
+    expect(response.status).toBe(500)
+    expect((await response.json()).code).toBe('ack_system_failure')
   })
 })

@@ -59,6 +59,7 @@ describe('notifyStoreOrderPaid', () => {
   it('emails the customer the order details with the Stripe receipt, and the store inbox', async () => {
     await notifyStoreOrderPaid('o1')
     expect(state.sent.map((m) => m.to)).toEqual(['amirul@example.com', 'admin@serapod.com', 'jafar@serapod.com', 'store@serapod.com'])
+    expect(new Set(state.sent.map((m) => m.to)).size).toBe(state.sent.length)
     const [customer, staff] = state.sent
     expect(customer.fromName).toBe('Serapod2U Store')
     expect(customer.subject).toContain('ORD-1')

@@ -1,11 +1,10 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useTheme } from '@/components/providers/ThemeProvider'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
@@ -17,36 +16,22 @@ import {
     YAxis,
     CartesianGrid,
     Tooltip,
-    Legend,
     ResponsiveContainer,
-    LineChart,
-    Line,
     PieChart,
     Pie,
     Cell,
-    ComposedChart,
-    RadialBarChart,
-    RadialBar
 } from 'recharts'
 import {
-    Calendar,
     Download,
-    TrendingUp,
-    TrendingDown,
     Users,
     Package,
     ShoppingCart,
     Loader2,
     RefreshCw,
     DollarSign,
-    CreditCard,
     Activity,
     ArrowUpRight,
     ArrowDownRight,
-    BarChart3,
-    PieChart as PieChartIcon,
-    Layers,
-    Target,
     Wallet,
     Receipt,
     Building2,
@@ -55,22 +40,24 @@ import {
     Clock,
     CheckCircle2,
     AlertCircle,
-    Zap,
     Store,
     XCircle,
 } from 'lucide-react'
-import { format, subDays, startOfMonth, endOfMonth, differenceInDays } from 'date-fns'
 import ConsumerAnalyticsTab from './ConsumerAnalyticsTab'
 import DistributorReportsTab from './DistributorReportsTab'
-import ExecutiveKpiValue from './ExecutiveKpiValue'
 import OperationsTab from './OperationsTab'
 import ProductsTab from './ProductsTab'
 import ShopReportsTab from './ShopReportsTab'
+import ReportingMonthSelector from './ReportingMonthSelector'
+import ExecutiveOverviewDrilldownDialog, { type OverviewDrilldownTarget } from './ExecutiveOverviewDrilldownDialog'
 import CommissionReportingTab from '@/components/reporting/commission/CommissionReportingTab'
-import { APPROVED_SALES_STATUSES, SALES_ORDER_TYPES } from '@/lib/reporting/sales-kpi'
+import { currentReportingMonthKey, parseReportingMonthParam } from '@/lib/reporting/consumer-analytics'
+import { resolveExecutiveOverviewPeriod, type ExecutiveOverviewReport } from '@/lib/reporting/executive-overview'
+import { formatReportDate } from '@/lib/reporting/product-analytics'
 import { useCommissionAccess } from '@/lib/hr/commission/use-commission-access'
 import ModuleLightHeader from '@/components/layout/ModuleLightHeader'
 import { SeraLoader, SeraLoadingState } from '@/components/ui/SeraLoader'
+import { cn } from '@/lib/utils'
 
 interface ReportingViewProps {
     userProfile: any
@@ -143,97 +130,208 @@ const AnimatedCounter = ({ value, duration = 1000, prefix = '', suffix = '', dec
 
     const formattedValue = formatAnimatedValue(displayValue, decimals)
 
+    // The figure is never clipped or ellipsed: the prefix may drop to its own line and, only if the
+    // digits alone are wider than the card, they break rather than overflow.
     return (
-        <span className="inline-flex min-w-0 items-baseline whitespace-nowrap tabular-nums leading-none">
-            {prefix ? <span className="mr-1 shrink-0 text-[0.72em] leading-none">{prefix}</span> : null}
-            <span className="shrink-0">{formattedValue}</span>
-            {suffix ? <span className="ml-1 shrink-0 text-[0.72em] leading-none">{suffix}</span> : null}
+        <span className="inline-flex max-w-full min-w-0 flex-wrap items-baseline gap-x-1 tabular-nums leading-tight">
+            {/* The literal spaces keep "RM 54,000.00" readable for screen readers and copy/paste. */}
+            {prefix ? <><span className="text-[0.62em] font-semibold text-[var(--sera-muted)]">{prefix}</span>{' '}</> : null}
+            <span className="min-w-0 [overflow-wrap:anywhere]">{formattedValue}</span>
+            {suffix ? <>{' '}<span className="text-[0.62em] font-semibold text-[var(--sera-muted)]">{suffix}</span></> : null}
         </span>
     )
 }
 
-// Metric Card — light Serapod paper chrome
-const MetricCard = ({ title, value, change, changeType, icon: Icon, color, subtitle, loading, currency }: {
+// Metric Card — light Serapod paper chrome. The icon sits beside the title so the value gets the
+// card's full width; `primary` is the larger headline treatment used for the Overview's first row.
+const MetricCard = ({ title, value, change, changeType, noBaseline, icon: Icon, color, subtitle, loading, currency, variant = 'standard', tag, accent, onClick, className }: {
     title: string
     /** Render as RM with 2 decimals (defaults to titles containing Revenue/Value). */
     currency?: boolean
     value: number | string
     change?: number
     changeType?: 'increase' | 'decrease' | 'neutral'
+    /** The metric has a comparison, but the previous period was zero — no percentage exists. */
+    noBaseline?: boolean
     icon: any
     color: string
     subtitle?: string
     loading?: boolean
+    variant?: 'primary' | 'standard'
+    /** Short classification pill next to the title, e.g. "Purchases — not sales". */
+    tag?: string
+    /** Colour bar along the card's top edge. */
+    accent?: string
+    /** Opens a drill-down of the records behind the figure. */
+    onClick?: () => void
+    /** Grid placement (column spans). */
+    className?: string
 }) => {
     const isPositive = changeType === 'increase'
     const isNegative = changeType === 'decrease'
+    const isPrimary = variant === 'primary'
+    const changeLabel = change === undefined ? '' :
+        `${isPositive ? 'Up' : isNegative ? 'Down' : 'No change'} ${Math.abs(change).toFixed(1)}% ${subtitle ?? ''}`.trim()
 
     return (
-        <div className="group relative overflow-hidden rounded-xl border border-[var(--sera-line,#e8eaed)] bg-white p-5 transition-colors hover:border-[var(--sera-orange)]/35">
-            <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 space-y-2">
-                    <p className="text-sm font-medium text-[var(--sera-muted)]">{title}</p>
-                    {loading ? (
-                        <SeraLoader size="sm" className="text-[var(--sera-muted)]" />
-                    ) : (
-                        <div className="flex min-h-[2rem] min-w-0 items-center overflow-hidden">
-                            <ExecutiveKpiValue>
-                                {typeof value === 'number' ? (
-                                    <AnimatedCounter
-                                        value={value}
-                                        prefix={(currency ?? /Revenue|Value/.test(title)) ? 'RM' : ''}
-                                        decimals={(currency ?? /Revenue|Value/.test(title)) ? 2 : 0}
-                                    />
-                                ) : (
-                                    <span className="inline-flex max-w-full min-w-0 items-baseline whitespace-nowrap leading-none">{value}</span>
-                                )}
-                            </ExecutiveKpiValue>
-                        </div>
-                    )}
-                    <div className="flex items-center gap-2 flex-wrap">
-                        {change !== undefined && (
-                            <Badge
-                                variant="secondary"
-                                className={`text-xs font-medium border-0 ${isPositive ? 'bg-emerald-50 text-emerald-700' :
-                                    isNegative ? 'bg-red-50 text-red-700' :
-                                        'bg-[var(--sera-mist)] text-[var(--sera-muted)]'
-                                    }`}
-                            >
-                                {isPositive && <ArrowUpRight className="w-3 h-3 mr-0.5" />}
-                                {isNegative && <ArrowDownRight className="w-3 h-3 mr-0.5" />}
-                                {Math.abs(change).toFixed(1)}%
-                            </Badge>
-                        )}
-                        {subtitle && <span className="text-xs text-[var(--sera-muted)]">{subtitle}</span>}
-                    </div>
-                </div>
+        <div
+            className={cn(
+                'group relative flex h-full min-w-0 flex-col overflow-hidden rounded-xl border border-[var(--sera-line,#e8eaed)] bg-white transition-colors hover:border-[var(--sera-orange)]/35',
+                isPrimary ? 'p-5 sm:p-6' : 'p-4 sm:p-5',
+                onClick && !loading && 'cursor-pointer transition-all hover:-translate-y-0.5 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--sera-orange)]/40',
+                className,
+            )}
+            {...(onClick && !loading ? {
+                role: 'button' as const,
+                tabIndex: 0,
+                'aria-haspopup': 'dialog' as const,
+                'aria-label': `View ${title} details`,
+                'data-drilldown': 'true',
+                onClick,
+                onKeyDown: (event: React.KeyboardEvent) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        onClick()
+                    }
+                },
+            } : {})}
+        >
+            {accent ? <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: accent }} /> : null}
+            <div className="flex items-start gap-3">
                 <div
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                    className={`flex shrink-0 items-center justify-center rounded-lg ${isPrimary ? 'h-10 w-10' : 'h-9 w-9'}`}
                     style={{ backgroundColor: `${color}14` }}
                 >
-                    <Icon className="w-5 h-5" style={{ color }} strokeWidth={1.75} />
+                    <Icon className={isPrimary ? 'h-5 w-5' : 'h-[18px] w-[18px]'} style={{ color }} strokeWidth={1.75} aria-hidden />
                 </div>
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
+                    <p className={`font-medium leading-snug ${isPrimary ? 'text-sm text-[var(--sera-ink)]' : 'text-sm text-[var(--sera-muted)]'}`}>{title}</p>
+                    {tag ? (
+                        <span className="rounded-full border border-[var(--sera-line)] bg-[var(--sera-mist)] px-2 py-0.5 text-[11px] font-medium leading-none text-[var(--sera-ink)]">
+                            {tag}
+                        </span>
+                    ) : null}
+                </div>
+            </div>
+            <div className={`min-w-0 ${isPrimary ? 'mt-4' : 'mt-3'}`}>
+                {loading ? (
+                    <SeraLoader size="sm" className="text-[var(--sera-muted)]" />
+                ) : (
+                    <div className={`min-w-0 font-bold text-foreground tabular-nums ${isPrimary ? 'text-[1.75rem] sm:text-3xl' : 'text-2xl'}`}>
+                        {typeof value === 'number' ? (
+                            <AnimatedCounter
+                                value={value}
+                                prefix={(currency ?? /Revenue|Value/.test(title)) ? 'RM' : ''}
+                                decimals={(currency ?? /Revenue|Value/.test(title)) ? 2 : 0}
+                            />
+                        ) : (
+                            <span className="[overflow-wrap:anywhere]">{value}</span>
+                        )}
+                    </div>
+                )}
+            </div>
+            <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 pt-3">
+                {change !== undefined && (
+                    <Badge
+                        variant="secondary"
+                        aria-label={changeLabel}
+                        className={`shrink-0 text-xs font-medium border-0 ${isPositive ? 'bg-emerald-50 text-emerald-700' :
+                            isNegative ? 'bg-red-50 text-red-700' :
+                                'bg-[var(--sera-mist)] text-[var(--sera-muted)]'
+                            }`}
+                    >
+                        {isPositive && <ArrowUpRight className="w-3 h-3 mr-0.5" aria-hidden />}
+                        {isNegative && <ArrowDownRight className="w-3 h-3 mr-0.5" aria-hidden />}
+                        {Math.abs(change).toFixed(1)}%
+                    </Badge>
+                )}
+                {change === undefined && noBaseline && (
+                    <Badge
+                        variant="secondary"
+                        title="The comparison period had no value, so no percentage change can be calculated"
+                        className="shrink-0 text-xs font-medium border-0 bg-[var(--sera-mist)] text-[var(--sera-muted)]"
+                    >
+                        No prior value
+                    </Badge>
+                )}
+                {subtitle && <span className="min-w-0 text-xs leading-snug text-[var(--sera-muted)]">{subtitle}</span>}
+                {onClick && !loading ? (
+                    <span aria-hidden className="ml-auto text-xs font-medium text-[var(--sera-orange-deep,#c2410c)] opacity-70 transition-opacity group-hover:opacity-100">View details →</span>
+                ) : null}
             </div>
         </div>
     )
 }
 
+const REPORTING_TABS = ['overview', 'operations', 'finance', 'products', 'consumer-analytics', 'shop-performance', 'distributors', 'commission'] as const
+/** Tabs that read the Executive Overview report. */
+const OVERVIEW_DATA_TABS = new Set(['overview', 'finance'])
+
+const STATUS_LABEL: Record<string, string> = {
+    approved: 'Approved',
+    warehouse_packed: 'Packed',
+    shipped_distributor: 'Shipped',
+    closed: 'Closed',
+}
+
+function readSearchParam(name: string): string | null {
+    if (typeof window === 'undefined') return null
+    return new URLSearchParams(window.location.search).get(name)
+}
+
+function formatRm(value: number) {
+    return `RM ${value.toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+const axisCompactFormatter = new Intl.NumberFormat('en-MY', { notation: 'compact', maximumFractionDigits: 1 })
+
+/** Chart axis ticks only (e.g. 23.9M); tooltips keep the full RM amount. */
+function formatAxisCompact(value: number) {
+    return axisCompactFormatter.format(value)
+}
+
+/** Growth badge props for a MetricCard; a neutral "no prior value" pill when the comparison window was empty. */
+function changeProps(comparison?: { changePct: number | null }) {
+    if (!comparison) return {}
+    if (comparison.changePct === null) return { noBaseline: true }
+    return {
+        change: comparison.changePct,
+        changeType: comparison.changePct > 0 ? 'increase' as const : comparison.changePct < 0 ? 'decrease' as const : 'neutral' as const,
+    }
+}
+
+interface FinanceDocs {
+    month: string
+    pendingPayments: number
+    completedPayments: number
+    invoiceCount: number
+}
+
 export default function ReportingView({ userProfile }: ReportingViewProps) {
+    // ── Shared reporting scope: one month for every tab, kept in the URL ────
+    // Read synchronously so a refresh or shared link opens the same tab and
+    // month on its very first request; an invalid or future month falls back to
+    // the current month explicitly.
+    const [activeTab, setActiveTab] = useState<string>(() => {
+        const tab = readSearchParam('tab')
+        return tab && (REPORTING_TABS as readonly string[]).includes(tab) ? tab : 'overview'
+    })
+    const [month, setMonth] = useState<string>(() => parseReportingMonthParam(readSearchParam('month')) ?? currentReportingMonthKey())
+
     const [loading, setLoading] = useState(true)
-    const [data, setData] = useState<any>(null)
+    const [overview, setOverview] = useState<ExecutiveOverviewReport | null>(null)
+    const [earliestMonth, setEarliestMonth] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
-    const [dateRange, setDateRange] = useState('last30')
-    const [distributors, setDistributors] = useState<any[]>([])
-    const [selectedDistributor, setSelectedDistributor] = useState<string>('all')
-    const [activeTab, setActiveTab] = useState('overview')
-    const isConsumerAnalytics = activeTab === 'consumer-analytics'
-    const isProductAnalytics = activeTab === 'products'
-    const isDistributorAnalytics = activeTab === 'distributors'
-    /** Tabs that drive themselves from their own Reporting Month selector. */
+    const [downloading, setDownloading] = useState(false)
+    const [financeDocs, setFinanceDocs] = useState<FinanceDocs | null>(null)
+    /** Open Executive Overview drill-down; it always reads the month selected now. */
+    const [drilldown, setDrilldown] = useState<OverviewDrilldownTarget | null>(null)
+    const overviewRequest = useRef(0)
+    const financeRequest = useRef(0)
+
     const isCommission = activeTab === 'commission'
-    const isMonthlyReportTab = isConsumerAnalytics || isProductAnalytics || isDistributorAnalytics || isCommission
+    const needsOverview = OVERVIEW_DATA_TABS.has(activeTab)
     const commissionAccess = useCommissionAccess()
-    const [financialData, setFinancialData] = useState<any>(null)
     const supabase = createClient()
     const { resolvedTheme } = useTheme()
     const isDark = resolvedTheme === 'dark'
@@ -245,284 +343,199 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
     const tooltipStyle = { borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.2)', backgroundColor: tooltipBg, color: isDark ? '#f3f4f6' : undefined }
 
     useEffect(() => {
-        const fetchDistributors = async () => {
-            const { data } = await supabase
-                .from('organizations')
-                .select('id, org_name')
-                .eq('org_type_code', 'DIST')
-                .order('org_name')
+        if (typeof window === 'undefined') return
+        const params = new URLSearchParams(window.location.search)
+        params.set('tab', activeTab)
+        params.set('month', month)
+        // Retired rolling-period parameter.
+        params.delete('dateRange')
+        window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
+    }, [activeTab, month])
 
-            if (data) setDistributors(data)
-        }
-        fetchDistributors()
-        fetchFinancialData()
-    }, [])
-
-    const dateParams = useMemo(() => {
-        const end = new Date()
-        let start = new Date()
-
-        switch (dateRange) {
-            case 'today':
-                start.setHours(0, 0, 0, 0)
-                break
-            case 'last7':
-                start = subDays(end, 7)
-                break
-            case 'last30':
-                start = subDays(end, 30)
-                break
-            case 'thisMonth':
-                start = startOfMonth(end)
-                break
-            case 'lastMonth':
-                start = startOfMonth(subDays(startOfMonth(end), 1))
-                end.setTime(endOfMonth(start).getTime())
-                break
-            case 'last90':
-                start = subDays(end, 90)
-                break
-            default:
-                start = subDays(end, 30)
-        }
-
-        return {
-            startDate: start.toISOString(),
-            endDate: end.toISOString()
-        }
-    }, [dateRange])
-
-    const fetchData = async () => {
+    const fetchOverview = useCallback(async (targetMonth: string) => {
+        const id = ++overviewRequest.current
         setLoading(true)
         setError(null)
         try {
-            const params = new URLSearchParams({
-                startDate: dateParams.startDate,
-                endDate: dateParams.endDate
-            })
-
-            if (selectedDistributor && selectedDistributor !== 'all') {
-                params.append('distributorId', selectedDistributor)
-            }
-
-            console.log('[ReportingView] Fetching stats with params:', {
-                startDate: dateParams.startDate,
-                endDate: dateParams.endDate,
-                distributor: selectedDistributor
-            })
-
-            const res = await fetch(`/api/reporting/stats?${params}`, {
-                credentials: 'include', // Ensure cookies are sent with the request
-                headers: {
-                    'Content-Type': 'application/json',
-                }
-            })
+            const res = await fetch(`/api/reporting/stats?month=${encodeURIComponent(targetMonth)}`, { cache: 'no-store', credentials: 'include' })
             const json = await res.json()
-
-            console.log('[ReportingView] API response:', {
-                status: res.status,
-                ok: res.ok,
-                hasData: !!json,
-                summary: json?.summary,
-                error: json?.error,
-                rawJson: JSON.stringify(json).substring(0, 500) // First 500 chars of raw response
-            })
-
+            // A slower earlier month must never overwrite the month now selected.
+            if (id !== overviewRequest.current) return
             if (!res.ok) {
-                const errorMsg = json?.error || `API error: ${res.status}`
-                console.error('[ReportingView] API returned error:', errorMsg)
-                setError(errorMsg)
+                setOverview(null)
+                setError(json?.error || `API error: ${res.status}`)
                 return
             }
-
-            if (json) {
-                setData(json)
-                // Log successful data load
-                console.log('[ReportingView] Data loaded successfully:', {
-                    totalOrders: json.summary?.totalOrders,
-                    totalUnits: json.summary?.totalUnits,
-                    totalRevenue: json.summary?.totalRevenue
-                })
-            }
-        } catch (error: any) {
-            console.error('[ReportingView] Error fetching reporting data:', error)
-            setError(error.message || 'Failed to fetch reporting data')
+            setOverview(json.report as ExecutiveOverviewReport)
+            setEarliestMonth(json.earliestMonth ?? null)
+        } catch (err: any) {
+            if (id !== overviewRequest.current) return
+            setOverview(null)
+            setError(err?.message || 'Failed to fetch reporting data')
         } finally {
-            setLoading(false)
+            if (id === overviewRequest.current) setLoading(false)
         }
-    }
+    }, [])
 
-    const fetchFinancialData = async () => {
-        try {
-            // Fetch GL summary data
-            const { data: journals } = await supabase
-                .from('gl_journals' as any)
-                .select('*')
-                .eq('status', 'POSTED')
-                .order('posting_date', { ascending: false })
-                .limit(100)
+    // Only the tabs that show it request the overview — other tabs load their own report.
+    useEffect(() => {
+        if (needsOverview) void fetchOverview(month)
+    }, [needsOverview, month, fetchOverview])
 
-            const { data: accounts } = await supabase
-                .from('gl_accounts' as any)
-                .select('*')
-                .eq('is_active', true)
-
-            // Fetch order payment data
-            const { data: orders } = await supabase
-                .from('orders')
-                .select('id, order_no, status, created_at, order_items(line_total)')
-                .in('status', [...APPROVED_SALES_STATUSES])
-                .in('order_type', [...SALES_ORDER_TYPES])
-                .order('created_at', { ascending: false })
-                .limit(50)
-
-            // Fetch documents for payment tracking
-            const { data: documents } = await supabase
+    /**
+     * Finance document counts for the reporting month: payment, payment-request
+     * and invoice documents CREATED in the month (Malaysia time). Their status
+     * is the current state of each document.
+     */
+    const fetchFinanceDocs = useCallback(async (targetMonth: string) => {
+        const id = ++financeRequest.current
+        const period = resolveExecutiveOverviewPeriod(targetMonth)
+        const count = async (docType: string, status?: string) => {
+            let query = supabase
                 .from('documents')
-                .select('*')
-                .in('doc_type', ['PAYMENT', 'PAYMENT_REQUEST', 'INVOICE'])
-                .order('created_at', { ascending: false })
-                .limit(100)
-
-            setFinancialData({
-                journals: journals || [],
-                accounts: accounts || [],
-                orders: orders || [],
-                documents: documents || []
-            })
-        } catch (error) {
-            console.error('Error fetching financial data', error)
+                .select('id', { count: 'exact', head: true })
+                .eq('doc_type', docType as any)
+                .gte('created_at', period.startUtc)
+                .lt('created_at', period.endUtc)
+            if (status) query = query.eq('status', status as any)
+            const { count: total, error } = await query
+            if (error) throw error
+            return total ?? 0
         }
-    }
+        try {
+            const [pendingPayments, completedPayments, invoiceCount] = await Promise.all([
+                count('PAYMENT_REQUEST', 'pending'),
+                count('PAYMENT', 'acknowledged'),
+                count('INVOICE'),
+            ])
+            if (id === financeRequest.current) setFinanceDocs({ month: targetMonth, pendingPayments, completedPayments, invoiceCount })
+        } catch (err) {
+            console.error('Error fetching finance documents', err)
+            if (id === financeRequest.current) setFinanceDocs(null)
+        }
+    }, [supabase])
 
     useEffect(() => {
-        fetchData()
-    }, [dateParams, selectedDistributor])
+        if (activeTab === 'finance') void fetchFinanceDocs(month)
+    }, [activeTab, month, fetchFinanceDocs])
 
-    // Calculate financial metrics
-    const financialMetrics = useMemo(() => {
-        if (!financialData) return null
-
-        const totalRevenue = financialData.orders?.reduce((sum: number, o: any) => {
-            const orderTotal = o.order_items?.reduce((itemSum: number, item: any) => itemSum + (item.line_total || 0), 0) || 0
-            return sum + orderTotal
-        }, 0) || 0
-
-        const pendingPayments = financialData.documents?.filter((d: any) =>
-            d.doc_type === 'PAYMENT_REQUEST' && d.status === 'pending'
-        ).length || 0
-        const completedPayments = financialData.documents?.filter((d: any) =>
-            d.doc_type === 'PAYMENT' && d.status === 'acknowledged'
-        ).length || 0
-        const invoiceCount = financialData.documents?.filter((d: any) =>
-            d.doc_type === 'INVOICE'
-        ).length || 0
-
-        return {
-            totalRevenue,
-            pendingPayments,
-            completedPayments,
-            invoiceCount
+    const handleDownloadPdf = async () => {
+        if (!overview) return
+        setDownloading(true)
+        try {
+            const { buildExecutiveOverviewPdf } = await import('@/lib/reporting/executive-overview-pdf')
+            const pdf = await buildExecutiveOverviewPdf(overview, {
+                generatedAt: new Date().toISOString(),
+                generatedBy: userProfile?.full_name || userProfile?.email || null,
+            })
+            const url = URL.createObjectURL(pdf.blob)
+            const link = document.createElement('a')
+            link.href = url
+            link.download = pdf.filename
+            document.body.appendChild(link)
+            link.click()
+            link.remove()
+            setTimeout(() => URL.revokeObjectURL(url), 1000)
+        } catch (err: any) {
+            setError(err?.message || 'Unable to generate the PDF report')
+        } finally {
+            setDownloading(false)
         }
-    }, [financialData])
-
-    // Generate trend data
-    const trendData = useMemo(() => {
-        if (!data?.trend) return []
-        return data.trend.map((item: any) => ({
-            ...item,
-            date: item.date,
-            units: item.units || 0
-        }))
-    }, [data?.trend])
-
-    // Product mix data for pie chart
-    const productMixData = useMemo(() => {
-        if (!data?.productMix) return []
-        return data.productMix.slice(0, 6)
-    }, [data?.productMix])
-
-    if (loading && !data) {
-        return <SeraLoadingState variant="page" label="Loading executive dashboard" />
     }
 
-    const periodDays = differenceInDays(new Date(dateParams.endDate), new Date(dateParams.startDate))
+    // Only the report for the selected month is ever rendered.
+    const report = overview && overview.period.month === month ? overview : null
+    const summary = report?.summary
+    const comparison = report?.comparison
+    const periodLabel = report?.period.label ?? ''
+    const versus = report ? `vs ${report.period.comparisonRangeLabel}` : ''
+    const productMixData = useMemo(() => (report?.productMix ?? []).slice(0, 6), [report])
+    const monthTabs = { month, onMonthChange: setMonth }
+    const docs = financeDocs && financeDocs.month === month ? financeDocs : null
+
+    const overviewControls = (
+        <div className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row lg:items-end">
+            <ReportingMonthSelector
+                id="executive-overview-month"
+                month={month}
+                onMonthChange={setMonth}
+                availableMonths={earliestMonth ? [earliestMonth] : []}
+                caption={report ? (
+                    <>
+                        <span className="font-medium text-[var(--sera-ink)]">{report.period.rangeLabel}</span>
+                        {report.period.isCurrentMonth ? ' (month to date)' : ''}
+                        <br className="sm:hidden" />
+                        <span className="sm:ml-1">{versus}</span>
+                    </>
+                ) : null}
+            />
+            <div className="flex flex-wrap items-center gap-2 lg:flex-nowrap lg:pb-[18px]">
+                <Button
+                    variant="outline"
+                    className="h-10 min-w-[7.5rem] flex-1 gap-2 border-[var(--sera-line)] lg:h-9 lg:flex-none"
+                    onClick={() => fetchOverview(month)}
+                    disabled={loading}
+                >
+                    <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                    Refresh
+                </Button>
+                {activeTab === 'overview' ? (
+                    <Button
+                        variant="outline"
+                        className="h-10 min-w-[7.5rem] flex-1 gap-2 border-[var(--sera-line)] lg:h-9 lg:flex-none"
+                        onClick={handleDownloadPdf}
+                        disabled={!report || downloading || loading}
+                        title={report ? 'Download the Executive Overview report for the selected month' : 'Report not loaded yet'}
+                    >
+                        {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                        <span className="whitespace-nowrap">Download PDF</span>
+                    </Button>
+                ) : null}
+            </div>
+        </div>
+    )
+
+    const sectionHeader = (title: string, description: string) => (
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+                <h2 className="text-lg font-semibold text-[var(--sera-ink)]">{title}</h2>
+                <p className="text-sm text-[var(--sera-muted)]">{description}</p>
+            </div>
+            {overviewControls}
+        </div>
+    )
+
+    const errorBanner = error ? (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+                <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+                <div className="min-w-0">
+                    <p className="font-medium text-red-800">Unable to load reporting data</p>
+                    <p className="text-sm text-red-600 truncate">{error}</p>
+                </div>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => fetchOverview(month)} className="shrink-0 border-red-300 text-red-700 hover:bg-red-100">
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Retry
+            </Button>
+        </div>
+    ) : null
+
+    const emptyBanner = report?.isEmpty ? (
+        <div className="rounded-xl border border-[var(--sera-line)] bg-[var(--sera-mist)] p-4 text-sm text-[var(--sera-muted)]">
+            No orders were recorded in {report.period.label} ({report.period.rangeLabel}). Choose another Reporting Month to review a period with activity.
+        </div>
+    ) : null
+
+    const showLoader = loading && !report
 
     return (
         <div className="sera-module-landing">
             <ModuleLightHeader
                 eyebrow="Reporting"
                 title="Executive Dashboard"
-                description="Real-time business intelligence & analytics"
-                actions={(
-                    <div className="flex flex-wrap items-center gap-2.5">
-                        {/* Consumer Analytics and Product Analytics are monthly
-                            reports driven by their own Reporting Month selector, so
-                            the generic executive date-range and distributor filters
-                            are hidden while either is active rather than competing
-                            with it. */}
-                        {!isMonthlyReportTab && (
-                          <>
-                        <Select value={dateRange} onValueChange={setDateRange}>
-                            <SelectTrigger className="w-[150px] h-10 bg-white border-[var(--sera-line)] text-[var(--sera-ink)]">
-                                <Calendar className="w-4 h-4 mr-2 text-[var(--sera-muted)]" />
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="today">Today</SelectItem>
-                                <SelectItem value="last7">Last 7 days</SelectItem>
-                                <SelectItem value="last30">Last 30 days</SelectItem>
-                                <SelectItem value="thisMonth">This month</SelectItem>
-                                <SelectItem value="lastMonth">Last month</SelectItem>
-                                <SelectItem value="last90">Last 90 days</SelectItem>
-                            </SelectContent>
-                        </Select>
-
-                        <Select value={selectedDistributor} onValueChange={setSelectedDistributor}>
-                            <SelectTrigger className="w-[180px] h-10 bg-white border-[var(--sera-line)] text-[var(--sera-ink)]">
-                                <Building2 className="w-4 h-4 mr-2 text-[var(--sera-muted)]" />
-                                <SelectValue placeholder="All distributors" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All distributors</SelectItem>
-                                {distributors.map((d) => (
-                                    <SelectItem key={d.id} value={d.id}>{d.org_name}</SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                          </>
-                        )}
-
-                        <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={fetchData}
-                            disabled={loading}
-                            className="h-10 w-10 border-[var(--sera-line)] text-[var(--sera-muted)] hover:text-[var(--sera-ink)] hover:border-[var(--sera-orange)]/40"
-                            title="Refresh"
-                        >
-                            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                        </Button>
-                    </div>
-                )}
+                description="Monthly business intelligence & analytics"
             />
-
-                {/* Error Banner */}
-                {error && (
-                    <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-3 min-w-0">
-                            <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
-                            <div className="min-w-0">
-                                <p className="font-medium text-red-800">Unable to load reporting data</p>
-                                <p className="text-sm text-red-600 truncate">{error}</p>
-                            </div>
-                        </div>
-                        <Button variant="outline" size="sm" onClick={fetchData} className="shrink-0 border-red-300 text-red-700 hover:bg-red-100">
-                            <RefreshCw className="w-4 h-4 mr-2" />
-                            Retry
-                        </Button>
-                    </div>
-                )}
 
                 {/* Tab Navigation */}
                 <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
@@ -565,184 +578,169 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
 
                     {/* Overview Tab */}
                     <TabsContent value="overview" className="space-y-6 animate-in fade-in-50 duration-500">
-                        {/* KPI Cards. Approved Sales = approved, warehouse packed, shipped to distributor and closed
-                            sell-side orders (D2H/S2D) by SO date; submitted orders are pipeline, cancelled orders are
-                            reported apart and H2M purchases are never sales (lib/reporting/sales-kpi.ts). */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        {sectionHeader('Executive Overview', 'Approved sales, pipeline and purchases for the reporting month')}
+                        {errorBanner}
+                        {showLoader ? <SeraLoadingState variant="page" label="Loading executive overview" /> : (
+                        <>
+                        {emptyBanner}
+                        {/* KPI Cards. Confirmed (approved) sales = approved, warehouse packed, shipped to distributor and
+                            closed D2H/S2D orders by SO date; submitted orders are pipeline, cancelled orders are reported
+                            apart and H2M purchases are never sales (lib/reporting/executive-overview.ts). */}
+                        {/* Headline figures: H2M purchases (kept visibly apart from sales) and distributor (D2H) sales.
+                            The Shop Sales (S2D) and combined Approved Sales Value cards are not shown on the Overview —
+                            S2D is not used operationally today. Only the presentation changed: S2D data, its share of
+                            every sales figure and the Finance tab are untouched. */}
+                        <section aria-labelledby="overview-headline-kpis" className="space-y-3">
+                        <h3 id="overview-headline-kpis" className="text-xs font-semibold uppercase tracking-wide text-[var(--sera-muted)]">Headline figures</h3>
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2" data-testid="overview-headline-grid">
                             <MetricCard
-                                title="Approved Sales Value"
-                                value={data?.summary?.approvedSalesValue ?? data?.summary?.totalRevenue ?? 0}
-                                icon={DollarSign}
-                                color={COLORS.success}
-                                subtitle={`approved sales in ${periodDays} days`}
+                                variant="primary"
+                                title="H2M Purchases Value"
+                                tag="Purchases — not sales"
+                                accent={COLORS.slate}
+                                value={summary?.purchaseValue ?? 0}
+                                icon={Truck}
+                                color={COLORS.slate}
+                                subtitle={`${summary?.purchaseOrders ?? 0} approved manufacturer orders (not sales)`}
                                 loading={loading}
                             />
                             <MetricCard
-                                title="Confirmed Orders"
-                                value={data?.summary?.totalOrders || 0}
+                                variant="primary"
+                                title="Distributor Sales (D2H)"
+                                accent={COLORS.success}
+                                value={summary?.distributorSalesValue ?? 0}
+                                currency
+                                icon={Building2}
+                                color={COLORS.success}
+                                subtitle={`${summary?.distributorSalesOrders ?? 0} approved orders`}
+                                loading={loading}
+                                {...changeProps(comparison?.distributorSalesValue)}
+                            />
+                        </div>
+                        </section>
+                        <section aria-labelledby="overview-detail-kpis" className="space-y-3">
+                        <h3 id="overview-detail-kpis" className="text-xs font-semibold uppercase tracking-wide text-[var(--sera-muted)]">Sales, orders &amp; pipeline</h3>
+                        {/* Five cards: three across, then two across on wide screens; two columns with the last card
+                            full width on tablets — no empty grid cell at any breakpoint. */}
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-6" data-testid="overview-detail-grid">
+                            <MetricCard
+                                className="xl:col-span-2"
+                                title="Confirmed Sales Orders"
+                                value={summary?.approvedSalesOrders ?? 0}
                                 icon={ShoppingCart}
                                 color={COLORS.primary}
                                 subtitle="approved, packed, shipped or closed"
                                 loading={loading}
+                                onClick={report ? () => setDrilldown({ metric: 'confirmed_orders' }) : undefined}
+                                {...changeProps(comparison?.approvedSalesOrders)}
                             />
                             <MetricCard
-                                title="Total Units"
-                                value={data?.summary?.totalUnits || 0}
+                                className="xl:col-span-2"
+                                title="Total Units Sold"
+                                value={summary?.unitsSold ?? 0}
                                 icon={Package}
                                 color={COLORS.slate}
-                                subtitle="on confirmed orders"
+                                subtitle="on approved sales orders"
                                 loading={loading}
+                                {...changeProps(comparison?.unitsSold)}
                             />
                             <MetricCard
+                                className="xl:col-span-2"
                                 title="Active Buyers"
-                                value={data?.summary?.activeDistributors || 0}
+                                value={summary?.activeBuyers ?? 0}
                                 icon={Users}
                                 color={COLORS.warning}
-                                subtitle="distributors & shops"
+                                subtitle={`${summary?.activeDistributorBuyers ?? 0} distributors · ${summary?.activeShopBuyers ?? 0} shops`}
                                 loading={loading}
+                                onClick={report ? () => setDrilldown({ metric: 'active_buyers' }) : undefined}
+                                {...changeProps(comparison?.activeBuyers)}
                             />
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <MetricCard
-                                title="Order Pipeline Value"
-                                value={data?.summary?.pipelineValue || 0}
+                                className="xl:col-span-3"
+                                title="Sales Pipeline Value"
+                                value={summary?.pipelineValue ?? 0}
                                 icon={Clock}
                                 color={COLORS.primary}
-                                subtitle={`${data?.summary?.pipelineOrders || 0} submitted, awaiting approval`}
+                                subtitle={`${summary?.pipelineOrders ?? 0} submitted, awaiting approval`}
                                 loading={loading}
                             />
                             <MetricCard
+                                className="sm:col-span-2 xl:col-span-3"
                                 title="Cancelled Orders"
-                                value={data?.summary?.cancelledOrders || 0}
+                                value={summary?.cancelledOrders ?? 0}
                                 currency={false}
                                 icon={XCircle}
                                 color={COLORS.danger}
-                                subtitle={`RM ${(data?.summary?.cancelledValue || 0).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} not counted as sales`}
+                                subtitle={`${formatRm(summary?.cancelledValue ?? 0)} not counted as sales`}
                                 loading={loading}
-                            />
-                            <MetricCard
-                                title="H2M Purchases Value"
-                                value={data?.summary?.purchaseValue || 0}
-                                icon={Truck}
-                                color={COLORS.slate}
-                                subtitle={`${data?.summary?.purchaseOrders || 0} approved manufacturer orders (not sales)`}
-                                loading={loading}
+                                onClick={report ? () => setDrilldown({ metric: 'cancelled_orders' }) : undefined}
                             />
                         </div>
+                        </section>
+                        {report?.meta.notice ? (
+                            <p className="text-xs text-amber-700">{report.meta.notice}</p>
+                        ) : null}
 
                         {/* Main Charts Row */}
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                            {/* Trend Chart */}
                             <Card className="lg:col-span-2 border border-[var(--sera-line)] shadow-none bg-white">
                                 <CardHeader className="pb-2">
-                                    <div className="flex items-center justify-between">
-                                        <div>
-                                            <CardTitle className="text-base font-semibold text-[var(--sera-ink)]">Shipment Trend</CardTitle>
-                                            <CardDescription className="text-[var(--sera-muted)]">Volume over time with growth trajectory</CardDescription>
-                                        </div>
-                                        <Badge variant="secondary" className="bg-emerald-50 text-emerald-700 border-0">
-                                            <TrendingUp className="w-3 h-3 mr-1" />
-                                            Growing
-                                        </Badge>
-                                    </div>
+                                    <CardTitle className="text-base font-semibold text-[var(--sera-ink)]">Daily Approved Sales</CardTitle>
+                                    <CardDescription className="text-[var(--sera-muted)]">
+                                        Approved sales value by SO date · {report?.period.rangeLabel ?? ''}
+                                    </CardDescription>
                                 </CardHeader>
                                 <CardContent>
-                                    <div className="h-[350px]">
+                                    <div className="h-[320px]">
                                         <ResponsiveContainer width="100%" height="100%">
-                                            <AreaChart data={trendData}>
+                                            <AreaChart data={report?.dailyTrend ?? []}>
                                                 <defs>
-                                                    <linearGradient id="colorUnits" x1="0" y1="0" x2="0" y2="1">
+                                                    <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
                                                         <stop offset="5%" stopColor={COLORS.primary} stopOpacity={0.3} />
                                                         <stop offset="95%" stopColor={COLORS.primary} stopOpacity={0} />
                                                     </linearGradient>
                                                 </defs>
                                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={chartGridColor} />
-                                                <XAxis
-                                                    dataKey="date"
-                                                    tickFormatter={(value: string) => {
-                                                        const [year, month] = value.split('-')
-                                                        const date = new Date(parseInt(year), parseInt(month) - 1)
-                                                        return format(date, 'MMM')
-                                                    }}
-                                                    tickLine={false}
-                                                    axisLine={false}
-                                                    tick={{ fill: chartTickColor, fontSize: 12 }}
-                                                />
-                                                <YAxis
-                                                    tickLine={false}
-                                                    axisLine={false}
-                                                    tick={{ fill: chartTickColor, fontSize: 12 }}
-                                                    tickFormatter={(value) => value.toLocaleString()}
-                                                />
-                                                <Tooltip
-                                                    contentStyle={{
-                                                        borderRadius: '12px',
-                                                        border: 'none',
-                                                        boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
-                                                        backgroundColor: tooltipBg,
-                                                        color: isDark ? '#f3f4f6' : undefined
-                                                    }}
-                                                    formatter={(value: number) => [value.toLocaleString(), 'Units']}
-                                                    labelFormatter={(value: string) => {
-                                                        const [year, month] = value.split('-')
-                                                        const date = new Date(parseInt(year), parseInt(month) - 1)
-                                                        return format(date, 'MMMM yyyy')
-                                                    }}
-                                                />
-                                                <Area
-                                                    type="monotone"
-                                                    dataKey="units"
-                                                    stroke={COLORS.primary}
-                                                    strokeWidth={3}
-                                                    fill="url(#colorUnits)"
-                                                    dot={false}
-                                                    activeDot={{ r: 6, fill: COLORS.primary, stroke: '#fff', strokeWidth: 2 }}
-                                                />
+                                                <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} minTickGap={16} />
+                                                <YAxis tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} width={48} tickFormatter={formatAxisCompact} />
+                                                <Tooltip contentStyle={tooltipStyle} formatter={(value: number) => [formatRm(value), 'Approved sales']} />
+                                                <Area type="monotone" dataKey="value" stroke={COLORS.primary} strokeWidth={3} fill="url(#colorSales)" dot={false} activeDot={{ r: 6, fill: COLORS.primary, stroke: '#fff', strokeWidth: 2 }} />
                                             </AreaChart>
                                         </ResponsiveContainer>
                                     </div>
                                 </CardContent>
                             </Card>
 
-                            {/* Product Distribution */}
                             <Card className="border border-[var(--sera-line)] shadow-none bg-white">
                                 <CardHeader className="pb-2">
                                     <CardTitle className="text-base font-semibold text-[var(--sera-ink)]">Product Distribution</CardTitle>
-                                    <CardDescription className="text-[var(--sera-muted)]">Top performing variants</CardDescription>
+                                    <CardDescription className="text-[var(--sera-muted)]">Top variants by units sold · {periodLabel}</CardDescription>
                                 </CardHeader>
                                 <CardContent>
+                                    {productMixData.length === 0 ? (
+                                        <div className="flex h-[200px] items-center justify-center text-sm text-[var(--sera-muted)]">No products sold this month</div>
+                                    ) : (
                                     <div className="h-[200px]">
                                         <ResponsiveContainer width="100%" height="100%">
                                             <PieChart>
-                                                <Pie
-                                                    data={productMixData}
-                                                    cx="50%"
-                                                    cy="50%"
-                                                    innerRadius={50}
-                                                    outerRadius={80}
-                                                    paddingAngle={4}
-                                                    dataKey="units"
-                                                    stroke="none"
-                                                >
-                                                    {productMixData.map((entry: any, index: number) => (
-                                                        <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                                                <Pie data={productMixData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={4} dataKey="units" nameKey="name" stroke="none">
+                                                    {productMixData.map((entry, index) => (
+                                                        <Cell key={`cell-${entry.variantId}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                                                     ))}
                                                 </Pie>
-                                                <Tooltip
-                                                    contentStyle={tooltipStyle}
-                                                    formatter={(value: number) => [value.toLocaleString(), 'Units']}
-                                                />
+                                                <Tooltip contentStyle={tooltipStyle} formatter={(value: number) => [value.toLocaleString(), 'Units']} />
                                             </PieChart>
                                         </ResponsiveContainer>
                                     </div>
+                                    )}
                                     <div className="space-y-2 mt-4">
-                                        {productMixData.slice(0, 4).map((item: any, index: number) => (
-                                            <div key={index} className="flex items-center justify-between">
-                                                <div className="flex items-center gap-2">
-                                                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: CHART_COLORS[index] }} />
-                                                    <span className="text-sm text-muted-foreground truncate max-w-[120px]">{item.name}</span>
+                                        {productMixData.slice(0, 4).map((item, index) => (
+                                            <div key={item.variantId} className="flex items-center justify-between gap-2">
+                                                <div className="flex min-w-0 items-center gap-2">
+                                                    <div className="w-3 h-3 shrink-0 rounded-full" style={{ backgroundColor: CHART_COLORS[index] }} />
+                                                    <span className="text-sm text-muted-foreground truncate">{item.name}</span>
                                                 </div>
-                                                <span className="text-sm font-semibold">{item.units?.toLocaleString()}</span>
+                                                <span className="text-sm font-semibold">{item.units.toLocaleString()}</span>
                                             </div>
                                         ))}
                                     </div>
@@ -752,34 +750,22 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
 
                         {/* Secondary Charts */}
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                            {/* Top Distributors */}
                             <Card className="border border-[var(--sera-line)] shadow-none bg-white">
                                 <CardHeader>
-                                    <CardTitle className="text-base font-semibold text-[var(--sera-ink)]">Top Distributors</CardTitle>
-                                    <CardDescription className="text-[var(--sera-muted)]">By shipment volume</CardDescription>
+                                    <CardTitle className="text-base font-semibold text-[var(--sera-ink)]">Monthly Sales Trend</CardTitle>
+                                    <CardDescription className="text-[var(--sera-muted)]">Approved sales, last {report?.monthlyTrend.length ?? 6} months{report?.period.isCurrentMonth ? ' (current month to date)' : ''}</CardDescription>
                                 </CardHeader>
                                 <CardContent>
                                     <div className="h-[300px]">
                                         <ResponsiveContainer width="100%" height="100%">
-                                            <BarChart data={data?.distributorPerformance?.slice(0, 5) || []} layout="vertical" margin={{ left: 20 }}>
-                                                <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke={chartGridColor} />
-                                                <XAxis type="number" hide />
-                                                <YAxis
-                                                    dataKey="name"
-                                                    type="category"
-                                                    width={100}
-                                                    tick={{ fontSize: 12, fill: chartTickColor }}
-                                                    tickLine={false}
-                                                    axisLine={false}
-                                                />
-                                                <Tooltip
-                                                    cursor={{ fill: 'transparent' }}
-                                                    contentStyle={tooltipStyle}
-                                                    formatter={(value: number) => [value.toLocaleString(), 'Units']}
-                                                />
-                                                <Bar dataKey="units" radius={[0, 8, 8, 0]} barSize={24}>
-                                                    {(data?.distributorPerformance?.slice(0, 5) || []).map((entry: any, index: number) => (
-                                                        <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                                            <BarChart data={report?.monthlyTrend ?? []}>
+                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={chartGridColor} />
+                                                <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} />
+                                                <YAxis tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} width={48} tickFormatter={formatAxisCompact} />
+                                                <Tooltip cursor={{ fill: 'transparent' }} contentStyle={tooltipStyle} formatter={(value: number) => [formatRm(value), 'Approved sales']} />
+                                                <Bar dataKey="value" radius={[8, 8, 0, 0]} barSize={32}>
+                                                    {(report?.monthlyTrend ?? []).map((row) => (
+                                                        <Cell key={row.month} fill={row.month === month ? COLORS.primary : COLORS.muted} />
                                                     ))}
                                                 </Bar>
                                             </BarChart>
@@ -788,41 +774,71 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                                 </CardContent>
                             </Card>
 
-                            {/* Recent Activity */}
                             <Card className="border border-[var(--sera-line)] shadow-none bg-white">
                                 <CardHeader>
-                                    <CardTitle className="text-base font-semibold text-[var(--sera-ink)]">Recent Shipments</CardTitle>
-                                    <CardDescription className="text-[var(--sera-muted)]">Latest processed orders</CardDescription>
+                                    <CardTitle className="text-base font-semibold text-[var(--sera-ink)]">Top Buyers</CardTitle>
+                                    <CardDescription className="text-[var(--sera-muted)]">Distributors and shops by approved sales value · {periodLabel}</CardDescription>
                                 </CardHeader>
                                 <CardContent>
-                                    <div className="space-y-3">
-                                        {(data?.recentShipments || []).slice(0, 6).map((shipment: any, index: number) => (
-                                            <div key={shipment.id || index} className="flex items-center justify-between p-3 rounded-xl bg-[var(--sera-mist)] border border-[var(--sera-line)] hover:border-[var(--sera-orange)]/30 transition-colors">
-                                                <div className="flex items-center gap-3 min-w-0">
-                                                    <div className="p-2 rounded-lg bg-[var(--sera-orange)]/10 shrink-0">
-                                                        <Truck className="w-4 h-4 text-[var(--sera-orange)]" strokeWidth={1.75} />
-                                                    </div>
-                                                    <div className="min-w-0">
-                                                        <p className="text-sm font-medium text-[var(--sera-ink)] truncate">{shipment.distributor}</p>
-                                                        <p className="text-xs text-[var(--sera-muted)]">{shipment.orderNo}</p>
-                                                    </div>
-                                                </div>
-                                                <div className="text-right shrink-0 pl-3">
-                                                    <p className="text-sm font-semibold text-[var(--sera-ink)]">{shipment.units?.toLocaleString()} units</p>
-                                                    <p className="text-xs text-[var(--sera-muted)]">{format(new Date(shipment.date), 'MMM dd, HH:mm')}</p>
-                                                </div>
-                                            </div>
-                                        ))}
-                                        {(!data?.recentShipments || data.recentShipments.length === 0) && (
-                                            <div className="text-center py-8 text-[var(--sera-muted)]">
-                                                <BoxIcon className="w-12 h-12 mx-auto mb-3 opacity-40" />
-                                                <p>No recent shipments</p>
-                                            </div>
-                                        )}
+                                    {(report?.topBuyers.length ?? 0) === 0 ? (
+                                        <div className="flex h-[300px] items-center justify-center text-sm text-[var(--sera-muted)]">No approved sales this month</div>
+                                    ) : (
+                                    <div className="h-[300px]">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <BarChart data={report?.topBuyers.slice(0, 5) ?? []} layout="vertical" margin={{ left: 20 }}>
+                                                <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke={chartGridColor} />
+                                                <XAxis type="number" hide />
+                                                <YAxis dataKey="name" type="category" width={110} tick={{ fontSize: 12, fill: chartTickColor }} tickLine={false} axisLine={false} />
+                                                <Tooltip cursor={{ fill: 'transparent' }} contentStyle={tooltipStyle} formatter={(value: number) => [formatRm(value), 'Approved sales']} />
+                                                <Bar dataKey="value" radius={[0, 8, 8, 0]} barSize={24}>
+                                                    {(report?.topBuyers.slice(0, 5) ?? []).map((entry, index) => (
+                                                        <Cell key={entry.buyerId} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                                                    ))}
+                                                </Bar>
+                                            </BarChart>
+                                        </ResponsiveContainer>
                                     </div>
+                                    )}
                                 </CardContent>
                             </Card>
                         </div>
+
+                        <Card className="border border-[var(--sera-line)] shadow-none bg-white">
+                            <CardHeader>
+                                <CardTitle className="text-base font-semibold text-[var(--sera-ink)]">Latest Approved Sales Orders</CardTitle>
+                                <CardDescription className="text-[var(--sera-muted)]">Most recent by SO date in {periodLabel}</CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="space-y-3">
+                                    {(report?.recentOrders ?? []).slice(0, 6).map((order) => (
+                                        <div key={order.id} className="flex items-center justify-between p-3 rounded-xl bg-[var(--sera-mist)] border border-[var(--sera-line)] hover:border-[var(--sera-orange)]/30 transition-colors">
+                                            <div className="flex items-center gap-3 min-w-0">
+                                                <div className="p-2 rounded-lg bg-[var(--sera-orange)]/10 shrink-0">
+                                                    <Truck className="w-4 h-4 text-[var(--sera-orange)]" strokeWidth={1.75} />
+                                                </div>
+                                                <div className="min-w-0">
+                                                    <p className="text-sm font-medium text-[var(--sera-ink)] truncate">{order.buyerName}</p>
+                                                    <p className="text-xs text-[var(--sera-muted)]">{order.orderNo} · {order.orderType} · {STATUS_LABEL[order.status] ?? order.status}</p>
+                                                </div>
+                                            </div>
+                                            <div className="text-right shrink-0 pl-3">
+                                                <p className="text-sm font-semibold text-[var(--sera-ink)]">{formatRm(order.value)}</p>
+                                                <p className="text-xs text-[var(--sera-muted)]">{order.units.toLocaleString()} units · {formatReportDate(order.orderDate)}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {(report?.recentOrders.length ?? 0) === 0 && (
+                                        <div className="text-center py-8 text-[var(--sera-muted)]">
+                                            <BoxIcon className="w-12 h-12 mx-auto mb-3 opacity-40" />
+                                            <p>No approved sales orders this month</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </CardContent>
+                        </Card>
+                        </>
+                        )}
+                        <ExecutiveOverviewDrilldownDialog target={drilldown} month={month} onTargetChange={setDrilldown} />
                     </TabsContent>
 
                     {/* Operations Tab */}
@@ -832,81 +848,76 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                             chartGridColor={chartGridColor}
                             chartTickColor={chartTickColor}
                             isDark={isDark}
+                            {...monthTabs}
                         />
                     </TabsContent>
 
-                    {/* Finance Tab */}
+                    {/* Finance Tab — the Overview report's sales figures plus the month's finance documents */}
                     <TabsContent value="finance" className="space-y-6 animate-in fade-in-50 duration-500">
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        {sectionHeader('Finance', 'Approved sales and finance documents for the reporting month')}
+                        {errorBanner}
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                             <MetricCard
                                 title="Approved Sales Value"
-                                value={financialMetrics?.totalRevenue || 0}
+                                value={summary?.approvedSalesValue ?? 0}
                                 icon={DollarSign}
                                 color={COLORS.success}
-                                subtitle="latest 50 approved sales orders"
-                                loading={!financialMetrics}
+                                subtitle={`${summary?.approvedSalesOrders ?? 0} approved D2H/S2D orders · ${periodLabel}`}
+                                loading={loading || !report}
+                                {...changeProps(comparison?.approvedSalesValue)}
                             />
                             <MetricCard
                                 title="Pending Payments"
-                                value={financialMetrics?.pendingPayments || 0}
+                                value={docs?.pendingPayments ?? 0}
                                 icon={Clock}
                                 color={COLORS.warning}
-                                subtitle="awaiting approval"
-                                loading={!financialMetrics}
+                                subtitle="payment requests raised this month, still pending"
+                                loading={!docs}
                             />
                             <MetricCard
                                 title="Completed Payments"
-                                value={financialMetrics?.completedPayments || 0}
+                                value={docs?.completedPayments ?? 0}
                                 icon={CheckCircle2}
                                 color={COLORS.success}
-                                subtitle="processed"
-                                loading={!financialMetrics}
+                                subtitle="payments raised this month, acknowledged"
+                                loading={!docs}
                             />
                             <MetricCard
                                 title="Invoices Issued"
-                                value={financialMetrics?.invoiceCount || 0}
+                                value={docs?.invoiceCount ?? 0}
                                 icon={Receipt}
                                 color={COLORS.ink}
-                                subtitle="total"
-                                loading={!financialMetrics}
+                                subtitle={`invoice documents created in ${periodLabel || 'the month'}`}
+                                loading={!docs}
                             />
                         </div>
+                        <p className="text-xs text-[var(--sera-muted)]">
+                            Document counts cover documents created in the reporting month (Malaysia time); their pending / acknowledged status is the current status.
+                        </p>
 
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                            {/* Revenue Breakdown */}
+                            {/* Sales vs purchases — real order values for the month, never a placeholder split */}
                             <Card className="border border-[var(--sera-line)] shadow-none bg-white">
                                 <CardHeader>
-                                    <CardTitle className="text-base font-semibold text-[var(--sera-ink)]">Revenue by Account Type</CardTitle>
-                                    <CardDescription className="text-[var(--sera-muted)]">Distribution across GL accounts</CardDescription>
+                                    <CardTitle className="text-base font-semibold text-[var(--sera-ink)]">Sales &amp; Purchases by Order Type</CardTitle>
+                                    <CardDescription className="text-[var(--sera-muted)]">Approved order value · {periodLabel} · H2M is a purchase, not a sale</CardDescription>
                                 </CardHeader>
                                 <CardContent>
-                                    <div className="h-[300px] flex items-center justify-center">
+                                    <div className="h-[300px]">
                                         <ResponsiveContainer width="100%" height="100%">
-                                            <RadialBarChart
-                                                cx="50%"
-                                                cy="50%"
-                                                innerRadius="30%"
-                                                outerRadius="100%"
-                                                data={[
-                                                    { name: 'Sales Revenue', value: 85, fill: COLORS.success },
-                                                    { name: 'Other Income', value: 15, fill: COLORS.primary },
-                                                ]}
-                                                startAngle={180}
-                                                endAngle={0}
-                                            >
-                                                <RadialBar
-                                                    background
-                                                    dataKey="value"
-                                                    cornerRadius={10}
-                                                />
-                                                <Legend
-                                                    iconType="circle"
-                                                    layout="horizontal"
-                                                    verticalAlign="bottom"
-                                                    wrapperStyle={{ paddingTop: '20px' }}
-                                                />
-                                                <Tooltip />
-                                            </RadialBarChart>
+                                            <BarChart data={summary ? [
+                                                { name: 'D2H sales', value: summary.distributorSalesValue, fill: COLORS.success },
+                                                { name: 'S2D sales', value: summary.shopSalesValue, fill: COLORS.primary },
+                                                { name: 'H2M purchases', value: summary.purchaseValue, fill: COLORS.slate },
+                                            ] : []}>
+                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={chartGridColor} />
+                                                <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} />
+                                                <YAxis tickLine={false} axisLine={false} tick={{ fill: chartTickColor, fontSize: 12 }} tickFormatter={(value) => value.toLocaleString('en-MY')} />
+                                                <Tooltip cursor={{ fill: 'transparent' }} contentStyle={tooltipStyle} formatter={(value: number) => [formatRm(value), 'Value']} />
+                                                <Bar dataKey="value" radius={[8, 8, 0, 0]} barSize={48}>
+                                                    {[COLORS.success, COLORS.primary, COLORS.slate].map((fill) => <Cell key={fill} fill={fill} />)}
+                                                </Bar>
+                                            </BarChart>
                                         </ResponsiveContainer>
                                     </div>
                                 </CardContent>
@@ -916,31 +927,31 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                             <Card className="border border-[var(--sera-line)] shadow-none bg-white">
                                 <CardHeader>
                                     <CardTitle className="text-base font-semibold text-[var(--sera-ink)]">Payment Status Overview</CardTitle>
-                                    <CardDescription className="text-[var(--sera-muted)]">Current payment pipeline</CardDescription>
+                                    <CardDescription className="text-[var(--sera-muted)]">Documents raised in {periodLabel || 'the month'}</CardDescription>
                                 </CardHeader>
                                 <CardContent>
                                     <div className="space-y-4">
                                         {[
-                                            { label: 'Approved & Collected', value: financialMetrics?.completedPayments || 0, total: 100, color: COLORS.success },
-                                            { label: 'Pending Approval', value: financialMetrics?.pendingPayments || 0, total: 100, color: COLORS.warning },
-                                            { label: 'Invoices Pending', value: Math.max(0, (financialMetrics?.invoiceCount || 0) - (financialMetrics?.completedPayments || 0)), total: 100, color: COLORS.primary },
-                                        ].map((item, index) => (
-                                            <div key={index} className="space-y-2">
-                                                <div className="flex justify-between text-sm">
-                                                    <span className="text-[var(--sera-muted)]">{item.label}</span>
-                                                    <span className="font-semibold text-[var(--sera-ink)]">{item.value}</span>
+                                            { label: 'Payments acknowledged', value: docs?.completedPayments ?? 0, color: COLORS.success },
+                                            { label: 'Payment requests pending', value: docs?.pendingPayments ?? 0, color: COLORS.warning },
+                                            { label: 'Invoices without an acknowledged payment', value: Math.max(0, (docs?.invoiceCount ?? 0) - (docs?.completedPayments ?? 0)), color: COLORS.primary },
+                                        ].map((item) => {
+                                            const total = Math.max(docs?.invoiceCount ?? 0, docs?.completedPayments ?? 0, docs?.pendingPayments ?? 0, 1)
+                                            return (
+                                                <div key={item.label} className="space-y-2">
+                                                    <div className="flex justify-between text-sm">
+                                                        <span className="text-[var(--sera-muted)]">{item.label}</span>
+                                                        <span className="font-semibold text-[var(--sera-ink)]">{item.value}</span>
+                                                    </div>
+                                                    <div className="h-2 bg-[var(--sera-mist)] rounded-full overflow-hidden">
+                                                        <div
+                                                            className="h-full rounded-full transition-all duration-1000 ease-out"
+                                                            style={{ width: `${Math.min((item.value / total) * 100, 100)}%`, backgroundColor: item.color }}
+                                                        />
+                                                    </div>
                                                 </div>
-                                                <div className="h-2 bg-[var(--sera-mist)] rounded-full overflow-hidden">
-                                                    <div
-                                                        className="h-full rounded-full transition-all duration-1000 ease-out"
-                                                        style={{
-                                                            width: `${Math.min((item.value / Math.max(item.total, 1)) * 100, 100)}%`,
-                                                            backgroundColor: item.color
-                                                        }}
-                                                    />
-                                                </div>
-                                            </div>
-                                        ))}
+                                            )
+                                        })}
                                     </div>
 
                                     <div className="mt-6 p-4 rounded-xl border border-[var(--sera-line)] bg-[var(--sera-mist)]">
@@ -951,10 +962,9 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                                             <div>
                                                 <p className="text-sm font-medium text-[var(--sera-ink)]">Collection Rate</p>
                                                 <p className="font-display text-2xl font-semibold text-[var(--sera-ink)]">
-                                                    {financialMetrics?.invoiceCount
-                                                        ? Math.round((financialMetrics.completedPayments / financialMetrics.invoiceCount) * 100)
-                                                        : 0}%
+                                                    {docs?.invoiceCount ? `${Math.round((docs.completedPayments / docs.invoiceCount) * 100)}%` : '—'}
                                                 </p>
+                                                <p className="text-xs text-[var(--sera-muted)]">acknowledged payments ÷ invoices raised this month</p>
                                             </div>
                                         </div>
                                     </div>
@@ -970,6 +980,7 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                             chartGridColor={chartGridColor}
                             chartTickColor={chartTickColor}
                             isDark={isDark}
+                            {...monthTabs}
                         />
                     </TabsContent>
 
@@ -980,6 +991,7 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                             chartGridColor={chartGridColor}
                             chartTickColor={chartTickColor}
                             isDark={isDark}
+                            {...monthTabs}
                         />
                     </TabsContent>
 
@@ -990,6 +1002,7 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                             chartGridColor={chartGridColor}
                             chartTickColor={chartTickColor}
                             isDark={isDark}
+                            {...monthTabs}
                         />
                     </TabsContent>
 
@@ -1000,6 +1013,7 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
                             chartGridColor={chartGridColor}
                             chartTickColor={chartTickColor}
                             isDark={isDark}
+                            {...monthTabs}
                         />
                     </TabsContent>
                     {commissionAccess.can('reporting.commission.view') && (
@@ -1011,7 +1025,7 @@ export default function ReportingView({ userProfile }: ReportingViewProps) {
 
                 {/* Footer */}
                 <div className="text-center text-xs text-[var(--sera-muted)] pt-4 border-t border-[var(--sera-line)]">
-                    <p>Last updated: {format(new Date(), 'MMMM dd, yyyy HH:mm:ss')} • Data refreshes automatically</p>
+                    <p>All reports use the selected Reporting Month in Malaysia time (Asia/Kuala_Lumpur).</p>
                 </div>
         </div>
     )

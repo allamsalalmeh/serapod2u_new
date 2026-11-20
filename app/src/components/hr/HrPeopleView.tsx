@@ -21,13 +21,21 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import {
     Search, Users, UserCheck, Building2, Briefcase, Pencil, Check, X,
-    Plus, Copy, Loader2, Eye, Save, ChevronRight, Camera, UserPlus, AlertTriangle, ArrowLeft
+    Plus, Copy, Loader2, Eye, Save, ChevronRight, Camera, UserPlus, AlertTriangle, ArrowLeft,
+    MoreHorizontal, Trash2, RotateCcw, ShieldCheck, UserMinus, Archive, Unlock
 } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { listDepartments } from '@/lib/actions/departments'
 import { fetchHrPositions, updateUserHr } from '@/lib/api/hr'
 import { compressAvatar } from '@/lib/utils/imageCompression'
 import EmployeeCommissionPanel from '@/components/hr/commission/EmployeeCommissionPanel'
 import { useCommissionAccess } from '@/lib/hr/commission/use-commission-access'
+import PermanentDeleteDialog from '@/components/identity/PermanentDeleteDialog'
+import ArchiveIdentityDialog, { type ArchiveMode } from '@/components/identity/ArchiveIdentityDialog'
+import BulkRemovalDialog from '@/components/identity/BulkRemovalDialog'
+import EmploymentHistoryPanel from '@/components/hr/people/EmploymentHistoryPanel'
+import ReportingLinesReviewDialog from '@/components/hr/people/ReportingLinesReviewDialog'
+import { WORK_STATES } from '@/lib/hr/employment-messages'
 
 interface HrPeopleViewProps {
     organizationId: string
@@ -54,7 +62,45 @@ interface HrUserRow {
     /** HR registration state of the employment record in this organization. */
     onboarding_status: 'pending' | 'completed' | 'reset' | null
     hire_date: string | null
+    /** Account lifecycle: ARCHIVED = former employee (Archive & Revoke Access); never an onboarding state. */
+    account_status: string | null
+    /** Employment record status and end date (resigned / terminated for former employees). */
+    employment_status: string | null
+    end_date: string | null
+    /** When the account reached its current status (the archive date for a former employee). */
+    account_status_changed_at: string | null
 }
+
+type EmployeeCategory = 'completed' | 'awaiting' | 'former'
+
+/**
+ * One lifecycle classification for the tab counts AND the tab lists. Every row is an employment record of this
+ * organization (the query joins hr_employees), so permanently deleted people (no identity, no record) never appear.
+ *   former    account ARCHIVED (Archive & Revoke Access) — whatever its onboarding or employment state
+ *   completed HR registration completed (any non-archived account status; Suspended/Disabled stay current employees)
+ *   awaiting  HR registration pending or reset
+ * Onboarding "reset", is_active=false and employment "terminated" are NOT "former" on their own.
+ */
+export function employeeCategory(u: Pick<HrUserRow, 'account_status' | 'onboarding_status'>): EmployeeCategory {
+    if (u.account_status === 'ARCHIVED') return 'former'
+    return u.onboarding_status === 'completed' ? 'completed' : 'awaiting'
+}
+
+type RegistrationAction = 'delete' | 'reset'
+
+/** Server-side eligibility preview (GET /api/hr/employees/registration?user_id=…). */
+interface RegistrationPreview {
+    employee: { user_id: string; full_name: string | null; employee_no: number | null; onboarding_status: 'pending' | 'completed' | 'reset' }
+    phase: 'pre_go_live' | 'live'
+    categories: Record<string, number>
+    kept: { login: boolean; access_assignments: number; employee_no: number | null }
+    blockers: Record<RegistrationAction, Array<{ code: string; message?: string }>>
+    delete_allowed: boolean
+    reset_allowed: boolean
+    preview_token: string
+}
+
+const formatEmployeeNo = (no: number | null | undefined) => (no ? `EMP-${String(no).padStart(4, '0')}` : 'No employee number')
 
 interface OnboardingCandidate {
     found: boolean
@@ -103,6 +149,7 @@ interface HrProfileData {
     socso_number?: string | null
     epf_number?: string | null
     eis_number?: string | null
+    work_state?: string | null
     personal_email?: string | null
     personal_phone?: string | null
     address_line1?: string | null
@@ -156,7 +203,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     const [addDialogOpen, setAddDialogOpen] = useState(false)
     const [addLoading, setAddLoading] = useState(false)
     const [statusFilter, setStatusFilter] = useState('active')
-    const [onboardingView, setOnboardingView] = useState<'completed' | 'awaiting'>('completed')
+    const [onboardingView, setOnboardingView] = useState<'completed' | 'awaiting' | 'former'>('completed')
     const [onboardingSupported, setOnboardingSupported] = useState(true)
     const [addStep, setAddStep] = useState<'find' | 'details' | 'done'>('find')
     const [nameQuery, setNameQuery] = useState('')
@@ -181,15 +228,39 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     // HR Profile sheet state
     const [profileOpen, setProfileOpen] = useState(false)
     const [profileUser, setProfileUser] = useState<HrUserRow | null>(null)
+    // A former employee's record is historical: viewable, never edited from here.
+    const profileEditable = canEdit && profileUser?.account_status !== 'ARCHIVED'
     const [profileData, setProfileData] = useState<HrProfileData>({})
     const [profileLoading, setProfileLoading] = useState(false)
     const [profileSaving, setProfileSaving] = useState(false)
     const [profileTab, setProfileTab] = useState('personal')
+    // What the database allows the caller to edit on this profile (Wave 2: explicit HR; statutory details by HR only).
+    const [profilePerms, setProfilePerms] = useState<{ can_edit_statutory?: boolean; can_edit_all_personal?: boolean } | null>(null)
+    const [reportingCheckOpen, setReportingCheckOpen] = useState(false)
     // Sales Commission is compensation data: the tab exists only for people granted commission access (decided by the
     // database, re-checked by every commission API).
     const commissionAccess = useCommissionAccess()
     const showCommissionTab = commissionAccess.can('hr.commission.view')
     const [avatarUploading, setAvatarUploading] = useState(false)
+
+    // Delete Employee / Reset HR Registration (one employee; the database decides and audits).
+    const [registrationAllowed, setRegistrationAllowed] = useState(false)
+    const [rowMenuUserId, setRowMenuUserId] = useState<string | null>(null)
+    const [regTarget, setRegTarget] = useState<{ user: HrUserRow; action: RegistrationAction } | null>(null)
+    const [regPreview, setRegPreview] = useState<RegistrationPreview | null>(null)
+    const [regLoading, setRegLoading] = useState(false)
+    const [regSubmitting, setRegSubmitting] = useState(false)
+    const [regReason, setRegReason] = useState('')
+    const [regConfirmed, setRegConfirmed] = useState(false)
+    const [regError, setRegError] = useState<string | null>(null)
+    const [regRequestId, setRegRequestId] = useState('')
+    // Delete Employee Permanently: the canonical identity deletion shared with User Management.
+    const [permanentDeleteAllowed, setPermanentDeleteAllowed] = useState(false)
+    const [permanentTarget, setPermanentTarget] = useState<{ id: string; name: string } | null>(null)
+    // Archive & Revoke Access / Release Email & Phone (same backend and authority as permanent deletion).
+    const [archiveTarget, setArchiveTarget] = useState<{ id: string; name: string; mode: ArchiveMode } | null>(null)
+    // Bulk removal: the same per-identity deletion/archival services, reviewed and confirmed as a batch.
+    const [bulkRemovalOpen, setBulkRemovalOpen] = useState(false)
     const avatarInputRef = useRef<HTMLInputElement>(null)
 
     const loadUsers = async () => {
@@ -204,6 +275,8 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 avatar_url,
                 role_code,
                 is_active,
+                account_status,
+                account_status_changed_at,
                 department_id,
                 manager_user_id,
                 position_id,
@@ -216,7 +289,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         let { data, error } = await (supabase as any)
             .from('users')
             .select(`${baseColumns},
-                hr_employees!hr_employees_user_id_fkey!inner (organization_id, onboarding_status, hire_date, hire_date_confirmed)`)
+                hr_employees!hr_employees_user_id_fkey!inner (organization_id, onboarding_status, hire_date, hire_date_confirmed, status, end_date)`)
             .eq('organization_id', organizationId)
             .eq('hr_employees.organization_id', organizationId)
             .order('full_name', { ascending: true })
@@ -278,6 +351,10 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 onboarding_status: onboardingAvailable ? (employment?.onboarding_status ?? null) : 'completed',
                 // A login creation date is never shown as a confirmed hire date.
                 hire_date: employment?.hire_date_confirmed ? employment.hire_date : null,
+                account_status: u.account_status ?? null,
+                employment_status: employment?.status ?? null,
+                end_date: employment?.end_date ?? null,
+                account_status_changed_at: u.account_status_changed_at ?? null,
             } as HrUserRow
         })
 
@@ -303,15 +380,113 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isReady, organizationId])
 
+    // Only shows the menu entries; every preview and execution is authorized again on the server and in the database.
+    useEffect(() => {
+        if (!isReady) return
+        let cancelled = false
+        fetch('/api/hr/employees/registration')
+            .then(res => res.json())
+            .then(json => { if (!cancelled) setRegistrationAllowed(!!json?.success && !!json.data?.permission) })
+            .catch(() => { if (!cancelled) setRegistrationAllowed(false) })
+        fetch('/api/identity/permanent-delete?entry=hr')
+            .then(res => res.json())
+            .then(json => { if (!cancelled) setPermanentDeleteAllowed(!!json?.success && !!json.data?.permission) })
+            .catch(() => { if (!cancelled) setPermanentDeleteAllowed(false) })
+        return () => { cancelled = true }
+    }, [isReady, organizationId])
+
+    const loadRegistrationPreview = async (userId: string) => {
+        setRegLoading(true)
+        setRegError(null)
+        try {
+            const res = await fetch(`/api/hr/employees/registration?user_id=${encodeURIComponent(userId)}`)
+            const json = await res.json()
+            if (!res.ok || !json.success) {
+                setRegPreview(null)
+                setRegError(json.error || 'The eligibility check failed.')
+            } else {
+                setRegPreview(json.data as RegistrationPreview)
+            }
+        } catch (err: any) {
+            setRegPreview(null)
+            setRegError(err.message || 'The eligibility check failed.')
+        } finally {
+            setRegLoading(false)
+        }
+    }
+
+    const openRegistrationAction = (user: HrUserRow, action: RegistrationAction) => {
+        setRegTarget({ user, action })
+        setRegPreview(null)
+        setRegReason('')
+        setRegConfirmed(false)
+        setRegRequestId(globalThis.crypto?.randomUUID?.() ?? '')
+        loadRegistrationPreview(user.id)
+    }
+
+    const switchRegistrationAction = (action: RegistrationAction) => {
+        if (!regTarget) return
+        setRegTarget({ ...regTarget, action })
+        setRegConfirmed(false)
+        setRegRequestId(globalThis.crypto?.randomUUID?.() ?? '')
+    }
+
+    const closeRegistrationDialog = () => {
+        if (regSubmitting) return
+        setRegTarget(null)
+        setRegPreview(null)
+        setRegError(null)
+    }
+
+    const submitRegistrationAction = async () => {
+        if (!regTarget || !regPreview || !regRequestId) return
+        const { user, action } = regTarget
+        setRegSubmitting(true)
+        setRegError(null)
+        try {
+            const res = await fetch('/api/hr/employees/registration', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: user.id, action, request_id: regRequestId, preview_token: regPreview.preview_token, reason: regReason.trim() }),
+            })
+            const json = await res.json()
+            if (res.ok && json.success && json.data?.status === 'completed') {
+                toast({
+                    title: action === 'delete' ? 'HR registration removed' : 'HR registration reset',
+                    description: `${user.full_name || 'The employee'} (${formatEmployeeNo(json.data.employee_no ?? user.employee_no)}) is now awaiting onboarding. Login, access and employee number are unchanged.`,
+                })
+                setRegTarget(null)
+                setRegPreview(null)
+                await loadUsers()
+                return
+            }
+            if (json.code === 'BLOCKED' || json.code === 'PREVIEW_STALE') {
+                // Show the current state: the server re-checked and refused.
+                setRegRequestId(globalThis.crypto?.randomUUID?.() ?? '')
+                setRegConfirmed(false)
+                await loadRegistrationPreview(user.id)
+            }
+            setRegError(json.error || 'Nothing was changed.')
+            toast({ title: 'Not changed', description: json.error || 'Nothing was changed.', variant: 'destructive' })
+        } catch (err: any) {
+            setRegError(err.message || 'Nothing was changed.')
+            toast({ title: 'Error', description: err.message || 'Nothing was changed.', variant: 'destructive' })
+        } finally {
+            setRegSubmitting(false)
+        }
+    }
+
     const filteredUsers = useMemo(() => {
         const query = searchQuery.trim().toLowerCase()
         return users.filter(u => {
-            const onboarded = u.onboarding_status === 'completed'
-            if (onboardingView === 'completed' ? !onboarded : onboarded) return false
+            // The tab decides the lifecycle population (same rule as the tab counts).
+            if (employeeCategory(u) !== onboardingView) return false
             if (departmentFilter !== 'all' && u.department_id !== departmentFilter) return false
-            // Status filter
-            if (statusFilter === 'active' && !u.is_active) return false
-            if (statusFilter === 'inactive' && u.is_active) return false
+            // Account status filter: current employees only (every former employee is inactive by definition).
+            if (onboardingView !== 'former') {
+                if (statusFilter === 'active' && !u.is_active) return false
+                if (statusFilter === 'inactive' && u.is_active) return false
+            }
             if (!query) return true
             return (
                 (u.full_name || '').toLowerCase().includes(query) ||
@@ -321,8 +496,24 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         })
     }, [users, searchQuery, departmentFilter, statusFilter, onboardingView])
 
-    const awaitingCount = useMemo(() => users.filter(u => u.onboarding_status !== 'completed').length, [users])
-    const onboardedUsers = useMemo(() => users.filter(u => u.onboarding_status === 'completed'), [users])
+    const categoryCounts = useMemo(() => {
+        const counts: Record<EmployeeCategory, number> = { completed: 0, awaiting: 0, former: 0 }
+        users.forEach(u => { counts[employeeCategory(u)] += 1 })
+        return counts
+    }, [users])
+    const awaitingCount = categoryCounts.awaiting
+    const formerCount = categoryCounts.former
+    const onboardedUsers = useMemo(() => users.filter(u => employeeCategory(u) === 'completed'), [users])
+    const tabTotal = categoryCounts[onboardingView]
+    // Current employees only: never offer a former employee as a manager.
+    const currentUsers = useMemo(() => users.filter(u => employeeCategory(u) !== 'former'), [users])
+    const switchView = (view: EmployeeCategory) => {
+        setOnboardingView(view)
+        setSelectedUsers(new Set())
+        // The status filter belongs to current employees; a new tab starts from its default (search/department kept).
+        setStatusFilter('active')
+        setEditingUserId(null)
+    }
 
     const departmentById = useMemo(() => {
         const map = new Map<string, { id: string; dept_name: string; dept_code: string | null }>()
@@ -337,12 +528,42 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         return `${dept.dept_code ? `${dept.dept_code} - ` : ''}${dept.dept_name}`
     }
 
+    // Rows the existing checkboxes can select: the current tab, search, department and status filter.
+    // There is no pagination on this list, so "select all" means every selectable row in the current filtered list.
+    const selectableUsers = useMemo(() => filteredUsers.filter(u => employeeCategory(u) !== 'former'), [filteredUsers])
+    const allVisibleSelected = selectableUsers.length > 0 && selectableUsers.every(u => selectedUsers.has(u.id))
+    const someVisibleSelected = !allVisibleSelected && selectableUsers.some(u => selectedUsers.has(u.id))
+    const selectedTargets = useMemo(
+        () => users
+            .filter(u => selectedUsers.has(u.id))
+            .map(u => ({ id: u.id, name: u.full_name || u.email, employeeNo: u.employee_no })),
+        [users, selectedUsers],
+    )
+
+    const clearSelection = () => setSelectedUsers(new Set())
+
+    const handleBulkRemovalCompleted = async (result: {
+        outcomes: Array<{ userId: string; name: string; outcome: string }>
+    }) => {
+        // Completed identities leave the selection and the working lists; blocked/failed stay selected and visible.
+        const finished = result.outcomes
+            .filter(outcome => outcome.outcome === 'deleted' || outcome.outcome === 'archived')
+            .map(outcome => outcome.userId)
+        setSelectedUsers(previous => {
+            const next = new Set(previous)
+            finished.forEach(id => next.delete(id))
+            return next
+        })
+        // Counts (Onboarded / Awaiting onboarding / Former) and every row come from the database again.
+        await loadUsers()
+    }
+
     const toggleSelectAll = (checked: boolean) => {
         if (!checked) {
             setSelectedUsers(new Set())
             return
         }
-        setSelectedUsers(new Set(filteredUsers.map(u => u.id)))
+        setSelectedUsers(new Set(selectableUsers.map(u => u.id)))
     }
 
     const toggleSelectUser = (userId: string, checked: boolean) => {
@@ -550,6 +771,12 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         setAddLoading(false)
     }
 
+    const statutoryEditable = profileEditable && profilePerms?.can_edit_statutory !== false
+    const activeManagerOptions = useMemo(
+        () => users.filter(u => u.account_status !== 'ARCHIVED' && u.is_active).map(u => ({ id: u.id, name: u.full_name || u.email })),
+        [users],
+    )
+
     // Open HR profile sheet
     const openProfile = async (user: HrUserRow) => {
         setProfileUser(user)
@@ -559,6 +786,10 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
         try {
             const res = await fetch(`/api/hr/employees/profile?user_id=${user.id}`)
             const json = await res.json()
+            setProfilePerms(json.success ? (json.data?.permissions ?? null) : null)
+            if (!json.success) {
+                toast({ title: 'Profile not available', description: json.error || 'The profile could not be loaded.', variant: 'destructive' })
+            }
             if (json.success && json.data?.profile) {
                 setProfileData(json.data.profile)
             } else {
@@ -571,7 +802,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
     }
 
     const saveProfile = async () => {
-        if (!profileUser) return
+        if (!profileUser || !profileEditable) return
         setProfileSaving(true)
         try {
             const res = await fetch('/api/hr/employees/profile', {
@@ -583,7 +814,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
             if (json.success) {
                 toast({ title: 'Profile saved' })
             } else {
-                toast({ title: 'Error', description: json.error, variant: 'destructive' })
+                toast({ title: 'Profile not saved', description: json.error || 'The profile could not be saved.', variant: 'destructive' })
             }
         } catch (err: any) {
             toast({ title: 'Error', description: err.message, variant: 'destructive' })
@@ -593,7 +824,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
 
     const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
-        if (!file || !profileUser) return
+        if (!file || !profileUser || !profileEditable) return
         setAvatarUploading(true)
         try {
             const compressed = await compressAvatar(file)
@@ -642,12 +873,17 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                         <CardTitle className="text-base font-semibold">People</CardTitle>
-                        <CardDescription className="text-xs">Employees and reporting lines • {filteredUsers.length} of {users.length}</CardDescription>
+                        <CardDescription className="text-xs">Employees and reporting lines • {filteredUsers.length === tabTotal ? `${tabTotal} shown` : `${filteredUsers.length} of ${tabTotal} shown (filtered)`}</CardDescription>
                     </div>
                     {canEdit && (
-                        <Button size="sm" className="w-full sm:w-auto shrink-0" onClick={() => { resetAddForm(); setAddDialogOpen(true) }}>
-                            <Plus className="h-4 w-4 mr-1" /> Add Employee
-                        </Button>
+                        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                            <Button size="sm" variant="outline" className="w-full sm:w-auto shrink-0" onClick={() => setReportingCheckOpen(true)}>
+                                <AlertTriangle className="h-4 w-4 mr-1" /> Reporting-line check
+                            </Button>
+                            <Button size="sm" className="w-full sm:w-auto shrink-0" onClick={() => { resetAddForm(); setAddDialogOpen(true) }}>
+                                <Plus className="h-4 w-4 mr-1" /> Add Employee
+                            </Button>
+                        </div>
                     )}
                 </div>
             </CardHeader>
@@ -657,11 +893,12 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                         {([
                             { id: 'completed', label: 'Onboarded', count: onboardedUsers.length },
                             { id: 'awaiting', label: 'Awaiting onboarding', count: awaitingCount },
+                            { id: 'former', label: 'Former employees', count: formerCount },
                         ] as const).map(tab => (
                             <button
                                 key={tab.id}
                                 type="button"
-                                onClick={() => { setOnboardingView(tab.id); setSelectedUsers(new Set()) }}
+                                onClick={() => switchView(tab.id)}
                                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${onboardingView === tab.id
                                     ? 'bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800'
                                     : 'text-muted-foreground hover:bg-accent hover:text-foreground'}`}
@@ -671,6 +908,11 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                             </button>
                         ))}
                     </div>
+                )}
+                {onboardingSupported && onboardingView === 'former' && (
+                    <p className="text-xs text-muted-foreground">
+                        Archived accounts: their sign-in and access were revoked. Employee number, employment history and every record they created are kept under their original ID.
+                    </p>
                 )}
                 {onboardingSupported && onboardingView === 'awaiting' && (
                     <p className="text-xs text-muted-foreground">
@@ -703,24 +945,32 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     ))}
                                 </SelectContent>
                             </Select>
-                            <Select value={statusFilter} onValueChange={setStatusFilter}>
-                                <SelectTrigger className="w-full sm:w-[160px]">
-                                    <SelectValue placeholder="Status" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Status</SelectItem>
-                                    <SelectItem value="active">Active</SelectItem>
-                                    <SelectItem value="inactive">Inactive / Left</SelectItem>
-                                </SelectContent>
-                            </Select>
+                            {onboardingView !== 'former' && (
+                                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                                    <SelectTrigger className="w-full sm:w-[160px]" aria-label="Account status">
+                                        <SelectValue placeholder="Status" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Status</SelectItem>
+                                        <SelectItem value="active">Active</SelectItem>
+                                        <SelectItem value="inactive">Suspended / Disabled</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            )}
                         </>
                     )}
                 </div>
 
                 {selectedUsers.size > 0 && (
-                    <div className="flex flex-col lg:flex-row lg:items-center gap-3 p-3 border rounded-md bg-blue-50">
-                        <div className="text-sm font-medium text-blue-900">
-                            {selectedUsers.size} selected
+                    <div data-testid="bulk-actions" className="flex flex-col lg:flex-row lg:items-center gap-3 p-3 border rounded-md bg-blue-50">
+                        <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-blue-900">
+                            <span>{selectedUsers.size} {selectedUsers.size === 1 ? 'employee' : 'employees'} selected</span>
+                            <button type="button" onClick={clearSelection} className="text-xs font-medium text-blue-700 underline underline-offset-2 hover:text-blue-900">
+                                Clear selection
+                            </button>
+                            <Button size="sm" variant="destructive" onClick={() => setBulkRemovalOpen(true)}>
+                                <Trash2 className="h-3.5 w-3.5 mr-1" /> Remove Selected
+                            </Button>
                         </div>
                         <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-end gap-3 w-full">
                             <div className="space-y-1 w-full sm:w-auto">
@@ -766,7 +1016,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <SelectContent>
                                         <SelectItem value="none">No change</SelectItem>
                                         <SelectItem value="clear">Set as top leader</SelectItem>
-                                        {users.map(user => (
+                                        {currentUsers.map(user => (
                                             <SelectItem key={user.id} value={user.id}>
                                                 {user.full_name || user.email}
                                             </SelectItem>
@@ -788,8 +1038,11 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                         <div className="grid grid-cols-[40px_1fr_1fr_1fr_1fr_100px_90px_80px_40px] gap-2 px-4 py-2 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wide min-w-[1100px]">
                             <div>
                                 <Checkbox
-                                    checked={selectedUsers.size > 0 && selectedUsers.size === filteredUsers.length}
+                                    checked={allVisibleSelected}
+                                    indeterminate={someVisibleSelected}
                                     onCheckedChange={(checked) => toggleSelectAll(checked as boolean)}
+                                    disabled={onboardingView === 'former'}
+                                    aria-label="Select all employees in the current list"
                                 />
                             </div>
                             <div>Name</div>
@@ -803,9 +1056,13 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                         </div>
                         {filteredUsers.length === 0 ? (
                             <div className="px-4 py-8 text-center text-sm text-gray-500">
-                                {onboardingView === 'awaiting'
-                                    ? 'Nobody is awaiting onboarding.'
-                                    : users.length === 0 || onboardedUsers.length === 0 ? 'No onboarded employees yet. Click "+ Add Employee" to register someone.' : 'No employees match your filters.'}
+                                {tabTotal > 0
+                                    ? (onboardingView === 'former' ? 'No former employees match the current filters.'
+                                        : onboardingView === 'awaiting' ? 'No employees awaiting onboarding match the current filters.'
+                                        : 'No onboarded employees match the current filters.')
+                                    : (onboardingView === 'former' ? 'No former employees found.'
+                                        : onboardingView === 'awaiting' ? 'No employees awaiting onboarding.'
+                                        : canEdit ? 'No onboarded employees found. Click "+ Add Employee" to register someone.' : 'No onboarded employees found.')}
                             </div>
                         ) : filteredUsers.map(user => {
                             const isEditing = editingUserId === user.id
@@ -815,6 +1072,8 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <Checkbox
                                         checked={selectedUsers.has(user.id)}
                                         onCheckedChange={(checked) => toggleSelectUser(user.id, checked as boolean)}
+                                        disabled={employeeCategory(user) === 'former'}
+                                        aria-label={`Select ${user.full_name || user.email}`}
                                     />
                                 </div>
                                 <div className="flex items-center gap-3 cursor-pointer group" onClick={() => openProfile(user)}>
@@ -881,7 +1140,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                             </SelectTrigger>
                                             <SelectContent>
                                                 <SelectItem value="none">Top leader</SelectItem>
-                                                {users.filter(u => u.id !== user.id).map(u => (
+                                                {currentUsers.filter(u => u.id !== user.id).map(u => (
                                                     <SelectItem key={u.id} value={u.id}>{u.full_name || u.email}</SelectItem>
                                                 ))}
                                             </SelectContent>
@@ -898,7 +1157,16 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                 </div>
                                 <div className="text-xs text-gray-500">{user.role_name || user.role_code}</div>
                                 <div>
-                                    {user.onboarding_status && user.onboarding_status !== 'completed' ? (
+                                    {user.account_status === 'ARCHIVED' ? (
+                                        <div className="space-y-0.5">
+                                            <Badge variant="secondary" className="text-[10px]" title={user.end_date ? `Employment ended ${user.end_date}` : undefined}>
+                                                Former{user.employment_status === 'terminated' ? ' · terminated' : user.employment_status === 'resigned' ? ' · resigned' : ''}
+                                            </Badge>
+                                            {user.account_status_changed_at && (
+                                                <div className="text-[10px] text-muted-foreground">Archived {user.account_status_changed_at.slice(0, 10)}</div>
+                                            )}
+                                        </div>
+                                    ) : user.onboarding_status && user.onboarding_status !== 'completed' ? (
                                         <Badge variant="outline" className="text-[10px] border-amber-200 text-amber-700">
                                             {user.onboarding_status === 'reset' ? 'Reset' : 'Pending'}
                                         </Badge>
@@ -909,25 +1177,71 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     )}
                                 </div>
                                 <div>
-                                    {canEdit && user.onboarding_status && user.onboarding_status !== 'completed' && !isEditing ? (
-                                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Complete HR onboarding" onClick={() => startOnboardingFor(user)}>
-                                            <UserPlus className="h-3.5 w-3.5 text-blue-600" />
-                                        </Button>
-                                    ) : canEdit && (
-                                        isEditing ? (
-                                            <div className="flex gap-0.5">
-                                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => saveInlineEdit(user.id)} disabled={savingInline}>
-                                                    <Check className="h-3.5 w-3.5 text-green-600" />
-                                                </Button>
-                                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={cancelInlineEdit}>
-                                                    <X className="h-3.5 w-3.5 text-gray-400" />
-                                                </Button>
-                                            </div>
-                                        ) : (
-                                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startInlineEdit(user)}>
-                                                <Pencil className="h-3.5 w-3.5 text-gray-400" />
+                                    {isEditing ? (
+                                        <div className="flex gap-0.5">
+                                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => saveInlineEdit(user.id)} disabled={savingInline}>
+                                                <Check className="h-3.5 w-3.5 text-green-600" />
                                             </Button>
-                                        )
+                                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={cancelInlineEdit}>
+                                                <X className="h-3.5 w-3.5 text-gray-400" />
+                                            </Button>
+                                        </div>
+                                    ) : ((user.account_status !== 'ARCHIVED' && (canEdit || (registrationAllowed && user.onboarding_status && user.onboarding_status !== 'pending')))
+                                         || (permanentDeleteAllowed && user.onboarding_status)) && (
+                                        <Popover open={rowMenuUserId === user.id} onOpenChange={(open) => setRowMenuUserId(open ? user.id : null)}>
+                                            <PopoverTrigger asChild>
+                                                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Actions for ${user.full_name || 'employee'}`}>
+                                                    <MoreHorizontal className="h-4 w-4 text-gray-500" />
+                                                </Button>
+                                            </PopoverTrigger>
+                                            <PopoverContent align="end" className="w-52 p-1">
+                                                {canEdit && user.account_status !== 'ARCHIVED' && (user.onboarding_status && user.onboarding_status !== 'completed' ? (
+                                                    <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted" onClick={() => { setRowMenuUserId(null); startOnboardingFor(user) }}>
+                                                        <UserPlus className="h-3.5 w-3.5 mr-2 text-blue-600" /> Complete onboarding
+                                                    </button>
+                                                ) : (
+                                                    <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted" onClick={() => { setRowMenuUserId(null); startInlineEdit(user) }}>
+                                                        <Pencil className="h-3.5 w-3.5 mr-2" /> Edit Employee
+                                                    </button>
+                                                ))}
+                                                {registrationAllowed && user.account_status !== 'ARCHIVED' && user.onboarding_status && user.onboarding_status !== 'pending' && (
+                                                    <>
+                                                        {canEdit && <div className="my-1 h-px bg-border" />}
+                                                        {user.onboarding_status === 'completed' && (
+                                                            <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted" onClick={() => { setRowMenuUserId(null); openRegistrationAction(user, 'reset') }}>
+                                                                <RotateCcw className="h-3.5 w-3.5 mr-2" /> Reset HR Registration
+                                                            </button>
+                                                        )}
+                                                        <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted" onClick={() => { setRowMenuUserId(null); openRegistrationAction(user, 'delete') }}>
+                                                            <UserMinus className="h-3.5 w-3.5 mr-2" /> Remove HR Registration
+                                                        </button>
+                                                    </>
+                                                )}
+                                                {/* Any onboarding state: eligibility is decided by permissions, protections and dependencies. */}
+                                                {permanentDeleteAllowed && user.onboarding_status && (
+                                                    <>
+                                                        {user.account_status !== 'ARCHIVED' && (canEdit || registrationAllowed) && <div className="my-1 h-px bg-border" />}
+                                                        {user.account_status === 'ARCHIVED' ? (
+                                                            !/@released\.invalid$/i.test(user.email) && (
+                                                                <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+                                                                    onClick={() => { setRowMenuUserId(null); setArchiveTarget({ id: user.id, name: user.full_name || user.email, mode: 'release' }) }}>
+                                                                    <Unlock className="h-3.5 w-3.5 mr-2" /> Release Email &amp; Phone
+                                                                </button>
+                                                            )
+                                                        ) : (
+                                                            <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+                                                                onClick={() => { setRowMenuUserId(null); setArchiveTarget({ id: user.id, name: user.full_name || user.email, mode: 'archive' }) }}>
+                                                                <Archive className="h-3.5 w-3.5 mr-2" /> Archive &amp; Revoke Access
+                                                            </button>
+                                                        )}
+                                                        <button type="button" className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-muted text-red-600"
+                                                            onClick={() => { setRowMenuUserId(null); setPermanentTarget({ id: user.id, name: user.full_name || user.email }) }}>
+                                                            <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete Employee Permanently
+                                                        </button>
+                                                    </>
+                                                )}
+                                            </PopoverContent>
+                                        </Popover>
                                     )}
                                 </div>
                             </div>
@@ -936,6 +1250,160 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                     </div>
                 )}
             </CardContent>
+
+            {/* ─── Delete Employee / Reset HR Registration (server preview → confirm → server re-check) ──── */}
+            <Dialog open={!!regTarget} onOpenChange={(open) => { if (!open) closeRegistrationDialog() }}>
+                <DialogContent className="sm:max-w-[560px] max-h-[90vh] overflow-y-auto">
+                    {regTarget && (() => {
+                        const action = regTarget.action
+                        const allowed = !!regPreview && (action === 'delete' ? regPreview.delete_allowed : regPreview.reset_allowed)
+                        const blockers = regPreview?.blockers?.[action] ?? []
+                        const employeeNo = regPreview?.employee.employee_no ?? regTarget.user.employee_no
+                        return (
+                            <>
+                                <DialogHeader>
+                                    <DialogTitle className="flex items-center gap-2">
+                                        {action === 'delete' ? <Trash2 className="h-4 w-4 text-red-600" /> : <RotateCcw className="h-4 w-4" />}
+                                        {action === 'delete' ? 'Remove HR Registration' : 'Reset HR Registration'}
+                                    </DialogTitle>
+                                    <DialogDescription>
+                                        {action === 'delete'
+                                            ? 'Removes this person\'s HR registration only (login and user account stay). Only possible when they have no HR records. To remove the person entirely, use Delete Employee Permanently.'
+                                            : 'Returns this employee to Awaiting onboarding. Their HR history is kept.'}
+                                    </DialogDescription>
+                                </DialogHeader>
+
+                                <div className="rounded-lg border px-3 py-2">
+                                    <div className="text-sm font-medium">{regPreview?.employee.full_name || regTarget.user.full_name || 'Unknown'}</div>
+                                    <div className="text-xs font-mono text-muted-foreground">{formatEmployeeNo(employeeNo)}</div>
+                                </div>
+
+                                {regLoading ? (
+                                    <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                                        <Loader2 className="h-4 w-4 animate-spin" /> Checking eligibility…
+                                    </div>
+                                ) : !regPreview ? (
+                                    <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                        {regError || 'The eligibility check failed.'}
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3">
+                                        {allowed ? (
+                                            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                                                <div className="flex items-center gap-1.5 font-medium"><Check className="h-4 w-4" /> Allowed</div>
+                                                <p className="mt-1 text-xs">
+                                                    {action === 'delete'
+                                                        ? 'The HR registration is removed. The person leaves the Employees list and appears under Awaiting onboarding. They can be onboarded again later with the same employee number.'
+                                                        : 'The employee moves to Awaiting onboarding. New attendance, leave and payroll records need onboarding again; existing HR history stays.'}
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                                                <div className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-4 w-4" /> {action === 'delete' ? 'Removing the registration is not available' : 'Reset is not available'}</div>
+                                                <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">
+                                                    {blockers.map((b, i) => <li key={`${b.code}-${i}`}>{b.message || b.code}</li>)}
+                                                </ul>
+                                                {action === 'delete' && regPreview.reset_allowed && (
+                                                    <Button variant="outline" size="sm" className="mt-2" onClick={() => switchRegistrationAction('reset')}>
+                                                        <RotateCcw className="h-3.5 w-3.5 mr-1" /> Reset HR Registration instead
+                                                    </Button>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        <div className="rounded-lg border px-3 py-2 text-xs text-muted-foreground">
+                                            <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground"><ShieldCheck className="h-3.5 w-3.5" /> Always kept</div>
+                                            <ul className="list-disc space-y-0.5 pl-5">
+                                                <li>{regPreview.kept.login ? 'Login and password' : 'User account'} (User Management)</li>
+                                                <li>{regPreview.kept.access_assignments} Security &amp; Access assignment{regPreview.kept.access_assignments === 1 ? '' : 's'} and organization membership</li>
+                                                <li>Employee number {formatEmployeeNo(regPreview.kept.employee_no)}, department, position and reporting line</li>
+                                                <li>HR history, Supply Chain, Finance and audit records</li>
+                                            </ul>
+                                        </div>
+
+                                        {allowed && (
+                                            <>
+                                                <div className="space-y-1.5">
+                                                    <Label htmlFor="registration-reason" className="text-xs">Reason (required)</Label>
+                                                    <Textarea
+                                                        id="registration-reason"
+                                                        rows={2}
+                                                        value={regReason}
+                                                        onChange={(e) => setRegReason(e.target.value)}
+                                                        placeholder="e.g. Test record onboarded by mistake"
+                                                    />
+                                                    {regReason.trim().length > 0 && regReason.trim().length < 10 && (
+                                                        <p className="text-[11px] text-red-600">Enter at least 10 characters.</p>
+                                                    )}
+                                                </div>
+                                                <label className="flex items-start gap-2 text-xs">
+                                                    <Checkbox checked={regConfirmed} onCheckedChange={(checked) => setRegConfirmed(checked === true)} className="mt-0.5" />
+                                                    <span>
+                                                        I confirm that {action === 'delete' ? 'this HR registration should be removed' : 'this HR registration should be reset'} for {regPreview.employee.full_name || 'this employee'}.
+                                                    </span>
+                                                </label>
+                                            </>
+                                        )}
+
+                                        {regError && (
+                                            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{regError}</div>
+                                        )}
+                                    </div>
+                                )}
+
+                                <DialogFooter>
+                                    <Button variant="outline" onClick={closeRegistrationDialog} disabled={regSubmitting}>Cancel</Button>
+                                    <Button
+                                        variant={action === 'delete' ? 'destructive' : 'default'}
+                                        onClick={submitRegistrationAction}
+                                        disabled={!allowed || regLoading || regSubmitting || !regConfirmed || regReason.trim().length < 10 || !regRequestId}
+                                    >
+                                        {regSubmitting && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+                                        {action === 'delete' ? 'Remove HR Registration' : 'Reset HR Registration'}
+                                    </Button>
+                                </DialogFooter>
+                            </>
+                        )
+                    })()}
+                </DialogContent>
+            </Dialog>
+
+            {/* ─── Delete Employee Permanently (canonical identity deletion, shared with User Management) ──── */}
+            <PermanentDeleteDialog
+                target={permanentTarget}
+                entry="hr"
+                onClose={() => setPermanentTarget(null)}
+                onDeleted={async () => { await loadUsers() }}
+                onArchiveInstead={(t) => { setPermanentTarget(null); setArchiveTarget({ ...t, mode: 'archive' }) }}
+                notify={(m) => toast(m)}
+            />
+
+            {/* ─── Archive & Revoke Access / Release Email & Phone (former employees; shared with User Management) ──── */}
+            <ArchiveIdentityDialog
+                target={archiveTarget}
+                mode={archiveTarget?.mode}
+                entry="hr"
+                onClose={() => setArchiveTarget(null)}
+                onDone={async () => { await loadUsers() }}
+                notify={(m) => toast(m)}
+            />
+
+            {/* ─── Bulk removal of the selected employees (per-identity canonical preview → confirm → execute) ──── */}
+            {bulkRemovalOpen && (
+                <BulkRemovalDialog
+                    targets={selectedTargets}
+                    onClose={() => setBulkRemovalOpen(false)}
+                    onCompleted={handleBulkRemovalCompleted}
+                    notify={(m) => toast(m)}
+                />
+            )}
+
+            <ReportingLinesReviewDialog
+                open={reportingCheckOpen}
+                onOpenChange={setReportingCheckOpen}
+                managers={activeManagerOptions}
+                onChanged={() => loadUsers()}
+            />
 
             {/* ─── Add Employee Dialog (HR onboarding over one central identity) ──── */}
             <Dialog open={addDialogOpen} onOpenChange={(open) => { setAddDialogOpen(open); if (!open) resetAddForm() }}>
@@ -1072,7 +1540,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                         <SelectTrigger><SelectValue /></SelectTrigger>
                                         <SelectContent>
                                             <SelectItem value="none">Top leader</SelectItem>
-                                            {users.filter(u => u.id !== candidate?.user_id).map(u => (
+                                            {users.filter(u => u.id !== candidate?.user_id && u.account_status !== 'ARCHIVED').map(u => (
                                                 <SelectItem key={u.id} value={u.id}>{u.full_name || u.email}</SelectItem>
                                             ))}
                                         </SelectContent>
@@ -1158,7 +1626,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                             <AvatarImage src={profileUser.avatar_url || undefined} />
                                             <AvatarFallback>{(profileUser.full_name || 'U').slice(0, 2).toUpperCase()}</AvatarFallback>
                                         </Avatar>
-                                        {canEdit && (
+                                        {profileEditable && (
                                             <button
                                                 type="button"
                                                 onClick={() => avatarInputRef.current?.click()}
@@ -1191,7 +1659,9 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                             )}
                         </SheetTitle>
                         <SheetDescription>
-                            HR profile details. {canEdit ? 'Changes are saved when you click Save.' : 'View only.'}
+                            {profileUser?.account_status === 'ARCHIVED'
+                                ? 'Former employee — historical record, view only.'
+                                : <>HR profile details. {profileEditable ? 'Changes are saved when you click Save.' : 'View only.'}</>}
                         </SheetDescription>
                     </SheetHeader>
 
@@ -1200,11 +1670,12 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                     ) : (
                         <div className="mt-4 space-y-4">
                             <Tabs value={profileTab} onValueChange={setProfileTab}>
-                                <TabsList className={`grid w-full ${showCommissionTab ? 'grid-cols-5' : 'grid-cols-4'}`}>
+                                <TabsList className={`grid w-full ${showCommissionTab ? 'grid-cols-6' : 'grid-cols-5'}`}>
                                     <TabsTrigger value="personal" className="text-xs">Personal</TabsTrigger>
                                     <TabsTrigger value="identity" className="text-xs">ID &amp; Tax</TabsTrigger>
                                     <TabsTrigger value="emergency" className="text-xs">Emergency</TabsTrigger>
                                     <TabsTrigger value="bank" className="text-xs">Bank</TabsTrigger>
+                                    <TabsTrigger value="history" className="text-xs">History</TabsTrigger>
                                     {showCommissionTab && <TabsTrigger value="commission" className="text-xs">Commission</TabsTrigger>}
                                 </TabsList>
 
@@ -1213,7 +1684,7 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Gender</Label>
-                                            <Select value={profileData.gender || 'none'} onValueChange={v => updateProfileField('gender', v === 'none' ? null : v)} disabled={!canEdit}>
+                                            <Select value={profileData.gender || 'none'} onValueChange={v => updateProfileField('gender', v === 'none' ? null : v)} disabled={!profileEditable}>
                                                 <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                                                 <SelectContent>
                                                     <SelectItem value="none">Not set</SelectItem>
@@ -1225,13 +1696,13 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Date of Birth</Label>
-                                            <Input type="date" className="h-9" value={profileData.date_of_birth || ''} onChange={e => updateProfileField('date_of_birth', e.target.value || null)} disabled={!canEdit} />
+                                            <Input type="date" className="h-9" value={profileData.date_of_birth || ''} onChange={e => updateProfileField('date_of_birth', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Marital Status</Label>
-                                            <Select value={profileData.marital_status || 'none'} onValueChange={v => updateProfileField('marital_status', v === 'none' ? null : v)} disabled={!canEdit}>
+                                            <Select value={profileData.marital_status || 'none'} onValueChange={v => updateProfileField('marital_status', v === 'none' ? null : v)} disabled={!profileEditable}>
                                                 <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                                                 <SelectContent>
                                                     <SelectItem value="none">Not set</SelectItem>
@@ -1244,17 +1715,17 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Nationality</Label>
-                                            <Input className="h-9" value={profileData.nationality || ''} onChange={e => updateProfileField('nationality', e.target.value || null)} placeholder="e.g. Malaysian" disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.nationality || ''} onChange={e => updateProfileField('nationality', e.target.value || null)} placeholder="e.g. Malaysian" disabled={!profileEditable} />
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Religion</Label>
-                                            <Input className="h-9" value={profileData.religion || ''} onChange={e => updateProfileField('religion', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.religion || ''} onChange={e => updateProfileField('religion', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Blood Type</Label>
-                                            <Select value={profileData.blood_type || 'none'} onValueChange={v => updateProfileField('blood_type', v === 'none' ? null : v)} disabled={!canEdit}>
+                                            <Select value={profileData.blood_type || 'none'} onValueChange={v => updateProfileField('blood_type', v === 'none' ? null : v)} disabled={!profileEditable}>
                                                 <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                                                 <SelectContent>
                                                     <SelectItem value="none">Not set</SelectItem>
@@ -1268,16 +1739,16 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Personal Email</Label>
-                                            <Input className="h-9" type="email" value={profileData.personal_email || ''} onChange={e => updateProfileField('personal_email', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" type="email" value={profileData.personal_email || ''} onChange={e => updateProfileField('personal_email', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Personal Phone</Label>
-                                            <Input className="h-9" value={profileData.personal_phone || ''} onChange={e => updateProfileField('personal_phone', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.personal_phone || ''} onChange={e => updateProfileField('personal_phone', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                     </div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Highest Education</Label>
-                                        <Select value={profileData.highest_education || 'none'} onValueChange={v => updateProfileField('highest_education', v === 'none' ? null : v)} disabled={!canEdit}>
+                                        <Select value={profileData.highest_education || 'none'} onValueChange={v => updateProfileField('highest_education', v === 'none' ? null : v)} disabled={!profileEditable}>
                                             <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                                             <SelectContent>
                                                 <SelectItem value="none">Not set</SelectItem>
@@ -1294,65 +1765,82 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Institution</Label>
-                                            <Input className="h-9" value={profileData.education_institution || ''} onChange={e => updateProfileField('education_institution', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.education_institution || ''} onChange={e => updateProfileField('education_institution', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Field of Study</Label>
-                                            <Input className="h-9" value={profileData.education_field || ''} onChange={e => updateProfileField('education_field', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.education_field || ''} onChange={e => updateProfileField('education_field', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                     </div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Address</Label>
-                                        <Input className="h-9 mb-1" value={profileData.address_line1 || ''} onChange={e => updateProfileField('address_line1', e.target.value || null)} placeholder="Line 1" disabled={!canEdit} />
-                                        <Input className="h-9" value={profileData.address_line2 || ''} onChange={e => updateProfileField('address_line2', e.target.value || null)} placeholder="Line 2" disabled={!canEdit} />
+                                        <Input className="h-9 mb-1" value={profileData.address_line1 || ''} onChange={e => updateProfileField('address_line1', e.target.value || null)} placeholder="Line 1" disabled={!profileEditable} />
+                                        <Input className="h-9" value={profileData.address_line2 || ''} onChange={e => updateProfileField('address_line2', e.target.value || null)} placeholder="Line 2" disabled={!profileEditable} />
                                     </div>
                                     <div className="grid grid-cols-3 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">City</Label>
-                                            <Input className="h-9" value={profileData.city || ''} onChange={e => updateProfileField('city', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.city || ''} onChange={e => updateProfileField('city', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">State</Label>
-                                            <Input className="h-9" value={profileData.state || ''} onChange={e => updateProfileField('state', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.state || ''} onChange={e => updateProfileField('state', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Postcode</Label>
-                                            <Input className="h-9" value={profileData.postcode || ''} onChange={e => updateProfileField('postcode', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.postcode || ''} onChange={e => updateProfileField('postcode', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                     </div>
                                 </TabsContent>
 
                                 {/* Identity & Tax */}
                                 <TabsContent value="identity" className="space-y-3 mt-3">
+                                    {profileEditable && !statutoryEditable && (
+                                        <p className="text-xs text-muted-foreground">Statutory details (ID, tax, EPF, SOCSO, EIS) are changed only by HR with explicit authority in this employee's company — never on your own record.</p>
+                                    )}
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">IC Number (NRIC)</Label>
-                                            <Input className="h-9" value={profileData.ic_number || ''} onChange={e => updateProfileField('ic_number', e.target.value || null)} placeholder="e.g. 900101-01-1234" disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.ic_number || ''} onChange={e => updateProfileField('ic_number', e.target.value || null)} placeholder="e.g. 900101-01-1234" disabled={!statutoryEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Passport Number</Label>
-                                            <Input className="h-9" value={profileData.passport_number || ''} onChange={e => updateProfileField('passport_number', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.passport_number || ''} onChange={e => updateProfileField('passport_number', e.target.value || null)} disabled={!statutoryEditable} />
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Tax ID (LHDN)</Label>
-                                            <Input className="h-9" value={profileData.tax_id || ''} onChange={e => updateProfileField('tax_id', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.tax_id || ''} onChange={e => updateProfileField('tax_id', e.target.value || null)} disabled={!statutoryEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">SOCSO (PERKESO)</Label>
-                                            <Input className="h-9" value={profileData.socso_number || ''} onChange={e => updateProfileField('socso_number', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.socso_number || ''} onChange={e => updateProfileField('socso_number', e.target.value || null)} disabled={!statutoryEditable} />
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">EPF (KWSP)</Label>
-                                            <Input className="h-9" value={profileData.epf_number || ''} onChange={e => updateProfileField('epf_number', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.epf_number || ''} onChange={e => updateProfileField('epf_number', e.target.value || null)} disabled={!statutoryEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">EIS Number</Label>
-                                            <Input className="h-9" value={profileData.eis_number || ''} onChange={e => updateProfileField('eis_number', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.eis_number || ''} onChange={e => updateProfileField('eis_number', e.target.value || null)} disabled={!statutoryEditable} />
                                         </div>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-xs" htmlFor="hr-work-state">Work state</Label>
+                                        <select
+                                            id="hr-work-state"
+                                            className="h-9 w-full rounded-md border bg-background px-2 text-sm disabled:opacity-60"
+                                            value={profileData.work_state || ''}
+                                            onChange={e => updateProfileField('work_state', e.target.value || null)}
+                                            disabled={!statutoryEditable}
+                                        >
+                                            <option value="">Not recorded (national holidays only)</option>
+                                            {WORK_STATES.map(ws => <option key={ws.code} value={ws.code}>{ws.name}</option>)}
+                                        </select>
+                                        <p className="text-[11px] text-muted-foreground">Decides which state public holidays count for this employee's leave working days, attendance and overtime.</p>
                                     </div>
                                 </TabsContent>
 
@@ -1361,20 +1849,20 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="space-y-1">
                                             <Label className="text-xs">Contact Name</Label>
-                                            <Input className="h-9" value={profileData.emergency_name || ''} onChange={e => updateProfileField('emergency_name', e.target.value || null)} disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.emergency_name || ''} onChange={e => updateProfileField('emergency_name', e.target.value || null)} disabled={!profileEditable} />
                                         </div>
                                         <div className="space-y-1">
                                             <Label className="text-xs">Relationship</Label>
-                                            <Input className="h-9" value={profileData.emergency_relationship || ''} onChange={e => updateProfileField('emergency_relationship', e.target.value || null)} placeholder="e.g. Spouse, Parent" disabled={!canEdit} />
+                                            <Input className="h-9" value={profileData.emergency_relationship || ''} onChange={e => updateProfileField('emergency_relationship', e.target.value || null)} placeholder="e.g. Spouse, Parent" disabled={!profileEditable} />
                                         </div>
                                     </div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Emergency Phone</Label>
-                                        <Input className="h-9" value={profileData.emergency_phone || ''} onChange={e => updateProfileField('emergency_phone', e.target.value || null)} disabled={!canEdit} />
+                                        <Input className="h-9" value={profileData.emergency_phone || ''} onChange={e => updateProfileField('emergency_phone', e.target.value || null)} disabled={!profileEditable} />
                                     </div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Emergency Address</Label>
-                                        <Textarea value={profileData.emergency_address || ''} onChange={e => updateProfileField('emergency_address', e.target.value || null)} rows={2} disabled={!canEdit} />
+                                        <Textarea value={profileData.emergency_address || ''} onChange={e => updateProfileField('emergency_address', e.target.value || null)} rows={2} disabled={!profileEditable} />
                                     </div>
                                 </TabsContent>
 
@@ -1383,17 +1871,30 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                                     <div className="text-xs text-gray-500 mb-2">Used for payroll. Overrides the bank info from User Management if set.</div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Bank Name</Label>
-                                        <Input className="h-9" value={profileData.bank_name || ''} onChange={e => updateProfileField('bank_name', e.target.value || null)} placeholder="e.g. Maybank, CIMB" disabled={!canEdit} />
+                                        <Input className="h-9" value={profileData.bank_name || ''} onChange={e => updateProfileField('bank_name', e.target.value || null)} placeholder="e.g. Maybank, CIMB" disabled={!profileEditable} />
                                     </div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Account Number</Label>
-                                        <Input className="h-9" value={profileData.bank_account_no || ''} onChange={e => updateProfileField('bank_account_no', e.target.value || null)} disabled={!canEdit} />
+                                        <Input className="h-9" value={profileData.bank_account_no || ''} onChange={e => updateProfileField('bank_account_no', e.target.value || null)} disabled={!profileEditable} />
                                     </div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">Account Holder Name</Label>
-                                        <Input className="h-9" value={profileData.bank_holder_name || ''} onChange={e => updateProfileField('bank_holder_name', e.target.value || null)} disabled={!canEdit} />
+                                        <Input className="h-9" value={profileData.bank_holder_name || ''} onChange={e => updateProfileField('bank_holder_name', e.target.value || null)} disabled={!profileEditable} />
                                     </div>
                                 </TabsContent>
+
+                                {/* Employment history (append-only, effective-dated) */}
+                                {profileUser && (
+                                    <TabsContent value="history" className="mt-3">
+                                        {profileTab === 'history' && (
+                                            <EmploymentHistoryPanel
+                                                userId={profileUser.id}
+                                                change={profileEditable ? { departments, positions, managers: activeManagerOptions } : undefined}
+                                                onChanged={() => loadUsers()}
+                                            />
+                                        )}
+                                    </TabsContent>
+                                )}
 
                                 {/* Sales Commission */}
                                 {showCommissionTab && profileUser && (
@@ -1407,10 +1908,10 @@ export default function HrPeopleView({ organizationId, canEdit }: HrPeopleViewPr
                             {profileTab !== 'commission' && (<>
                             <div className="space-y-1 pt-2 border-t">
                                 <Label className="text-xs">HR Notes</Label>
-                                <Textarea value={profileData.notes || ''} onChange={e => updateProfileField('notes', e.target.value || null)} rows={2} placeholder="Internal notes..." disabled={!canEdit} />
+                                <Textarea value={profileData.notes || ''} onChange={e => updateProfileField('notes', e.target.value || null)} rows={2} placeholder="Internal notes..." disabled={!profileEditable} />
                             </div>
 
-                            {canEdit && (
+                            {profileEditable && (
                                 <div className="flex justify-end pt-2">
                                     <Button onClick={saveProfile} disabled={profileSaving}>
                                         {profileSaving ? <><Loader2 className="h-4 w-4 animate-spin mr-1" />Saving...</> : <><Save className="h-4 w-4 mr-1" />Save Profile</>}

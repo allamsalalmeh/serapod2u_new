@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { OUTDOOR_HOSTS } from '@/lib/hosts/outdoor-hosts'
+import { decideSiteRoute } from '@/lib/hosts/site-split'
 
 /**
  * Marketing host → internal App Router prefix.
@@ -58,4 +59,16 @@ export function resolveMarketingHostRewrite(request: NextRequest): NextResponse 
   const url = request.nextUrl.clone()
   url.pathname = pathname === '/' ? prefix : `${prefix}${pathname}`
   return NextResponse.rewrite(url)
+}
+
+/** Main site / store / portal split (lib/hosts/site-split). Null on hosts outside an active group. */
+export function resolveSiteSplitRoute(request: NextRequest): NextResponse | null {
+  const decision = decideSiteRoute(getRequestHostname(request), request.nextUrl.pathname, request.nextUrl.searchParams)
+  if (!decision) return null
+  if (decision.type === 'rewrite') {
+    const url = request.nextUrl.clone()
+    url.pathname = decision.pathname
+    return NextResponse.rewrite(url)
+  }
+  return NextResponse.redirect(`https://${decision.host}${decision.pathname}${request.nextUrl.search}`, 307)
 }

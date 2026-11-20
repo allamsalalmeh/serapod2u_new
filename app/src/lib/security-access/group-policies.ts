@@ -3,6 +3,7 @@ import { COMMISSION_PERMISSION_KEYS } from './commission'
 import { MSS_PERMISSION_KEYS } from './mss'
 import { COMPENSATION_VIEWER_PERMISSION_KEYS } from './compensation-viewer'
 import { FISCAL_PERIOD_PERMISSION_KEYS } from './fiscal-period-catalog'
+import { BANK_STATEMENT_PERMISSION_KEYS } from './bank-statement-catalog'
 
 /**
  * Group Policies (the user-facing name of a business role / "Access Profile").
@@ -52,27 +53,39 @@ export const fullAccessModuleIds = FULL_ACCESS_POLICIES.map(p => p.moduleId)
  *   compensation access (least privilege).
  *   DESTRUCTIVE_PERMISSIONS — removed from Full Access by 20261110100000 (recorded as reviewed exclusions in
  *   sa_standard_policy_coverage.excluded_keys); granted only through the break-glass policies below.
- *   finance.fiscal_year.* and finance.period.* — Fiscal Year & Periods (20261219100000): creating a year, opening,
+ *   finance.fiscal_year.* and finance.period.* — Fiscal Year & Periods (20261228090200): creating a year, opening,
  *   closing, reopening and locking periods are given to named people through their own narrow policies; Finance Full
  *   Access is NOT extended.
  */
-export const DESTRUCTIVE_PERMISSIONS: readonly string[] = ['hr.data.reset', 'finance.data.reset', 'platform.data.destructive', 'platform.identity.delete']
+export const DESTRUCTIVE_PERMISSIONS: readonly string[] = ['hr.data.reset', 'finance.data.reset', 'platform.data.destructive', 'platform.identity.delete', 'hr.employee.delete']
 export const OUTSIDE_FULL_ACCESS: readonly string[] = ['platform.system_logs.view', ...COMMISSION_PERMISSION_KEYS, ...MSS_PERMISSION_KEYS, ...COMPENSATION_VIEWER_PERMISSION_KEYS, ...DESTRUCTIVE_PERMISSIONS, ...FISCAL_PERIOD_PERMISSION_KEYS]
 
 /**
+ * Module permissions that Full Access never implies but that stay grantable next to it (owner decision B, 2026-10-16):
+ *   finance.statement.import / finance.statement.approve — the bank statement maker and checker are explicit grants only
+ *   (finance-statement-preparer / finance-statement-approver, or finance-admin; 20261006160000) and the database keeps
+ *   them apart per statement (SoD bank-statement-maker-checker, enforce). Viewing statements is finance.cash.view, which
+ *   Finance Full Access holds. Deliberately NOT in OUTSIDE_FULL_ACCESS: the grant form must keep offering the Finance
+ *   module to a Finance Full Access holder so these two can still be granted explicitly (grant-coverage.ts).
+ */
+export const EXPLICIT_GRANT_ONLY: readonly string[] = [...BANK_STATEMENT_PERMISSION_KEYS]
+
+/**
  * Break-glass standard policies: the only standard policies holding a destructive operation (20261110100000; HR's
- * predates it, 20261003100000). Grant for a planned operation, preferably with an end date.
+ * predates it, 20261003100000; HR Employee Record Administrator is 20261214100000). Grant for a planned operation, preferably with an end date.
  */
 export const BREAK_GLASS_POLICIES: Readonly<Record<string, readonly string[]>> = {
   'hr-data-reset-administrator': ['hr.data.reset'],
   'finance-data-reset-administrator': ['finance.data.reset'],
   'platform-data-maintenance-administrator': ['platform.data.destructive', 'platform.identity.delete'],
+  'hr-employee-record-administrator': ['hr.employee.delete'],
 }
 export const isBreakGlassPolicy = (roleKey?: string | null) => Boolean(roleKey && roleKey in BREAK_GLASS_POLICIES)
 export const BREAK_GLASS_POLICY_NAMES: Readonly<Record<string, string>> = {
   'hr-data-reset-administrator': 'HR Data Reset Administrator',
   'finance-data-reset-administrator': 'Finance Data Reset Administrator',
   'platform-data-maintenance-administrator': 'Platform Data Maintenance Administrator',
+  'hr-employee-record-administrator': 'HR Employee Record Administrator',
 }
 
 /** Function-sized standard policies seeded by 20261110100000 (assigned to nobody). */

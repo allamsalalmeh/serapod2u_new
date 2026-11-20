@@ -42,6 +42,7 @@ describe('Manual Stock Addition Excel', () => {
     const source = [row(), row({
       rowKey: catalogRowKey('v-1', 'c-50nb'),
       stockConfigId: 'c-50nb',
+      productName: 'Cellera Hero',
       configCode: '50NB',
       configLabel: '50ml · New Box',
       stockSku: 'HAZ-50NB',
@@ -68,18 +69,25 @@ describe('Manual Stock Addition Excel', () => {
       'Product Code',
       'Volume',
       'Packaging Version',
+      'Stock Unit',
       'Current Quantity',
       'Add Quantity',
       'Unit Cost',
       'Row Note',
     ])
     expect(sheet.getRow(2).getCell(1).value).toBe('c-20nb')
-    expect(sheet.getRow(2).getCell(12).value).toBe(7)
-    expect(sheet.getRow(2).getCell(13).value).toBe(9.5)
+    // "Cellera Hazelnut" is not a cartridge line → counted in pcs.
+    expect(sheet.getRow(2).getCell(11).value).toBe('Pcs')
+    expect(sheet.getRow(2).getCell(12).value).toBe(10)
+    expect(sheet.getRow(2).getCell(13).value).toBe(7)
+    expect(sheet.getRow(2).getCell(14).value).toBe(9.5)
+    // "Cellera Hero" is a cartridge line → counted in cases.
+    expect(sheet.getRow(3).getCell(11).value).toBe('Cases')
     expect(sheet.getRow(2).getCell(1).protection?.locked).toBe(true)
-    expect(sheet.getRow(2).getCell(12).protection?.locked).toBe(false)
+    expect(sheet.getRow(2).getCell(11).protection?.locked).toBe(true)
     expect(sheet.getRow(2).getCell(13).protection?.locked).toBe(false)
     expect(sheet.getRow(2).getCell(14).protection?.locked).toBe(false)
+    expect(sheet.getRow(2).getCell(15).protection?.locked).toBe(false)
   })
 
   it('imports matching configuration IDs and rejects duplicate/mismatched/stale/variant-only rows', async () => {

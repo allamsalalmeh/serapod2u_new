@@ -9,6 +9,8 @@ import { refundStripeCheckout } from '@/lib/payments/stripe-refund'
 import { returnOrderStock, stockMoveNote, takeOrderStock, undoOrderStock } from '@/lib/storefront/order-stock'
 import { notifyOutdoorOrderStatus, outdoorOrderEmailFor } from '@/lib/outdoor/order-status-email'
 import { notifyStoreOrderShipped, storeShippingEmailFor } from '@/lib/storefront/order-shipped-email'
+import { deliveredAtByOrder, REFUND_WINDOW_DAYS, refundWindowEndsAt, refundWindowOpen } from '@/lib/storefront/refund-window'
+import { notifyStoreOrderStatus, storeStatusEmailFor } from '@/lib/storefront/order-status-email'
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -149,8 +151,11 @@ export async function GET(request: NextRequest) {
             throw error
         }
 
+        const deliveredIds = (data ?? []).filter((o: any) => o.status === 'delivered').map((o: any) => String(o.id))
+        const deliveredAt = await deliveredAtByOrder(adminClient, deliveredIds).catch(() => new Map<string, string>())
+
         return NextResponse.json({
-            orders: data ?? [],
+            orders: (data ?? []).map((o: any) => (o.status === 'delivered' ? { ...o, delivered_at: deliveredAt.get(String(o.id)) || o.updated_at || null } : o)),
             total: count ?? 0,
             page,
             limit,
@@ -201,12 +206,23 @@ export async function PUT(request: NextRequest) {
 
         const { data: current } = await adminClient
             .from('storefront_orders')
-            .select('id, order_ref, status, sales_channel, shipping_tracking_no, shipping_courier_name, payment_provider, payment_ref, total_amount, currency')
+            .select('id, order_ref, status, sales_channel, shipping_tracking_no, shipping_courier_name, payment_provider, payment_ref, total_amount, currency, updated_at')
             .eq('id', id)
             .or(orgScopeFilter(admin.orgId))
             .maybeSingle()
         if (!current) {
             return NextResponse.json({ error: 'Order not found' }, { status: 404 })
+        }
+
+        if (current.status === 'delivered' && status === 'refunded') {
+            const delivered = (await deliveredAtByOrder(adminClient, [id])).get(id) || current.updated_at || null
+            if (!refundWindowOpen(delivered)) {
+                const ends = refundWindowEndsAt(delivered)
+                return NextResponse.json(
+                    { error: `The refund window ended ${ends ? ends.toLocaleDateString('en-MY', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kuala_Lumpur' }) : ''} (${REFUND_WINDOW_DAYS} days after delivery). The order was not changed.` },
+                    { status: 409 },
+                )
+            }
         }
 
         // Refunding or cancelling an order the customer already paid for returns the money
@@ -357,6 +373,11 @@ export async function PUT(request: NextRequest) {
                 fromTracking: current.shipping_tracking_no,
                 toTracking: data.shipping_tracking_no,
             }),
+        )
+        await notifyStoreOrderStatus(
+            id,
+            storeStatusEmailFor({ salesChannel: current.sales_channel, fromStatus: current.status, toStatus: status, moneyReturned }),
+            { moneyReturned },
         )
 
         return NextResponse.json(stockWarning ? { order: data, warning: stockWarning } : { order: data })

@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { createFakeSupabase } from '@/lib/warehouse/test-utils/fake-supabase'
+import { ACTIVE_ORDER_STATUSES } from './sales-kpi'
 import {
+  ACTIVE_KPI_MODEL,
   ALL_DISTRIBUTORS,
   ALL_STATUS,
   DORMANT_DAYS,
@@ -423,7 +426,8 @@ function item(orderId: string, value: number, qty = 1, variantId = 'v1'): OrderI
 describe('server-side aggregation folds orders into the report aggregate', () => {
   // Infy: historic trading, active this period and last.
   // Sahabat: historic trading, active in the comparison window only.
-  // Newco: first ever order inside the report window.
+  //          Its cancelled September order must not make it active.
+  // Newco: first ever order inside the report window (submitted = pipeline).
   const orders: OrderRecord[] = [
     order({ id: 'o-hist-1', buyer_org_id: INFY, created_at: '2025-03-01T02:00:00.000Z' }),
     order({ id: 'o-hist-2', buyer_org_id: INFY, created_at: '2026-05-10T02:00:00.000Z' }),
@@ -431,11 +435,13 @@ describe('server-side aggregation folds orders into the report aggregate', () =>
     order({ id: 'o-sep-infy', buyer_org_id: INFY, created_at: '2026-09-04T02:00:00.000Z' }),
     order({ id: 'o-hist-s', buyer_org_id: SAHABAT, created_at: '2025-08-01T02:00:00.000Z' }),
     order({ id: 'o-aug-sah', buyer_org_id: SAHABAT, created_at: '2026-08-05T02:00:00.000Z' }),
-    order({ id: 'o-sep-new', buyer_org_id: NEWCO, created_at: '2026-09-02T02:00:00.000Z', status: 'cancelled' }),
+    order({ id: 'o-sep-new', buyer_org_id: NEWCO, created_at: '2026-09-02T02:00:00.000Z', status: 'submitted' }),
+    order({ id: 'o-sep-sah-cxl', buyer_org_id: SAHABAT, created_at: '2026-09-03T02:00:00.000Z', status: 'cancelled' }),
   ]
   const items: OrderItemRecord[] = [
     item('o-aug-infy', 400), item('o-sep-infy', 600, 3),
     item('o-aug-sah', 300), item('o-sep-new', 100, 2),
+    item('o-sep-sah-cxl', 250, 4),
   ]
   const variants = [{ id: 'v1', product_id: 'p1', variant_name: 'Deluxe Cellera Cartridge [ Banana Vanilla ]', product_code: 'BV', productName: 'Cellera Hero' }]
 
@@ -443,8 +449,18 @@ describe('server-side aggregation folds orders into the report aggregate', () =>
   const report = buildDistributorAnalyticsReport(built, NOW)
 
   it('separates the report window from the comparison window', () => {
-    expect(built.current).toMatchObject({ orders: 2, orderValue: 700, activeDistributors: 2 })
-    expect(built.previous).toMatchObject({ orders: 2, orderValue: 700, activeDistributors: 2 })
+    expect(built.current).toMatchObject({ orders: 2, orderValue: 700, activeDistributors: 2, ordersCreated: 3 })
+    expect(built.previous).toMatchObject({ orders: 2, orderValue: 700, activeDistributors: 2, ordersCreated: 2 })
+  })
+
+  it('never lets a cancelled order count as activity or reset recency', () => {
+    const sahabat = built.distributors.find((row) => row.distributorId === SAHABAT)!
+    expect(sahabat.currentOrders).toBe(0)
+    expect(sahabat.currentValue).toBe(0)
+    expect(sahabat.lastOrderDate).toBe('2026-08-05')
+    expect(sahabat.lifetimeOrders).toBe(2)
+    expect(report.summary.activeOrderValue).toBe(700)
+    expect(report.leaderboard.map((row) => row.distributorId)).not.toContain(SAHABAT)
   })
 
   it('derives first-ever and last-ever order dates from the whole history', () => {
@@ -478,17 +494,27 @@ describe('server-side aggregation folds orders into the report aggregate', () =>
   })
 
   it('reports the status mix of the report window for Order Processing Health', () => {
-    // Two orders this period: one approved, one cancelled.
-    expect(report.orderProcessing.total).toBe(2)
+    // Three orders created this period: approved, submitted, cancelled.
+    expect(report.orderProcessing.total).toBe(3)
+    expect(report.summary.ordersCreated).toBe(3)
     expect(report.orderProcessing.approvedOrders).toBe(1)
-    expect(report.orderProcessing.approvalRatePct).toBe(50)
+    expect(report.orderProcessing.approvalRatePct).toBeCloseTo(33.3, 1)
     expect(report.orderProcessing.cancelledOrders).toBe(1)
+    expect(report.orderProcessing.cancelledValue).toBe(250)
     // Values: the cancelled order is never Approved Sales.
     const approvedRow = report.orderProcessing.statuses.find((row) => row.status === 'approved')
     const cancelledRow = report.orderProcessing.statuses.find((row) => row.status === 'cancelled')
     expect(report.orderProcessing.approvedSalesValue).toBe(approvedRow?.orderValue ?? 0)
     expect(report.orderProcessing.cancelledValue).toBe(cancelledRow?.orderValue ?? 0)
-    expect(report.orderProcessing.pipelineOrders).toBe(0)
+    expect(report.orderProcessing.pipelineOrders).toBe(1)
+    expect(report.orderProcessing.pipelineValue).toBe(100)
+    // Active Order Value is exactly Approved Sales + Pipeline.
+    expect(report.summary.activeOrderValue).toBe(report.orderProcessing.approvedSalesValue + report.orderProcessing.pipelineValue)
+  })
+
+  it('keeps cancelled orders in Recent Orders, labelled by status', () => {
+    const cancelled = report.recentOrders.find((row) => row.orderId === 'o-sep-sah-cxl')
+    expect(cancelled).toMatchObject({ status: 'cancelled', orderValue: 250 })
   })
 
   it('counts packed and shipped orders as approved (an approved order does not stop being approved when it moves on)', () => {
@@ -522,8 +548,8 @@ describe('server-side aggregation folds orders into the report aggregate', () =>
 
     expect(scopedReport.distributor.isAll).toBe(false)
     expect(scopedReport.distributor.name).toBe('Infy Tech Distribution')
-    expect(scopedReport.summary.totalOrders).toBe(1)
-    expect(scopedReport.summary.orderValue).toBe(600)
+    expect(scopedReport.summary.activeOrders).toBe(1)
+    expect(scopedReport.summary.activeOrderValue).toBe(600)
     expect(scopedReport.summary.activeDistributors).toBe(1)
     // Sahabat and Newco are outside the scope entirely.
     expect(scopedReport.health.rows.map((row) => row.distributorId)).toEqual([INFY])
@@ -583,10 +609,10 @@ describe('reporting buckets on the business SO date (orders.order_date)', () => 
   const sep = build('2026-09')
 
   it('13. counts an SO dated 31 Aug but created 21 Sep in August, never in September', () => {
-    expect(aug.report.summary.totalOrders).toBe(2)
-    expect(aug.report.summary.orderValue).toBe(700)
-    expect(sep.report.summary.totalOrders).toBe(1)
-    expect(sep.report.summary.orderValue).toBe(300)
+    expect(aug.report.summary.activeOrders).toBe(2)
+    expect(aug.report.summary.activeOrderValue).toBe(700)
+    expect(sep.report.summary.activeOrders).toBe(1)
+    expect(sep.report.summary.activeOrderValue).toBe(300)
     expect(sep.aggregate.recentOrders.map((row) => row.orderId)).not.toContain('o-backdated')
   })
 
@@ -617,7 +643,7 @@ describe('reporting buckets on the business SO date (orders.order_date)', () => 
 
   it('17. the previous-period comparison uses the SO date', () => {
     expect(sep.aggregate.previous).toMatchObject({ orders: 2, orderValue: 700, activeDistributors: 2 })
-    expect(sep.report.comparison.find((row) => row.key === 'orderValue')).toMatchObject({ current: 300, previous: 700 })
+    expect(sep.report.comparison.find((row) => row.key === 'activeOrderValue')).toMatchObject({ current: 300, previous: 700 })
   })
 
   it('23. keeps the real entry timestamp as the audit value on the order record', () => {
@@ -662,7 +688,7 @@ describe('RPC payload normalisation', () => {
   const OCT = new Date('2026-10-05T10:00:00+08:00')
   const rpcClient = (payload: any) => ({ rpc: async () => ({ data: payload, error: null }) })
   const payload = (extra: Record<string, unknown>) => ({
-    month: '2026-08', distributorId: 'all', distributorName: 'All Distributors', status: 'all',
+    month: '2026-08', distributorId: 'all', distributorName: 'All Distributors', status: 'all', kpiModel: 'active_orders_v1',
     current: { orders: 1, orderValue: 500, activeDistributors: 1 },
     previous: { orders: 0, orderValue: 0, activeDistributors: 0 },
     dailyTrend: [], statusBreakdown: [], topProducts: [],
@@ -692,7 +718,7 @@ describe('RPC payload normalisation', () => {
     expect(report.meta.dateField).toBe('orders.order_date')
   })
 
-  it('says so when the installed RPC still buckets on created_at', async () => {
+  it('says so when an RPC reporting the active model still buckets on created_at', async () => {
     const { aggregate, notice } = await fetchDistributorAnalyticsAggregate(rpcClient(payload({
       distributors: [], recentOrders: [{ orderId: 'o1', createdAt: '2026-08-31T16:30:00+00:00', status: 'approved', distributorId: NEWCO, orderValue: 1, itemCount: 1 }],
     })), '2026-08', ALL_DISTRIBUTORS, ALL_STATUS, OCT)
@@ -701,6 +727,110 @@ describe('RPC payload normalisation', () => {
     // Legacy recent orders still get a Malaysia business date.
     expect(aggregate.recentOrders[0].orderDate).toBe('2026-09-01')
     expect(buildDistributorAnalyticsReport(aggregate, OCT).meta.dateField).toBe('orders.created_at')
+  })
+})
+
+// ═══ F3. Active-order KPI definitions (Enhancement03 UAT) ═════════════════
+
+describe('UAT SO26000151 — D2H RM3,200, the only order in October', () => {
+  const OCT_NOW = new Date('2026-10-21T12:00:00+08:00')
+  const so = (status: string) => order({
+    id: 'so-151', buyer_org_id: INFY, created_at: '2026-10-21T00:44:46.000Z', order_date: '2026-10-21',
+    display_doc_no: 'SO26000151', status,
+  })
+  const build = (status: string, scope: string = ALL_STATUS) => {
+    const orders = [so(status)].filter((row) => scope === ALL_STATUS || row.status === scope)
+    const built = aggregateDistributorOrders(
+      orders, [item('so-151', 3200)], ORGS, [], '2026-10', OCT_NOW,
+      resolveDistributorReportPeriod('2026-10', OCT_NOW), ALL_DISTRIBUTORS, scope,
+    )
+    return buildDistributorAnalyticsReport(built, OCT_NOW)
+  }
+
+  it('when Submitted: 1 active order, RM3,200 Active Order Value, RM0 Approved Sales', () => {
+    const report = build('submitted')
+    expect(report.summary).toMatchObject({ activeOrders: 1, activeOrderValue: 3200, ordersCreated: 1, activeDistributors: 1 })
+    expect(report.orderProcessing).toMatchObject({ approvedSalesValue: 0, pipelineOrders: 1, pipelineValue: 3200, cancelledOrders: 0, cancelledValue: 0 })
+  })
+
+  it('after Cancelled: 0 active, RM0 value, RM0 Approved Sales, 1 cancelled worth RM3,200, 1 created', () => {
+    const report = build('cancelled')
+    expect(report.summary).toMatchObject({ activeOrders: 0, activeOrderValue: 0, ordersCreated: 1, activeDistributors: 0, avgOrderValue: null })
+    expect(report.orderProcessing).toMatchObject({
+      total: 1, approvedSalesValue: 0, pipelineValue: 0, cancelledOrders: 1, cancelledValue: 3200, cancellationRatePct: 100,
+    })
+    // Every active-population view agrees.
+    expect(report.leaderboard).toEqual([])
+    expect(report.topProducts).toEqual([])
+    expect(report.dailyTrend.every((row) => row.orders === 0 && row.orderValue === 0)).toBe(true)
+    expect(report.comparison.find((row) => row.key === 'activeOrderValue')?.current).toBe(0)
+    expect(report.comparison.find((row) => row.key === 'ordersCreated')?.current).toBe(1)
+    expect(report.relationship.returningDistributors + report.relationship.newDistributors).toBe(0)
+    // History and audit keep it, clearly labelled.
+    expect(report.recentOrders).toEqual([expect.objectContaining({ orderNo: 'SO26000151', status: 'cancelled', orderValue: 3200 })])
+    expect(report.isEmpty).toBe(false)
+  })
+
+  it('a specific status filter is intersected with the active set', () => {
+    expect(build('cancelled', 'cancelled').summary).toMatchObject({ activeOrders: 0, activeOrderValue: 0, ordersCreated: 1 })
+    expect(build('submitted', 'submitted').summary).toMatchObject({ activeOrders: 1, activeOrderValue: 3200, ordersCreated: 1 })
+    expect(build('submitted', 'submitted').meta.activeStatuses).toEqual(['submitted'])
+    expect(build('cancelled', 'cancelled').meta.activeStatuses).toEqual([])
+  })
+
+  it('a draft order is created but never active', () => {
+    const report = build('draft')
+    expect(report.summary).toMatchObject({ activeOrders: 0, activeOrderValue: 0, ordersCreated: 1 })
+    expect(report.orderProcessing.pipelineValue).toBe(0)
+  })
+
+  it('does not trust an installed RPC that predates the active-order definitions', async () => {
+    // The pre-migration function still counts the cancelled order in the headline.
+    const legacyPayload = {
+      month: '2026-10', distributorId: 'all', distributorName: 'All Distributors', status: 'all', dateField: 'orders.order_date',
+      current: { orders: 1, orderValue: 3200, activeDistributors: 1 },
+      previous: { orders: 0, orderValue: 0, activeDistributors: 0 },
+      dailyTrend: [], distributors: [], topProducts: [], recentOrders: [],
+      statusBreakdown: [{ status: 'cancelled', orders: 1, orderValue: 3200 }],
+    }
+    const db = createFakeSupabase(
+      {
+        organizations: [{ id: INFY, org_name: 'Infy Tech Distribution', org_code: 'DT013', org_type_code: 'DIST', is_active: true }],
+        orders: [{ ...so('cancelled'), order_type: 'D2H' }],
+        // The fake client matches embedded-order filters on literal keys.
+        order_items: [{
+          ...item('so-151', 3200), id: 'oi-1', unit_price: 3200,
+          'orders.order_type': 'D2H', 'orders.buyer_org_id': INFY, 'orders.order_date': '2026-10-21', 'orders.status': 'cancelled',
+        }],
+        product_variants: [],
+      },
+      { reporting_distributor_analytics: () => ({ data: legacyPayload, error: null }) },
+    )
+    const result = await fetchDistributorAnalyticsAggregate(db, '2026-10', ALL_DISTRIBUTORS, ALL_STATUS, OCT_NOW)
+    expect(result.source).toBe('fallback')
+    expect(result.notice).toMatch(/20261212100000_distributor_analytics_active_orders\.sql/)
+    expect(result.aggregate.current).toMatchObject({ orders: 0, orderValue: 0, activeDistributors: 0, ordersCreated: 1 })
+    expect(result.aggregate.statusBreakdown).toEqual([{ status: 'cancelled', orders: 1, orderValue: 3200 }])
+  })
+})
+
+describe('the RPC migration and the application share one active-order definition', () => {
+  const sql = readFileSync(
+    new URL('../../../../supabase/migrations/20261212100000_distributor_analytics_active_orders.sql', import.meta.url),
+    'utf8',
+  )
+
+  it('v_active lists exactly ACTIVE_ORDER_STATUSES', () => {
+    const match = /v_active\s+public\.order_status\[\]\s*:=\s*ARRAY\[([^\]]*)\]/.exec(sql)
+    expect(match).not.toBeNull()
+    const statuses = match![1].split(',').map((part) => part.trim().replace(/'/g, '')).filter(Boolean)
+    expect([...statuses].sort()).toEqual([...ACTIVE_ORDER_STATUSES].sort())
+    expect(statuses).not.toContain('draft')
+    expect(statuses).not.toContain('cancelled')
+  })
+
+  it('reports the kpiModel the application trusts', () => {
+    expect(sql).toContain(`'kpiModel', '${ACTIVE_KPI_MODEL}'`)
   })
 })
 
@@ -729,7 +859,7 @@ describe('empty state', () => {
   it('reports an empty period without NaN or a misleading -100%', () => {
     const report = buildDistributorAnalyticsReport(aggregate(), NOW)
     expect(report.isEmpty).toBe(true)
-    expect(report.summary.totalOrders).toBe(0)
+    expect(report.summary.activeOrders).toBe(0)
     expect(report.summary.avgOrderValue).toBeNull()
     expect(report.summary.returningRatePct).toBeNull()
     expect(report.orderProcessing.approvalRatePct).toBeNull()
@@ -821,7 +951,7 @@ describe('browser payload stays report-sized', () => {
     const built = aggregateDistributorOrders(orders, items, ORGS, [], '2026-09', NOW)
     const report = buildDistributorAnalyticsReport(built, NOW)
 
-    expect(report.summary.totalOrders).toBe(250)
+    expect(report.summary.activeOrders).toBe(250)
     // 250 orders in, at most 20 order rows out.
     expect(report.recentOrders.length).toBeLessThanOrEqual(20)
     expect(JSON.stringify(report).length).toBeLessThan(120_000)

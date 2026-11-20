@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { userAllowed } from '@/lib/security-access/operation'
+import { guardUserOperation } from '@/lib/security-access/operation'
 
 export const MARKETPLACE_PERMISSION = 'ecommerce.order.manage'
 
@@ -29,12 +29,10 @@ export async function loadMarketplaceContext(): Promise<MarketplaceContext> {
 
   const orgType = (profile.organizations as any)?.org_type_code
   const roleLevel = (profile.roles as any)?.role_level
-  const allowed = await userAllowed(
-    user.id,
-    MARKETPLACE_PERMISSION,
-    () => orgType === 'HQ' && roleLevel != null && roleLevel <= 30,
-    { organizationId: profile.organization_id },
-  )
-  if (!allowed) return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) }
+  const denied = await guardUserOperation(user.id, MARKETPLACE_PERMISSION, {
+    legacy: () => orgType === 'HQ' && roleLevel != null && roleLevel <= 30,
+    organizationId: profile.organization_id,
+  })
+  if (denied) return { error: denied }
   return { db, userId: user.id, orgId: profile.organization_id as string }
 }

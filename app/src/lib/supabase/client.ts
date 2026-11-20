@@ -1,5 +1,7 @@
+import { inventoryDiagnosticFetch } from '@/lib/inventory/inventory-timing'
 import { createBrowserClient } from '@supabase/ssr'
 import { Database } from '@/types/database'
+import { authCookieOptionsForHost } from '@/lib/supabase/auth-cookie-scope'
 
 // Singleton instance to prevent multiple Supabase clients
 let client: ReturnType<typeof createBrowserClient<Database>> | null = null
@@ -23,9 +25,12 @@ export function createClient() {
   }
 
   // Create new client with proper configuration
+  const cookieScope = authCookieOptionsForHost(typeof window === 'undefined' ? null : window.location.hostname)
+  const diagnostics = process.env.NODE_ENV === 'development' ? { global: { fetch: inventoryDiagnosticFetch } } : null
   client = createBrowserClient<Database>(
     supabaseUrl,
-    supabaseAnonKey
+    supabaseAnonKey,
+    diagnostics || 'cookieOptions' in cookieScope ? { ...diagnostics, ...cookieScope } : undefined
   )
 
   return client

@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { ensureUserRow } from '@/server/auth/ensureUserRow'
 import { getPostLoginRedirect } from '@/server/auth/getPostLoginRedirect'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requestAuthCookieOptions } from '@/lib/supabase/server'
 import { OUTDOOR_OAUTH_NEXT_COOKIE, sanitizeOutdoorReturnPath } from '@/lib/outdoor/auth-return'
 import { sameHostOriginFromRequest } from '@/lib/http/public-origin'
 
@@ -61,6 +62,7 @@ export async function GET(request: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
+        ...(await requestAuthCookieOptions()),
         cookies: {
           get(name: string) {
             return cookieStore.get(name)?.value

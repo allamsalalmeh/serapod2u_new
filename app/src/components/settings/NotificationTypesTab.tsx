@@ -12,9 +12,11 @@ import NotificationFlowDrawer, { type DrawerSaveOptions } from './NotificationFl
 import { DEFAULT_NOTIFICATION_ADMIN_ROLE } from '@/lib/notifications/recipientRoleCodes'
 import { DELETE_USER_OTP_EVENT, SYSTEM_SMS_CHECK_EVENT } from '@/lib/notifications/notificationEventCatalog'
 import { ORDER_CREATOR_DEFAULT_EVENTS } from '@/lib/notifications/orderOwnerNotify'
-import type { NotificationRoutingPreset } from '@/lib/notifications/routing'
+import { independentChannelsForPreset, isMultiChannelPreset, type NotificationRoutingPreset } from '@/lib/notifications/routing'
 import {
+  EVENT_SCOPE,
   PRESET_LABELS,
+  allowsMultiChannelDelivery,
   deliveryLabel,
   filterCategoryTypes,
   groupByModule,
@@ -22,6 +24,7 @@ import {
   type RoutingState,
   type StatusFilter,
 } from '@/lib/notifications/notificationTypeModules'
+import { orderEventCopy } from '@/lib/notifications/notificationOrderCopy'
 import {
   AlertTriangle,
   BarChart3,
@@ -133,7 +136,13 @@ const PRESETS: Array<{
   { id: 'sms_only', required: ['sms'] },
   { id: 'whatsapp_email_fallback', required: ['whatsapp', 'email'] },
   { id: 'whatsapp_sms_email_fallback', required: ['whatsapp', 'sms', 'email'] },
+  // Independent channels (Supply Chain order/document notifications only).
+  { id: 'whatsapp_sms', required: ['whatsapp', 'sms'] },
+  { id: 'whatsapp_email', required: ['whatsapp', 'email'] },
+  { id: 'sms_email', required: ['sms', 'email'] },
+  { id: 'whatsapp_sms_email', required: ['whatsapp', 'sms', 'email'] },
 ]
+const isMultiPreset = (preset: RoutingPreset) => isMultiChannelPreset(preset)
 
 const FORCED_PRESET: Record<string, RoutingPreset> = {
   stock_count_posting_verification: 'email_only',
@@ -199,6 +208,8 @@ function presetFromChannels(channels: string[]): RoutingPreset {
 }
 
 function channelsForPreset(preset: RoutingPreset): string[] {
+  // Independent channels: every selected channel is enabled and queued.
+  if (isMultiChannelPreset(preset)) return independentChannelsForPreset(preset)
   // Fallback presets queue WhatsApp first. Later channels are attempted after failure (worker or sync OTP router).
   if (preset === 'email_only') return ['email']
   if (preset === 'sms_only') return ['sms']
@@ -500,7 +511,8 @@ export default function NotificationTypesTab({ userProfile }: NotificationTypesT
 
   const totalEnabled = notificationTypes.filter(isEnabled).length
 
-  const presetOptions = (current: RoutingPreset | null) => PRESETS.map((preset) => {
+  // Multi-channel presets are offered only where every producer and the worker support them.
+  const presetOptions = (current: RoutingPreset | null, category: string) => PRESETS.filter((preset) => !isMultiPreset(preset.id) || allowsMultiChannelDelivery(category) || current === preset.id).map((preset) => {
     const available = presetAvailable(preset.id)
     return (
       <option key={preset.id} value={preset.id} disabled={!available && current !== preset.id}>
@@ -543,7 +555,7 @@ export default function NotificationTypesTab({ userProfile }: NotificationTypesT
               </button>
             </PopoverTrigger>
             <PopoverContent align="start" className="w-80 text-sm leading-relaxed text-slate-600">
-              Categories follow the global default unless they have their own setting. Notifications follow their category unless they have their own setting. Custom settings stay unchanged when the default changes. Arrows indicate fallback: the next channel is tried only if the previous channel fails.
+              Categories follow the global default unless they have their own setting. Notifications follow their category unless they have their own setting. Custom settings stay unchanged when the default changes. Arrows indicate fallback: the next channel is tried only if the previous channel fails. A plus (+), offered for Supply Chain order and document notifications, sends on every listed channel independently.
             </PopoverContent>
           </Popover>
         </div>
@@ -556,7 +568,7 @@ export default function NotificationTypesTab({ userProfile }: NotificationTypesT
           orientation="horizontal"
           className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 lg:flex"
         >
-          {PRESETS.map((preset) => {
+          {PRESETS.filter((preset) => !isMultiPreset(preset.id) || draft.defaultPreset === preset.id).map((preset) => {
             const available = presetAvailable(preset.id)
             const selected = draft.defaultPreset === preset.id
             const SegmentIcon = SEGMENT_ICONS[preset.id]
@@ -651,7 +663,8 @@ export default function NotificationTypesTab({ userProfile }: NotificationTypesT
                 {moduleOpen && <div id={modulePanelId} className="divide-y divide-slate-100">
                   {section.categories.map((category) => {
                     const open = isExpanded(category.category)
-                    const categoryPreset = draft.categoryPresets[category.category] || null
+                    // Display groups route through their stored category; regrouping never moves a route.
+                    const categoryPreset = draft.categoryPresets[category.routingCategory] || null
                     const panelId = `notification-category-${category.category.replace(/\W+/g, '-')}`
                     return (
                       <Fragment key={category.category}>
@@ -673,13 +686,19 @@ export default function NotificationTypesTab({ userProfile }: NotificationTypesT
                             value={categoryPreset || 'default'}
                             onChange={(event) => {
                               const value = event.target.value === 'default' ? null : event.target.value as RoutingPreset
-                              updateDraft((current) => ({ ...current, categoryPresets: { ...current.categoryPresets, [category.category]: value } }))
+                              updateDraft((current) => ({ ...current, categoryPresets: { ...current.categoryPresets, [category.routingCategory]: value } }))
                             }}
                             className={`${SELECT_CLASS} ${categoryPreset ? 'border-[var(--sera-orange)]/40' : ''}`}
                           >
                             <option value="default">{deliveryLabel('default', draft.defaultPreset)}</option>
-                            {presetOptions(categoryPreset)}
+                            {presetOptions(categoryPreset, category.routingCategory)}
                           </select>
+                          {(category.description || category.sharesRoutingWith.length > 0) && (
+                            <p className="pl-6 text-[11px] text-slate-500 sm:col-span-2">
+                              {category.description}
+                              {category.sharesRoutingWith.length > 0 && ` Category delivery is shared with ${category.sharesRoutingWith.join(', ')}.`}
+                            </p>
+                          )}
                         </div>
                         {open && (
                           <ul id={panelId} className="divide-y divide-slate-100 border-t border-slate-100 bg-slate-50/50">
@@ -689,15 +708,18 @@ export default function NotificationTypesTab({ userProfile }: NotificationTypesT
                               const forced = FORCED_PRESET[type.event_code]
                               const eventPreset = draft.eventPresets[type.event_code] || null
                               const inherited = resolveEventDelivery(type, { ...draft, eventPresets: {} }, {})
+                              // Clear name + "when / which transaction" copy for the audited order and document events.
+                              const copy = orderEventCopy(type)
                               return (
                                 <li key={type.event_code} className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 py-2.5 pl-10 pr-4 sm:grid-cols-[minmax(0,1fr)_240px_auto_auto] ${enabled ? '' : 'text-slate-500'}`}>
                                   <div className="min-w-0">
                                     <div className="flex flex-wrap items-center gap-1.5">
-                                      <span className={`break-words text-sm ${enabled ? 'text-slate-900' : 'text-slate-500'}`}>{type.event_name}</span>
+                                      <span className={`break-words text-sm ${enabled ? 'text-slate-900' : 'text-slate-500'}`}>{copy.name}</span>
                                       {type.is_system && <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">System</Badge>}
                                       {lockedOn && <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">Always on</Badge>}
+                                      {EVENT_SCOPE[type.event_code] && <Badge variant="outline" className="px-1.5 py-0 text-[10px] font-normal text-slate-500">{EVENT_SCOPE[type.event_code]}</Badge>}
                                     </div>
-                                    <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">{type.event_description}</p>
+                                    <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">{copy.description}</p>
                                     {lockedOn && <p className="mt-0.5 text-[11px] text-slate-500">Recipient is the organization contact. Custom templates in Configure are used when sending.</p>}
                                   </div>
                                   <div className="col-start-2 row-start-1 flex items-center sm:col-start-3">
@@ -705,11 +727,11 @@ export default function NotificationTypesTab({ userProfile }: NotificationTypesT
                                       checked={enabled}
                                       onCheckedChange={(checked) => updateDraft((current) => ({ ...current, enabled: { ...current.enabled, [type.event_code]: checked } }))}
                                       disabled={lockedOn}
-                                      aria-label={`Enable ${type.event_name}`}
+                                      aria-label={`Enable ${copy.name}`}
                                     />
                                   </div>
                                   <select
-                                    aria-label={`${type.event_name} routing`}
+                                    aria-label={`${copy.name} routing`}
                                     disabled={(!enabled && !lockedOn) || Boolean(forced)}
                                     value={forced || eventPreset || 'inherit'}
                                     onChange={(event) => {
@@ -722,7 +744,7 @@ export default function NotificationTypesTab({ userProfile }: NotificationTypesT
                                       ? <option value={forced}>{deliveryLabel('fixed', forced)}</option>
                                       : <>
                                         <option value="inherit">{deliveryLabel(inherited.source, inherited.preset)}</option>
-                                        {presetOptions(eventPreset)}
+                                        {presetOptions(eventPreset, type.category)}
                                       </>}
                                   </select>
                                   <Button

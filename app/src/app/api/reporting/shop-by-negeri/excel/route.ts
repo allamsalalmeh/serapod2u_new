@@ -21,6 +21,8 @@ import {
   reportingPeriodRangeLabel,
 } from '@/lib/reporting/reporting-period'
 import { fetchAccessibleReportingPeriods } from '@/lib/reporting/reporting-period-source'
+import { currentReportingMonthKey } from '@/lib/reporting/consumer-analytics'
+import { readShopScans } from '@/lib/reporting/shop-performance'
 
 export const dynamic = 'force-dynamic'
 
@@ -64,10 +66,13 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Invalid reporting month' }, { status: 400 })
     }
 
-    // Validate against the same accessible transaction-derived source used by
-    // the selector. The client cannot request arbitrary month boundaries.
+    // Validate against the same supported range the selector offers: every
+    // month from the earliest accessible scan month to the current month. A
+    // month inside it without scans is a valid, empty report.
     const availablePeriods = await fetchAccessibleReportingPeriods(supabase)
-    if (!availablePeriods.some((period) => period.key === periodKey)) {
+    const currentMonth = currentReportingMonthKey()
+    const earliestMonth = availablePeriods.reduce((min, period) => (period.key < min ? period.key : min), currentMonth)
+    if (periodKey < earliestMonth || periodKey > currentMonth) {
       return NextResponse.json({ error: 'Reporting month is not available' }, { status: 400 })
     }
 
@@ -80,20 +85,12 @@ export async function GET(request: Request) {
     const regions = (regionData as { id: string; region_name: string }[]) || []
 
     const previousPeriod = previousReportingPeriod(selectedPeriod)
-    const { data: scanData, error: scanErr } = await supabase
-      .from('consumer_qr_scans')
-      .select('id, consumer_id, scanned_at, shop_id, points_amount')
-      .eq('is_manual_adjustment', false)
-      .not('shop_id', 'is', null)
-      .gte('scanned_at', previousPeriod.startUtc)
-      .lt('scanned_at', selectedPeriod.endUtc)
-      .order('scanned_at', { ascending: false })
-
-    if (scanErr) {
-      return NextResponse.json({ error: scanErr.message }, { status: 500 })
+    let scans: NegeriScanRow[]
+    try {
+      scans = (await readShopScans(supabase, previousPeriod.startUtc, selectedPeriod.endUtc)) as unknown as NegeriScanRow[]
+    } catch (scanErr: any) {
+      return NextResponse.json({ error: scanErr?.message || 'Unable to read shop scans' }, { status: 500 })
     }
-
-    const scans = (scanData as unknown as NegeriScanRow[]) || []
 
     // Organizations for referenced shops
     const shopIds = [...new Set(scans.map((s) => s.shop_id).filter(Boolean))] as string[]

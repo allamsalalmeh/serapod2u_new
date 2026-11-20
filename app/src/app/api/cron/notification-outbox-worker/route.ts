@@ -2,18 +2,22 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createHash, createHmac } from 'node:crypto'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getWhatsAppConfig, callGateway, sendWhatsAppMessage } from '@/app/api/settings/whatsapp/_utils'
-import { collectConfiguredRecipients, normalizeRecipientAddress } from '@/lib/notifications/configuredRecipients'
+import { collectConfiguredRecipients, normalizeRecipientAddress, type RecipientDiagnostic, type ResolvedRecipient } from '@/lib/notifications/configuredRecipients'
+import { partnerDefaultTemplate } from '@/lib/notifications/partnerTemplates'
 import { resolveSmtpEndpoint } from '@/lib/email/smtp-endpoint'
 import { requireCronAuth } from '@/lib/cron/auth'
 import { WORKER_NAMES, withWorkerLease } from '@/lib/cron/lease'
 import { recordSmsDelivery, refreshOpenSmsStatuses, sendSmsWithActiveProvider } from '@/lib/notifications/sms-send'
 import { getSmsTemplateBody, getSmsTemplatesForEvent } from '@/config/smsTemplates'
 import { queueRoutingFallback } from '@/lib/notifications/outbox-fallback'
-import { deliveryChainForPreset, isRoutingFallbackPayload, resolveNotificationRoutingPreset, shouldAdvanceFallback, type NotificationDeliveryChannel } from '@/lib/notifications/routing'
+import { SYSTEM_LOG_ALERT_BODY } from '@/lib/notifications/systemLogAlertCopy'
+import { deliveryChainForPreset, independentChannelsForPreset, isMultiChannelPreset, isRoutingFallbackPayload, resolveNotificationRoutingPreset, shouldAdvanceFallback, type NotificationDeliveryChannel } from '@/lib/notifications/routing'
 import { isSingleCreatorSource, ownerEmailFromPayload, ownerPhoneFromPayload, resolveRecipientTargets } from '@/lib/notifications/orderOwnerNotify'
 import { notificationPhoneKey } from '@/lib/notifications/manualPhoneNumbers'
 import { EMAIL_UI_TEST_REWRITE_LOOKBACK_MS, emailProviderBlockedByUiTest } from '@/lib/notifications/emailProviderReady'
-import { fanoutChildKeepsAddress, fanoutChildPayload, fanoutScope, isFanoutChild, selectFanoutRecipients } from '@/lib/notifications/outboxFanout'
+import { ensureOrderOwnerContact } from '@/lib/notifications/orderOwnerContact'
+import { RESOLVED_RECIPIENT_KEY, fanoutChildKeepsAddress, fanoutChildPayload, fanoutScope, isFanoutChild, keepsQueuedAddress, selectFanoutRecipients } from '@/lib/notifications/outboxFanout'
+import { CHANNEL_FANOUT_MARKER, channelFanoutTargets } from '@/lib/notifications/channelFanout'
 
 async function failEmailsSentWhileProviderTestBlocked(supabase: any) {
     const { data: providers } = await supabase
@@ -74,55 +78,10 @@ function renderTemplate(template: string, payload: Record<string, any>): string 
     return result
 }
 
-async function ensureOrderOwnerContact(supabase: any, payload: Record<string, any>) {
-    const nameAlready = String(payload.created_by || payload.User || '').trim()
-    const hasPhone = String(payload.created_by_phone || '').trim()
-    const hasEmail = String(payload.created_by_email || '').trim()
-    let creatorId = String(payload.created_by_id || '').trim() || null
-
-    if (!creatorId) {
-        if (payload.order_id) {
-            const { data: order } = await supabase
-                .from('orders')
-                .select('created_by')
-                .eq('id', payload.order_id)
-                .maybeSingle()
-            creatorId = order?.created_by || null
-        } else if (payload.order_no) {
-            const { data: order } = await supabase
-                .from('orders')
-                .select('created_by')
-                .eq('display_doc_no', String(payload.order_no))
-                .maybeSingle()
-            creatorId = order?.created_by || null
-        }
-    }
-
-    if (!creatorId) {
-        if (!nameAlready || nameAlready === '{{created_by}}' || nameAlready === '{{User}}') {
-            payload.created_by = payload.created_by || 'Unknown'
-            payload.User = payload.created_by
-        }
-        return
-    }
-
-    payload.created_by_id = creatorId
-    if (hasPhone && hasEmail && nameAlready && nameAlready !== '{{created_by}}' && nameAlready !== '{{User}}') {
-        payload.created_by = nameAlready
-        payload.User = nameAlready
-        return
-    }
-
-    const { data: creator } = await supabase
-        .from('users')
-        .select('full_name, email, phone')
-        .eq('id', creatorId)
-        .maybeSingle()
-    const name = String(creator?.full_name || creator?.email || nameAlready || 'Unknown').trim() || 'Unknown'
-    payload.created_by = name
-    payload.User = name
-    if (!hasPhone && creator?.phone) payload.created_by_phone = String(creator.phone).trim()
-    if (!hasEmail && creator?.email) payload.created_by_email = String(creator.email).trim()
+/** The audit entry kept on an outbox row for the recipient it was resolved to. */
+function auditOf(recipient: ResolvedRecipient | undefined, queuedByEvent: boolean) {
+    if (!recipient) return { source: queuedByEvent ? 'event_address' : 'unknown', name: null, org_id: null, user_id: null }
+    return { source: recipient.source, name: recipient.name ?? null, org_id: recipient.orgId ?? null, user_id: recipient.userId ?? null }
 }
 
 function payloadPhone(payload: Record<string, any>): string | null {
@@ -425,6 +384,15 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
 
                 const notifSetting = rawSetting as any
 
+                // A notification turned off after it was queued is not sent.
+                if (notifSetting && notifSetting.enabled === false) {
+                    await supabase.from('notifications_outbox').update({
+                        status: 'cancelled',
+                        error: 'Not sent: this notification is turned off in Notification Types.',
+                    }).eq('id', id)
+                    continue
+                }
+
                 // Try DB message_templates first
                 const effectiveTemplateCode = notifSetting?.template_code || template_code
                 if (effectiveTemplateCode) {
@@ -453,6 +421,10 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                     }
                 }
 
+                // No template saved in Notification Types: the system default is used, and
+                // may be swapped for a partner-safe default when the recipient is external.
+                const usesBuiltInTemplate = !templateBody
+
                 if (!templateBody && channel === 'sms') {
                     templateBody = getSmsTemplateBody(event_code)
                 }
@@ -479,6 +451,8 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                         templateBody = `🎉 Your product return {{return_no}} has been completed.`
                     } else if (event_code === 'system_sms_check') {
                         templateBody = `Serapod2U SMS check. If you received this, Local Malaysian SMS is working.`
+                    } else if (String(event_code).startsWith('system_error_')) {
+                        templateBody = SYSTEM_LOG_ALERT_BODY
                     } else if (event_code === 'tiktok_shop_daily_report') {
                         templateBody = `{{report_text}}`
                     } else if (event_code === 'tiktok_shop_daily_report_sms') {
@@ -497,7 +471,17 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                 const routingPreset = resolveNotificationRoutingPreset(notifSetting)
                 const isFallbackHop = isRoutingFallbackPayload(payload)
                 const settingsFirstHopEvent = event_code === 'order_rejected' || event_code === 'order_approved'
-                if (settingsFirstHopEvent && !isFallbackHop && notifSetting) {
+                const multiChannel = isMultiChannelPreset(routingPreset)
+                if (settingsFirstHopEvent && !isFallbackHop && notifSetting && multiChannel) {
+                    // Independent channels: every selected channel is sent; others are not.
+                    if (!independentChannelsForPreset(routingPreset).includes(channel as NotificationDeliveryChannel)) {
+                        await supabase.from('notifications_outbox').update({
+                            status: 'cancelled',
+                            error: `Not sent: ${channel} is not one of the channels selected for this notification.`,
+                        }).eq('id', id)
+                        continue
+                    }
+                } else if (settingsFirstHopEvent && !isFallbackHop && notifSetting) {
                     const firstChannel = deliveryChainForPreset(routingPreset)[0]
                     if (channel !== firstChannel) {
                         await supabase.from('notifications_outbox').update({
@@ -508,10 +492,54 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                     }
                 }
 
+                // Independent multi-channel delivery (e.g. WhatsApp + SMS): the origin row of an
+                // event queues the other selected channels that the producer did not queue.
+                // Each channel then resolves its own recipients; no fallback is involved.
+                if (multiChannel && notifSetting && !isFallbackHop && !isFanoutChild(payload) && !payload[CHANNEL_FANOUT_MARKER] && Number(item.retry_count || 0) === 0) {
+                    const channelScope = fanoutScope(payload)
+                    if (channelScope) {
+                        const [{ data: channelRows }, { data: channelProviders }] = await Promise.all([
+                            supabase.from('notifications_outbox').select('channel')
+                                .eq('org_id', org_id).eq('event_code', event_code)
+                                .contains('payload_json', channelScope),
+                            supabase.from('notification_provider_configs').select('channel, provider_name')
+                                .eq('org_id', org_id).eq('is_active', true),
+                        ])
+                        const plan = channelFanoutTargets({
+                            preset: routingPreset,
+                            currentChannel: channel,
+                            existingChannels: (channelRows || []).map((row: any) => row.channel),
+                            activeProviders: (channelProviders || []).map((row: any) => ({ channel: row.channel, providerName: row.provider_name })),
+                        })
+                        for (const target of plan) {
+                            const childPayload: Record<string, any> = { ...(payload_json || {}), [CHANNEL_FANOUT_MARKER]: channel }
+                            delete childPayload._sms_body
+                            delete childPayload[RESOLVED_RECIPIENT_KEY]
+                            await supabase.from('notifications_outbox').insert({
+                                org_id,
+                                event_code,
+                                channel: target.channel,
+                                to_phone: null,
+                                to_email: null,
+                                template_code,
+                                payload_json: childPayload,
+                                priority: 'normal',
+                                provider_name: target.providerName,
+                                status: 'queued',
+                                retry_count: 0,
+                                max_retries: 3,
+                            })
+                        }
+                    }
+                }
+
                 const editedSmsBody = channel === 'sms' ? String(payload._sms_body || '').trim() : ''
-                const messageBody = editedSmsBody || renderTemplate(templateBody, payload)
+                let messageBody = editedSmsBody || renderTemplate(templateBody, payload)
 
                 // 4. Recipients follow Notification Types (recipient_targets), not a hardcoded event list.
+                const resolvedBy = new Map<string, ResolvedRecipient>()
+                let resolutionNotes: string[] = []
+                let resolvedAuditChanged = false
                 let recipientPhone = to_phone
                 let recipientEmail = to_email
                 const recipientConfig = notifSetting?.recipient_config || {}
@@ -524,8 +552,10 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                     } else {
                         recipientPhone = ownerPhoneFromPayload(payload)
                     }
-                } else if (notifSetting && !isFallbackHop && !fanoutChildKeepsAddress(payload, channel, to_phone, to_email)) {
+                } else if (notifSetting && !isFallbackHop && !fanoutChildKeepsAddress(payload, channel, to_phone, to_email)
+                    && !keepsQueuedAddress({ payload, channel, toPhone: to_phone, toEmail: to_email, retryCount: item.retry_count })) {
                     // Same rules as the Configure drawer's recipient preview (shared module).
+                    const diagnostics: RecipientDiagnostic[] = []
                     const configured = await collectConfiguredRecipients(supabase, {
                         orgId: org_id,
                         eventCode: event_code,
@@ -533,7 +563,10 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                         recipientConfig,
                         setting: notifSetting,
                         payload,
+                        diagnostics,
                     })
+                    resolutionNotes = diagnostics.map((note) => note.message)
+                    for (const recipient of configured) resolvedBy.set(recipient.address, recipient)
                     const recipients = new Set<string>(configured.map((recipient) => recipient.address))
                     const addRecipients = (values: Array<string | null | undefined>) => {
                         for (const value of values) {
@@ -554,6 +587,10 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                         } else {
                             recipientPhone = recipientList[0]
                         }
+                        // Audit who this row was resolved to; it survives retries unchanged.
+                        payload[RESOLVED_RECIPIENT_KEY] = { ...auditOf(resolvedBy.get(recipientList[0]), recipientList[0] === normalizeRecipientAddress(channel, channel === 'email' ? to_email : to_phone)), resolved_at: new Date().toISOString() }
+                        if (resolutionNotes.length) payload._recipient_notes = resolutionNotes
+                        resolvedAuditChanged = true
 
                         // Only an origin row may fan out, and only to recipients that do not
                         // already have a row for this order. Both guards are required: the marker
@@ -588,7 +625,7 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                                 to_phone: channel !== 'email' ? target : null,
                                 to_email: channel === 'email' ? target : null,
                                 template_code,
-                                payload_json: fanoutChildPayload(payload),
+                                payload_json: fanoutChildPayload(payload, auditOf(resolvedBy.get(target), false)),
                                 priority: 'normal',
                                 provider_name,
                                 status: 'queued',
@@ -604,8 +641,9 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                     recipientPhone = payloadPhone(payload)
                 }
 
-                if ((recipientPhone || recipientEmail) && (recipientPhone !== to_phone || recipientEmail !== to_email)) {
-                    const recipientUpdate: Record<string, string | null> = {}
+                if ((recipientPhone || recipientEmail) && (recipientPhone !== to_phone || recipientEmail !== to_email || resolvedAuditChanged)) {
+                    const recipientUpdate: Record<string, any> = {}
+                    if (resolvedAuditChanged) recipientUpdate.payload_json = payload
 
                     if (recipientPhone !== to_phone) {
                         recipientUpdate.to_phone = recipientPhone || null
@@ -624,6 +662,13 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                             console.warn(`[NotifWorker] Failed to persist resolved recipient for ${id}: ${recipientUpdateError.message}`)
                         }
                     }
+                }
+
+                // An external party never gets the HQ approver wording of a built-in default.
+                const finalSource = String(payload[RESOLVED_RECIPIENT_KEY]?.source || '')
+                if (usesBuiltInTemplate && !editedSmsBody && finalSource === 'related_org') {
+                    const partnerTemplate = partnerDefaultTemplate(event_code, channel)
+                    if (partnerTemplate) messageBody = renderTemplate(partnerTemplate, payload)
                 }
 
                 const duplicateScope = fanoutScope(payload)
@@ -664,9 +709,11 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                         p_status: 'failed',
                         p_error_message: isFallbackEmail
                             ? 'Fallback Email required, but the recipient has no email address. Ask the admin or user to update the email first.'
-                            : channel === 'sms'
-                                ? 'No SMS recipient found. Add a phone on the order customer, or in Notification Types → Details → custom phones.'
-                                : 'No recipient found — check notification settings recipients'
+                            : resolutionNotes.length
+                                ? `No recipient resolved. ${resolutionNotes.join(' ')}`
+                                : channel === 'sms'
+                                    ? 'No SMS recipient found. Add a phone on the order customer, or in Notification Types → Details → custom phones.'
+                                    : 'No recipient found — check notification settings recipients'
                     })
                     if (channel === 'whatsapp' || channel === 'sms') {
                         await maybeQueueFallback(
@@ -806,6 +853,8 @@ async function runOutbox(supabase: ReturnType<typeof createAdminClient>): Promis
                 } else if (channel === 'email') {
                     const emailSubject = String(event_code).startsWith('tiktok_shop_daily_report') && payload.email_subject
                         ? String(payload.email_subject)
+                        : String(event_code).startsWith('system_error_')
+                        ? `[${String(payload.environment_label || 'SYSTEM')}] Serapod2U ${String(payload.alert_title || 'system error')} ${String(payload.reference_id || '')}`.trim()
                         : event_code === 'roadtour_qr_delivery'
                         ? `RoadTour QR — ${String(payload.campaign_name || 'Campaign')}`
                         : String(event_code).startsWith('return_')

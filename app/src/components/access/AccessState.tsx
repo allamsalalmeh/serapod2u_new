@@ -1,5 +1,6 @@
 'use client'
 
+import { isReferenceId } from '@/lib/system-logs/contract'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
@@ -17,6 +18,7 @@ import { Hourglass, Lock, RefreshCw, LogIn } from 'lucide-react'
 export type AccessStateKind = 'denied' | 'unavailable' | 'signed_out' | 'employee_pending'
 
 export interface AccessStateProps {
+  referenceId?: string | null
   kind: AccessStateKind
   /** An authorized place to go back to (My Workspace when the person has one, otherwise the dashboard). */
   homeHref?: string
@@ -33,7 +35,7 @@ const COPY: Record<AccessStateKind, { title: string; body: string }> = {
   employee_pending: { title: 'Your employee setup is pending.', body: 'Contact HR.' },
 }
 
-export default function AccessState({ kind, homeHref = '/dashboard', homeLabel = 'Back to Dashboard' }: AccessStateProps) {
+export default function AccessState({ kind, referenceId, homeHref = '/dashboard', homeLabel = 'Back to Dashboard' }: AccessStateProps) {
   const router = useRouter()
   const copy = COPY[kind]
   const Icon = kind === 'unavailable' ? RefreshCw : kind === 'signed_out' ? LogIn : kind === 'employee_pending' ? Hourglass : Lock
@@ -45,6 +47,7 @@ export default function AccessState({ kind, homeHref = '/dashboard', homeLabel =
         </div>
         <h2 className="text-lg font-semibold">{copy.title}</h2>
         <p className="mt-2 text-sm text-muted-foreground">{copy.body}</p>
+        {isReferenceId(referenceId) && <p className="mt-3 break-all text-xs text-muted-foreground">Reference: <span className="font-mono">{referenceId}</span></p>}
         <div className="mt-6 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
           {kind === 'unavailable' && (
             <Button type="button" onClick={() => router.refresh()}>Try again</Button>

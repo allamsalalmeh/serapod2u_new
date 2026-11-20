@@ -1,6 +1,7 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import { createClient, requestHostname } from '@/lib/supabase/server'
+import { isSharedAuthCookie, sharedAuthCookieForHost } from '@/lib/supabase/auth-cookie-scope'
 import { cookies } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 
@@ -13,9 +14,13 @@ export async function logoutConsumer() {
     const allCookies = cookieStore.getAll()
     
     // Delete all Supabase related cookies
+    const shared = sharedAuthCookieForHost(await requestHostname())
     allCookies.forEach(cookie => {
       if (cookie.name.startsWith('sb-')) {
         cookieStore.delete(cookie.name)
+        if (isSharedAuthCookie(cookie.name, shared)) {
+          cookieStore.set({ name: cookie.name, value: '', path: '/', domain: shared!.domain, maxAge: 0 })
+        }
       }
     })
     

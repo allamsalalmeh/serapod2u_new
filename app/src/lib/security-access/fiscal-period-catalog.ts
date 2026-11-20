@@ -3,7 +3,7 @@ import type { CatalogEntry } from './catalog'
 /**
  * Finance → Fiscal Year & Periods. Five separate permissions so each action can be given to a named person.
  * Seeded in SHADOW (legacy = central Super Admin only) and registered as enforcement-ready by
- * supabase/migrations/20261219100000_finance_fiscal_period_permissions.sql (fiscal-period-catalog.test.ts keeps both in step).
+ * supabase/migrations/20261228090200_finance_fiscal_period_permissions.sql (fiscal-period-catalog.test.ts keeps both in step).
  *
  * Every transition is decided in one place, fiscalPermissionFor(), mirrored by fiscal_period_set_status /
  * fiscal_year_set_status in the database. One standard Group Policy per permission, assigned to no one; Finance Full

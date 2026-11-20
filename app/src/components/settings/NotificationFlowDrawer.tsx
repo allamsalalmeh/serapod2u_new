@@ -28,7 +28,12 @@ import { sanitizeStockCountNotificationConfig } from '@/lib/notifications/stockC
 import { PRESET_LABELS, categoryModule, type DeliverySource } from '@/lib/notifications/notificationTypeModules'
 import { appDate, shiftDate } from '@/lib/notifications/monitor/monitorCore'
 import type { NotificationRoutingPreset } from '@/lib/notifications/routing'
-import { RESOLVABLE_ORDER_EVENTS, type RecipientSource } from '@/lib/notifications/configuredRecipients'
+import { PREVIEWABLE_EVENTS, type RecipientSource } from '@/lib/notifications/configuredRecipients'
+import { DOCUMENT_EVENTS, RELATED_ORG_AUTO, relatedOrgTargetState } from '@/lib/notifications/relatedOrganization'
+import { orderEventCopy } from '@/lib/notifications/notificationOrderCopy'
+import { asksReaderToApprove } from '@/lib/notifications/partnerTemplates'
+import { allowsMultiChannelDelivery } from '@/lib/notifications/notificationTypeModules'
+import { isMultiChannelPreset } from '@/lib/notifications/routing'
 import {
     PRESET_CHANNELS,
     buildNotificationSampleData,
@@ -77,12 +82,16 @@ const CHANNEL_LABELS: Record<NotificationChannel, string> = { whatsapp: 'WhatsAp
 const CHANNEL_ICONS: Record<NotificationChannel, typeof Mail> = { whatsapp: MessageCircle, sms: MessageSquare, email: Mail }
 const SOURCE_LABELS: Record<DeliverySource, string> = { default: 'Default', category: 'Category', custom: 'Custom', fixed: 'Fixed' }
 
+// Saved Related organization choices. "Linked to this transaction" is the default;
+// the others are older explicit choices, kept and labelled as saved.
 const DYNAMIC_TARGET_LABELS: Record<string, string> = {
-    manufacturer: 'Manufacturer',
-    distributor: 'Distributor',
-    warehouse: 'Warehouse',
+    [RELATED_ORG_AUTO]: 'Linked to this transaction',
+    manufacturer: 'Manufacturer on this order (saved choice)',
+    distributor: 'Distributor on this order (saved choice)',
+    warehouse: 'Warehouse on this order (saved choice)',
     org_contact: 'Organization contact',
 }
+const RELATED_ORG_HELP = 'Uses the distributor or manufacturer linked to this transaction.'
 
 const ROLE_OPTIONS: { code: string; label: string }[] = [
     { code: 'SUPER', label: 'Super Admin' },
@@ -96,7 +105,7 @@ const roleLabel = (code: string) => ROLE_OPTIONS.find((role) => role.code === co
 const SOURCES: { key: SourceKey; label: string; description: string; icon: typeof Mail }[] = [
     { key: 'order_creator', label: 'Order creator', description: 'The user who created the order', icon: UserCheck },
     { key: 'consumer', label: 'Consumer', description: 'The consumer related to the event', icon: UserIcon },
-    { key: 'dynamic_org', label: 'Related organization', description: 'Contacts of the organization linked to the event', icon: Building2 },
+    { key: 'dynamic_org', label: 'Related organization', description: RELATED_ORG_HELP, icon: Building2 },
     { key: 'roles', label: 'Roles', description: 'Users in your organization with these roles', icon: Shield },
     { key: 'users', label: 'Specific users', description: 'Selected internal users', icon: Users },
     { key: 'manual_whatsapp', label: 'WhatsApp numbers', description: 'External numbers, used for WhatsApp delivery', icon: MessageCircle },
@@ -116,9 +125,10 @@ const RECIPIENT_SOURCE_LABELS: Record<RecipientSource, string> = {
     consumer: 'Consumer',
     manual_whatsapp: 'Manual WhatsApp',
     event_address: 'Queued by the event',
+    related_org: 'Related organization',
 }
 type ResolveOutcome =
-    | { status: 'resolved' | 'empty'; channel: NotificationChannel; recipients: { address: string; source: RecipientSource; name?: string | null; userId?: string | null }[]; notUsedWhenSending: string[] }
+    | { status: 'resolved' | 'empty'; channel: NotificationChannel; recipients: { address: string; source: RecipientSource; name?: string | null; userId?: string | null }[]; notUsedWhenSending: string[]; diagnostics: { source: string; reason: string; message: string }[] }
     | { status: 'not_found' | 'unsupported'; message: string }
 const splitList = (value: unknown) => String(value || '').split(/[\n,;]+/).map((entry) => entry.trim()).filter(Boolean)
 
@@ -162,6 +172,8 @@ export default function NotificationFlowDrawer(props: NotificationFlowDrawerProp
 
 function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: NotificationFlowDrawerProps) {
     const eventCode: string = type.event_code
+    // Same audited name + "when / which transaction" copy the list shows.
+    const eventCopy = orderEventCopy(type)
     const verificationOnly = eventCode === 'stock_count_posting_verification'
     const isOrderEvent = String(type.category || '') === 'order' || eventCode.startsWith('order_')
 
@@ -246,7 +258,11 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
             if (!on) setManualEmailRawInput('')
             return
         }
-        setTarget(key, on, key === 'consumer' ? { include_consumer: on } : {})
+        // Newly enabled Related organization defaults to the party linked to the transaction.
+        // A saved explicit choice (manufacturer/distributor/warehouse) is left as saved.
+        const extra: Record<string, unknown> = key === 'consumer' ? { include_consumer: on } : {}
+        if (key === 'dynamic_org' && on && relatedOrgTargetState(config.dynamic_target).kind === 'unset') extra.dynamic_target = RELATED_ORG_AUTO
+        setTarget(key, on, extra)
     }
     const clearAllRecipients = () => {
         updateRecipientConfig({
@@ -266,9 +282,18 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
     const recipientChips: { key: string; label: string; warn?: string }[] = []
     if (sourceVisible('order_creator') && targets.order_creator) recipientChips.push({ key: 'order_creator', label: 'Order creator' })
     if (sourceVisible('consumer') && targets.consumer) recipientChips.push({ key: 'consumer', label: 'Consumer' })
+    const relatedOrgState = relatedOrgTargetState(config.dynamic_target)
     if (sourceVisible('dynamic_org') && targets.dynamic_org) {
         const target = config.dynamic_target ? DYNAMIC_TARGET_LABELS[config.dynamic_target] || config.dynamic_target : null
-        recipientChips.push({ key: 'dynamic_org', label: target ? `Related organization · ${target}` : 'Related organization', warn: target ? undefined : 'No organization role selected' })
+        recipientChips.push({
+            key: 'dynamic_org',
+            label: target ? `Related organization · ${target}` : 'Related organization',
+            warn: relatedOrgState.kind === 'unset'
+                ? 'Saved without an organization, so it notifies nobody — choose "Linked to this transaction"'
+                : relatedOrgState.kind === 'unknown'
+                    ? `Saved choice "${relatedOrgState.value}" is not supported and notifies nobody`
+                    : undefined,
+        })
     }
     if (sourceVisible('roles') && targets.roles) {
         const roles: string[] = Array.isArray(config.roles) ? config.roles : []
@@ -321,6 +346,8 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
     const unknownVars = unknownPlaceholders(previewBody, variables)
     const otherSavedTemplates = (Object.keys(localSetting.templates || {}) as NotificationChannel[])
         .filter((channel) => channel in CHANNEL_LABELS && !deliveryChannels.includes(channel) && templateText(channel).trim())
+    // A saved template is sent as saved; warn when its wording would tell a partner to approve.
+    const partnerSeesApprovalWording = Boolean(targets.dynamic_org) && asksReaderToApprove(effectiveBody(activeChannel))
     const textareaRef = useRef<HTMLTextAreaElement>(null)
     const insertVariable = (name: string) => {
         const token = `{{${name}}}`
@@ -350,7 +377,8 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
         ? resolveOutcome.recipients.filter((recipient) => !isPlaceholderRecipient(recipient))
         : null
     const resolvedTarget = resolvedRecipients?.[0] || null
-    const canResolve = (RESOLVABLE_ORDER_EVENTS as readonly string[]).includes(eventCode)
+    const canResolve = PREVIEWABLE_EVENTS.includes(eventCode)
+    const isDocumentEvent = DOCUMENT_EVENTS.has(eventCode)
 
     const handleResolve = async () => {
         if (!sampleId.trim()) return
@@ -367,7 +395,7 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
             const data = await res.json()
             if (!res.ok || !data.success) throw new Error(data.error || 'Lookup failed')
             if (data.status === 'resolved' || data.status === 'empty') {
-                setResolveOutcome({ status: data.status, channel: data.channel || activeTestChannel, recipients: data.recipients || [], notUsedWhenSending: data.notUsedWhenSending || [] })
+                setResolveOutcome({ status: data.status, channel: data.channel || activeTestChannel, recipients: data.recipients || [], notUsedWhenSending: data.notUsedWhenSending || [], diagnostics: data.diagnostics || [] })
             } else if (data.status === 'not_found' || data.status === 'unsupported') {
                 setResolveOutcome({ status: data.status, message: data.message || '' })
             } else {
@@ -470,8 +498,8 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
                 {/* Header */}
                 <div className="border-b border-slate-200 px-5 pb-4 pt-5 pr-12">
                     <SheetHeader className="space-y-1 text-left">
-                        <SheetTitle className="text-lg font-semibold text-slate-950">{type.event_name}</SheetTitle>
-                        <SheetDescription className="text-sm text-slate-500">{type.event_description}</SheetDescription>
+                        <SheetTitle className="text-lg font-semibold text-slate-950">{eventCopy.name}</SheetTitle>
+                        <SheetDescription className="text-sm text-slate-500">{eventCopy.description}</SheetDescription>
                     </SheetHeader>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                         <span
@@ -485,7 +513,7 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
                     </div>
                     {/* Summary: Event → Recipients → Delivery */}
                     <div aria-label="Summary" className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                        <span className="inline-flex items-center gap-1"><Zap className="h-3.5 w-3.5 text-[var(--sera-orange)]" aria-hidden /><span className="sr-only">Event:</span>{type.event_name}</span>
+                        <span className="inline-flex items-center gap-1"><Zap className="h-3.5 w-3.5 text-[var(--sera-orange)]" aria-hidden /><span className="sr-only">Event:</span>{eventCopy.name}</span>
                         <ArrowRight className="h-3 w-3 text-slate-400" aria-hidden />
                         <span className="inline-flex items-center gap-1">
                             <Users className="h-3.5 w-3.5 text-slate-400" aria-hidden /><span className="sr-only">Recipients:</span>
@@ -554,19 +582,25 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
                                                 </div>
 
                                                 {on && source.key === 'dynamic_org' && (
-                                                    <div className="ml-6 mt-2 max-w-xs space-y-1">
-                                                        <Label htmlFor="dynamic-target" className="text-xs text-slate-600">Organization role</Label>
+                                                    <div className="ml-6 mt-2 max-w-sm space-y-1">
+                                                        <Label htmlFor="dynamic-target" className="text-xs text-slate-600">Who to notify</Label>
                                                         <Select value={config.dynamic_target || ''} onValueChange={(value) => updateRecipientConfig({ dynamic_target: value })}>
-                                                            <SelectTrigger id="dynamic-target" className="h-8 text-sm"><SelectValue placeholder="Select target..." /></SelectTrigger>
+                                                            <SelectTrigger id="dynamic-target" className="h-8 text-sm"><SelectValue placeholder="Choose who to notify" /></SelectTrigger>
                                                             <SelectContent>
-                                                                <SelectItem value="manufacturer">Manufacturer (Product Owner)</SelectItem>
-                                                                <SelectItem value="distributor">Distributor (Seller)</SelectItem>
-                                                                <SelectItem value="warehouse">Warehouse</SelectItem>
-                                                                {config.dynamic_target && !['manufacturer', 'distributor', 'warehouse'].includes(config.dynamic_target) && (
-                                                                    <SelectItem value={config.dynamic_target}>{DYNAMIC_TARGET_LABELS[config.dynamic_target] || config.dynamic_target}</SelectItem>
+                                                                <SelectItem value={RELATED_ORG_AUTO}>{DYNAMIC_TARGET_LABELS[RELATED_ORG_AUTO]}</SelectItem>
+                                                                {config.dynamic_target && config.dynamic_target !== RELATED_ORG_AUTO && (
+                                                                    <SelectItem value={config.dynamic_target}>{DYNAMIC_TARGET_LABELS[config.dynamic_target] || `${config.dynamic_target} (saved choice, not supported)`}</SelectItem>
                                                                 )}
                                                             </SelectContent>
                                                         </Select>
+                                                        <p className="text-[11px] text-slate-500">
+                                                            {relatedOrgState.kind === 'explicit'
+                                                                ? `Saved choice: only the ${relatedOrgState.target} that is a party to the order is notified, at its organization contact. Switch to “Linked to this transaction” to use the distributor or manufacturer for each order type.`
+                                                                : `${RELATED_ORG_HELP} Sales orders reach the distributor; purchase orders reach the manufacturer. Contacts come from the organization’s master data (phone for WhatsApp/SMS, email for Email). Saving only affects future events — nothing is sent now.`}
+                                                        </p>
+                                                        {(relatedOrgState.kind === 'unset' || relatedOrgState.kind === 'unknown') && (
+                                                            <p className="flex items-start gap-1 text-[11px] text-amber-700"><AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />This saved setting does not say which organization to notify, so nobody is added. Choose “Linked to this transaction”.</p>
+                                                        )}
                                                     </div>
                                                 )}
 
@@ -807,6 +841,12 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
                                         <span>{unknownVars.map((name) => `{{${name}}}`).join(', ')} {unknownVars.length === 1 ? 'is' : 'are'} {variablesVerified ? 'not supplied for this notification' : 'not in this notification\'s documented variables'} and will be sent as typed if no value arrives. Placeholders are case-sensitive.</span>
                                     </p>
                                 )}
+                                {partnerSeesApprovalWording && (
+                                    <p className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-800">
+                                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                                        <span>This message asks the reader to approve, and Related organization sends it to the distributor or manufacturer too. Approval belongs to HQ. Consider a partner-friendly template; it is sent exactly as saved.</span>
+                                    </p>
+                                )}
                                 {otherSavedTemplates.length > 0 && (
                                     <p className="mt-1.5 text-[11px] text-slate-500">
                                         Saved {otherSavedTemplates.map((channel) => CHANNEL_LABELS[channel]).join(', ')} message kept; not used by the current delivery.
@@ -851,7 +891,7 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
                     {/* Additional options */}
                     <Disclosure id="drawer-additional-options" title="Additional options" open={optionsOpen} onToggle={() => setOptionsOpen((value) => !value)}>
                         <div className="space-y-1.5">
-                            <Label htmlFor="drawer-delivery" className="text-xs text-slate-600">Delivery for {type.event_name}</Label>
+                            <Label htmlFor="drawer-delivery" className="text-xs text-slate-600">Delivery for {eventCopy.name}</Label>
                             {delivery.forced ? (
                                 <p id="drawer-delivery" className="text-sm text-slate-700">Fixed · {PRESET_LABELS[delivery.preset]} — this notification always uses this delivery.</p>
                             ) : (
@@ -862,7 +902,7 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
                                     className={`${SELECT_CLASS} sm:max-w-sm ${deliveryChoice !== 'inherit' ? 'border-[var(--sera-orange)]/40' : ''}`}
                                 >
                                     <option value="inherit">Inherit · {SOURCE_LABELS[delivery.inherited.source]} · {PRESET_LABELS[delivery.inherited.preset]}</option>
-                                    {(Object.keys(PRESET_LABELS) as NotificationRoutingPreset[]).map((preset) => {
+                                    {(Object.keys(PRESET_LABELS) as NotificationRoutingPreset[]).filter((preset) => !isMultiChannelPreset(preset) || allowsMultiChannelDelivery(String(type.category || '')) || preset === deliveryChoice).map((preset) => {
                                         const available = delivery.presetAvailable[preset]
                                         return (
                                             <option key={preset} value={preset} disabled={!available && deliveryChoice !== preset}>
@@ -871,6 +911,11 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
                                         )
                                     })}
                                 </select>
+                            )}
+                            {!delivery.forced && (
+                                <p className="text-[11px] text-slate-500">
+                                    An arrow (→) is a fallback: the next channel is tried only if the previous one fails. A plus (+) sends on every listed channel independently — for example “WhatsApp + SMS” sends both.
+                                </p>
                             )}
                             {!delivery.forced && (
                                 <p className="text-[11px] text-slate-500">
@@ -901,14 +946,14 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
                                             onClick={() => { setTestChannel(channel); setTestResult(null) }}
                                             className={`rounded px-2.5 py-1 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--sera-orange)]/40 ${channel === activeTestChannel ? 'bg-white text-[var(--sera-orange)] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
                                         >
-                                            {CHANNEL_LABELS[channel]}{index > 0 ? ' (fallback)' : ''}
+                                            {CHANNEL_LABELS[channel]}{index > 0 && !isMultiChannelPreset(effective.preset) ? ' (fallback)' : ''}
                                         </button>
                                     ))}
                                 </div>
                             )}
                             <p className="text-xs text-slate-600">
                                 Testing <span className="font-medium text-slate-800">{CHANNEL_LABELS[activeTestChannel]}</span>
-                                {deliveryChannels.length > 1 ? ` — step ${testStep + 1} of ${deliveryText}` : ''}.
+                                {deliveryChannels.length > 1 ? (isMultiChannelPreset(effective.preset) ? ` — one of ${deliveryText}, each sent independently` : ` — step ${testStep + 1} of ${deliveryText}`) : ''}.
                                 {' '}Uses the current draft {CHANNEL_LABELS[activeTestChannel]} message (unsaved edits included) with sample data. Nothing is saved.
                             </p>
 
@@ -947,16 +992,23 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
                                         {canResolve ? (
                                             <>
                                                 <div className="flex gap-2">
-                                                    <Input id="test-sample" placeholder="Order number, e.g. ORD26000049" value={sampleId} onChange={(event) => { setSampleId(event.target.value); setResolveOutcome(null) }} className="h-9 flex-1" />
+                                                    <Input id="test-sample" placeholder={isDocumentEvent ? 'Document or order number, e.g. PO-ORD26000049' : 'Order number, e.g. ORD26000049'} value={sampleId} onChange={(event) => { setSampleId(event.target.value); setResolveOutcome(null) }} className="h-9 flex-1" />
                                                     <Button type="button" variant="outline" size="sm" className="h-9" onClick={handleResolve} disabled={resolving || !sampleId.trim()}>
                                                         {resolving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Find recipients'}
                                                     </Button>
                                                 </div>
-                                                <p className="text-[11px] text-slate-500">Needs a real order in your organization. Looks up who would receive its {CHANNEL_LABELS[activeTestChannel]} message with your current draft recipients, using the same rules as sending.</p>
+                                                <p className="text-[11px] text-slate-500">Needs a real {isDocumentEvent ? 'document or order' : 'order'} in your organization. Looks up who would receive its {CHANNEL_LABELS[activeTestChannel]} message with your current draft recipients, using the same rules as sending. Nothing is sent by looking up.</p>
                                                 {resolveError && <p role="alert" className="text-xs text-red-700">Lookup failed: {resolveError}</p>}
                                                 {resolveOutcome && !('recipients' in resolveOutcome) && <p className="text-xs text-slate-600">{resolveOutcome.message}</p>}
-                                                {resolveOutcome && 'recipients' in resolveOutcome && resolveOutcome.notUsedWhenSending.includes('dynamic_org') && (
-                                                    <p className="text-[11px] text-amber-700">Related organization is selected but no sender uses it, so it adds nobody.</p>
+                                                {resolveOutcome && 'recipients' in resolveOutcome && resolveOutcome.diagnostics.length > 0 && (
+                                                    <ul aria-label="Recipient notes" className="space-y-0.5">
+                                                        {resolveOutcome.diagnostics.map((note, index) => (
+                                                            <li key={`${note.source}-${index}`} className="flex items-start gap-1 text-[11px] text-amber-700">
+                                                                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+                                                                {note.source === 'related_org' ? 'Related organization: ' : 'Specific users: '}{note.message}
+                                                            </li>
+                                                        ))}
+                                                    </ul>
                                                 )}
                                                 {resolvedRecipients && (resolvedRecipients.length === 0 ? (
                                                     <p className="text-xs text-slate-600">No {CHANNEL_LABELS[activeTestChannel]} recipients resolve for this order.</p>
@@ -980,7 +1032,7 @@ function DrawerBody({ open, onOpenChange, setting, type, delivery, onSave }: Not
                                                 ))}
                                             </>
                                         ) : (
-                                            <p id="test-sample" className="text-[11px] text-slate-500">Recipient lookup from a sample record is available for Order Submitted, Approved, Rejected and Closed only.</p>
+                                            <p id="test-sample" className="text-[11px] text-slate-500">Recipient lookup from a sample record is available for Supply Chain order, production, receiving and document notifications only.</p>
                                         )}
                                     </div>
                                 </>

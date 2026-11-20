@@ -66,7 +66,7 @@ describe('resolveDestinationAccess', () => {
     allow('hr.module.view', 'hr.employee.view')
     const { resolveDestinationAccess } = await import('./nav-access')
     expect(await resolveDestinationAccess(actor(), 'hr/people/employees')).toEqual({ state: 'allowed', destination: 'hr/people/employees' })
-    for (const [req] of authorizeOperation.mock.calls) {
+    for (const [req] of authorizeOperation.mock.calls.filter(([req]) => req.explainOnly === false)) {
       expect(req.resource.organizationId).toBe('org-hq')
       expect(req.resource.ownerUserId).toBeUndefined()
       expect(req.explainOnly).toBe(false) // page decisions are recorded
@@ -298,7 +298,7 @@ describe('Finance (sidebar entry, landing, sections and their page guards share 
     allow('finance.module.view')
     const { resolveDestinationAccess } = await import('./nav-access')
     await resolveDestinationAccess(actor(), 'finance')
-    const call = authorizeOperation.mock.calls.find(([r]) => r.permission === 'finance.module.view')![0]
+    const call = authorizeOperation.mock.calls.find(([r]) => r.permission === 'finance.module.view' && r.explainOnly === false)![0]
     expect(call.resource).toEqual({ type: 'finance_company', organizationId: 'org-hq' })
     expect(call.explainOnly).toBe(false)
   })
@@ -451,5 +451,30 @@ describe('warehouse-scoped grants (Warehouse Manager on one warehouse, HQ accoun
     const { evaluateNavSnapshot, resolveDestinationAccess } = await import('./nav-access')
     await expect(evaluateNavSnapshot(actor())).rejects.toThrow()
     expect(await resolveDestinationAccess(actor(), 'supply-chain/inventory-list')).toEqual({ state: 'unavailable' })
+  })
+})
+
+
+describe('page navigation diagnostic ownership', () => {
+  it('does not record rejected alternatives as Supply Chain user actions', async () => {
+    allow('supply_chain.order.view')
+    const { resolveDestinationAccess } = await import('./nav-access')
+    expect((await resolveDestinationAccess(actor(), 'supply-chain')).state).toBe('allowed')
+    const recorded = authorizeOperation.mock.calls.filter(([r]) => r.explainOnly === false).map(([r]) => r)
+    expect(recorded.length).toBeGreaterThan(0)
+    expect(recorded.every(r => r.permission === 'supply_chain.order.view')).toBe(true)
+  })
+  it('records a failed destination once and returns only its persisted reference', async () => {
+    authorizeOperation.mockResolvedValue({ decision: 'DENY', referenceId: 'SA-navigation123' })
+    const { resolveDestinationAccess } = await import('./nav-access')
+    expect(await resolveDestinationAccess(actor(), 'ecommerce/payment-gateway')).toEqual({ state: 'denied', referenceId: 'SA-navigation123' })
+    const actual = authorizeOperation.mock.calls.filter(([r]) => r.explainOnly === false)
+    expect(actual).toHaveLength(1)
+    expect(actual[0][0]).toMatchObject({ permission: 'ecommerce.channel.manage', diagnosticOrigin: 'page_navigation', operationId: 'ecommerce/payment-gateway' })
+  })
+  it('fails closed when an allowed witness changes during the authoritative recheck', async () => {
+    authorizeOperation.mockImplementation(async (r: any) => ({ decision: r.explainOnly ? 'ALLOW' : 'DENY' }))
+    const { resolveDestinationAccess } = await import('./nav-access')
+    expect(await resolveDestinationAccess(actor(), 'ecommerce/payment-gateway')).toEqual({ state: 'unavailable' })
   })
 })

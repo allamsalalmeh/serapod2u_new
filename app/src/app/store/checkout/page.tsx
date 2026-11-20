@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { getStoredLandingPageAttribution, trackLandingPageEvent } from '@/lib/storefront/landing-attribution'
 import type { LandingPageAttribution } from '@/lib/landing-pages/types'
+import { checkoutAffiliateFields } from '@/components/affiliate/AffiliateRefCapture'
 import {
   ArrowLeft,
   CreditCard,
@@ -128,6 +129,7 @@ export default function CheckoutPage() {
           })),
           landingPageAttribution,
           paymentProvider: payProvider || undefined,
+          ...checkoutAffiliateFields(),
         }),
       })
 
