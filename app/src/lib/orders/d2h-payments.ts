@@ -32,6 +32,20 @@ export function d2hPaymentStatus(s: Pick<D2HPaymentSummary, 'order_total' | 'pai
   return { label: 'Not paid yet', tone: 'bg-gray-100 text-gray-700' }
 }
 
+/**
+ * Amount HQ acknowledges when the pending payment has no amount stated, as payment_acknowledge
+ * does: the deposit for the first payment of a split term, otherwise what is outstanding.
+ */
+export function d2hExpectedPendingAmount(
+  s: Pick<D2HPaymentSummary, 'paid' | 'outstanding'>,
+  terms: { kind: string; depositAmount: number } | null | undefined,
+): number {
+  const outstanding = Math.max(Number(s.outstanding) || 0, 0)
+  const first = (Number(s.paid) || 0) <= 0.005
+  const amount = first && terms?.kind === 'split' ? Number(terms.depositAmount) || 0 : outstanding
+  return Math.round(Math.min(Math.max(amount, 0), outstanding) * 100) / 100
+}
+
 /** Message for an error of d2h_set_pending_payment_amount / d2h_record_next_payment. */
 export function d2hPaymentErrorMessage(error: { message?: string | null; details?: string | null } | null | undefined): string {
   const msg = error?.message || ''

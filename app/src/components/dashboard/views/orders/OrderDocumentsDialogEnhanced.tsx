@@ -1332,6 +1332,7 @@ export default function OrderDocumentsDialogEnhanced({
                     invoiceId={documents.invoice?.id ?? null}
                     payments={(documents.allPayments ?? []) as any[]}
                     receipts={(documents.allReceipts ?? []) as any[]}
+                    paymentTerms={orderData?.payment_terms}
                     onChanged={loadData}
                   />
                 )}

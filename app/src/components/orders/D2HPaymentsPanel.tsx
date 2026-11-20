@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/use-toast'
 import PaymentProofUpload from '@/components/documents/PaymentProofUpload'
-import { d2hPaymentErrorMessage, d2hPaymentStatus, type D2HPaymentSummary } from '@/lib/orders/d2h-payments'
+import { d2hExpectedPendingAmount, d2hPaymentErrorMessage, d2hPaymentStatus, type D2HPaymentSummary } from '@/lib/orders/d2h-payments'
+import { orderTermsSummary, type OrderPaymentTerms } from '@/lib/orders/payment-terms'
 
 interface DocLike {
   id: string
@@ -24,6 +25,8 @@ interface D2HPaymentsPanelProps {
   invoiceId: string | null
   payments: DocLike[]
   receipts: DocLike[]
+  /** The order's payment terms: the first payment of a split term defaults to the deposit. */
+  paymentTerms?: OrderPaymentTerms | null
   /** Reload the dialog after a change. */
   onChanged: () => void
 }
@@ -35,7 +38,7 @@ const rm = (n: number | null | undefined) =>
  * D2H payments of one order: paid / verified by Finance / outstanding, every payment and
  * receipt, the amount of the pending payment, and "Record another payment".
  */
-export default function D2HPaymentsPanel({ orderId, companyId, invoiceId, payments, receipts, onChanged }: D2HPaymentsPanelProps) {
+export default function D2HPaymentsPanel({ orderId, companyId, invoiceId, payments, receipts, paymentTerms, onChanged }: D2HPaymentsPanelProps) {
   const supabase = createClient()
   const [summary, setSummary] = useState<D2HPaymentSummary | null>(null)
   const [pendingAmount, setPendingAmount] = useState('')
@@ -48,7 +51,8 @@ export default function D2HPaymentsPanel({ orderId, companyId, invoiceId, paymen
     const { data, error } = await (supabase as any).rpc('d2h_order_payment_summary', { p_order_id: orderId })
     if (!error && data) {
       setSummary(data as D2HPaymentSummary)
-      setPendingAmount(data.pending_amount != null ? String(data.pending_amount) : String(data.outstanding ?? ''))
+      // Not stated yet: left empty, the expected amount shows as the placeholder.
+      setPendingAmount(data.pending_amount != null ? String(data.pending_amount) : '')
       setNewAmount(String(data.outstanding ?? ''))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -58,6 +62,7 @@ export default function D2HPaymentsPanel({ orderId, companyId, invoiceId, paymen
 
   if (!summary) return null
   const status = d2hPaymentStatus(summary)
+  const expectedPending = d2hExpectedPendingAmount(summary, orderTermsSummary(paymentTerms, summary.order_total))
 
   const savePendingAmount = async () => {
     setBusy(true)
@@ -150,6 +155,7 @@ export default function D2HPaymentsPanel({ orderId, companyId, invoiceId, paymen
               step="0.01"
               max={summary.outstanding}
               value={pendingAmount}
+              placeholder={summary.pending_amount == null ? `${expectedPending.toFixed(2)} expected` : undefined}
               onChange={(e) => setPendingAmount(e.target.value)}
               className="h-8 w-40"
             />
@@ -159,7 +165,7 @@ export default function D2HPaymentsPanel({ orderId, companyId, invoiceId, paymen
           </Button>
           <p className="w-full text-xs text-gray-500">
             {summary.pending_amount == null
-              ? 'Not stated yet: if left empty, the expected amount is used when HQ acknowledges.'
+              ? `Not stated yet: HQ acknowledges the expected ${rm(expectedPending)} unless another amount is saved.`
               : 'HQ acknowledges this amount; the receipt is issued for it.'}
           </p>
         </div>
