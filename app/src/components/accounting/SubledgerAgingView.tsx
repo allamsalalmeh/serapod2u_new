@@ -241,7 +241,7 @@ export default function SubledgerAgingView({ side, userProfile }: SubledgerAging
                           ))}
                           <TableCell className="text-right font-mono text-sm font-semibold">{formatCurrency(r.total)}</TableCell>
                           <TableCell className="text-right font-mono text-sm text-blue-700">{r.advances > 0 ? formatCurrency(r.advances) : '-'}</TableCell>
-                          <TableCell className="text-right font-mono text-sm font-semibold">{formatCurrency(r.net)}</TableCell>
+                          <TableCell className="text-right font-mono text-sm font-semibold whitespace-nowrap">{formatCurrency(r.net)}</TableCell>
                         </TableRow>
                         {open && (
                           <TableRow className="bg-muted/20 hover:bg-muted/20">
@@ -305,7 +305,7 @@ export default function SubledgerAgingView({ side, userProfile }: SubledgerAging
                     ))}
                     <TableCell className="text-right font-mono text-sm">{formatCurrency(totals.total)}</TableCell>
                     <TableCell className="text-right font-mono text-sm text-blue-700">{formatCurrency(totals.advances)}</TableCell>
-                    <TableCell className="text-right font-mono text-sm">{formatCurrency(totals.net)}</TableCell>
+                    <TableCell className="text-right font-mono text-sm whitespace-nowrap">{formatCurrency(totals.net)}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>

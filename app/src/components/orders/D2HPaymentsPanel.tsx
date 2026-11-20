@@ -200,6 +200,7 @@ export default function D2HPaymentsPanel({ orderId, companyId, invoiceId, paymen
                   companyId={companyId}
                   onUploadComplete={setNewProofUrl}
                   existingFileUrl={newProofUrl}
+                  variant="payment"
                 />
               )}
               <div className="flex gap-2">

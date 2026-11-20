@@ -8,7 +8,7 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { downloadOrderDocument } from '@/lib/storage/order-documents-client'
 
-type PaymentProofVariant = 'invoice' | 'balance'
+type PaymentProofVariant = 'invoice' | 'balance' | 'payment'
 
 const VARIANT_COPY: Record<PaymentProofVariant, {
   assetName: string
@@ -34,6 +34,22 @@ const VARIANT_COPY: Record<PaymentProofVariant, {
     fieldHint: 'Accepted formats: PDF, JPG, PNG • Maximum file size: 5MB',
     successHeader: '✓ Step 1 Complete: Payment Proof Uploaded',
     successDescription: 'You can now proceed to acknowledge the invoice below.',
+    successCardTitle: 'Payment Proof Uploaded',
+    toastUploadDescription: 'Payment proof has been uploaded',
+    toastReplaceDescription: 'Payment proof has been replaced with the new file',
+    toastDownloadFailed: 'Failed to download payment proof',
+    replacePrompt: 'Please select a new payment proof file',
+    uploadCta: 'Click to upload payment proof'
+  },
+  payment: {
+    assetName: 'payment proof',
+    stepTitle: 'Upload Payment Proof (Required)',
+    stepDescription:
+      'Attach proof of this payment, such as a bank transfer receipt or payment confirmation. HQ reviews it before acknowledging the payment.',
+    fieldLabel: 'Payment Proof Document',
+    fieldHint: 'Accepted formats: PDF, JPG, PNG • Maximum file size: 5MB',
+    successHeader: '✓ Payment Proof Uploaded',
+    successDescription: 'You can now submit the payment below.',
     successCardTitle: 'Payment Proof Uploaded',
     toastUploadDescription: 'Payment proof has been uploaded',
     toastReplaceDescription: 'Payment proof has been replaced with the new file',
