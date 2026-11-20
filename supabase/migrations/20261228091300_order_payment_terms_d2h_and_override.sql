@@ -22,7 +22,7 @@
 -- 5. order_payment_term_change_status(order): what the Order Documents card
 --    needs to show or hide the Change button (same rules as 4).
 --
--- Rollback: re-run 20261229100000 (save_order_with_items), restore
+-- Rollback: re-run 20261228091200 (save_order_with_items), restore
 -- submit_and_allocate_d2h_order from payterm_defs.txt, drop the functions
 -- and table created here.
 -- ============================================================================
@@ -75,12 +75,12 @@ DECLARE
   v_old text;
   v_new text;
 BEGIN
-  -- save_order_with_items (15 args, from 20261229100000)
+  -- save_order_with_items (15 args, from 20261228091200)
   SELECT replace(pg_get_functiondef(p.oid), E'\r', '') INTO v_def
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'save_order_with_items' AND p.pronargs = 15;
   IF v_def IS NULL THEN
-    RAISE EXCEPTION 'save_order_with_items(15 args) not found - apply 20261229100000 first';
+    RAISE EXCEPTION 'save_order_with_items(15 args) not found - apply 20261228091200 first';
   END IF;
 
   IF position('order_default_payment_terms' IN v_def) = 0 THEN
